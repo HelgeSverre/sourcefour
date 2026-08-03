@@ -1,0 +1,1020 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>sourcefour — GUI prototype</title>
+<style>
+  :root {
+    color-scheme: only dark;
+    --bg-page: #0b0c0f;
+    --bg-chrome: #15171c;
+    --bg-panel: #191c22;
+    --bg-list: #1d2129;
+    --bg-hover: #222734;
+    --bg-sel: #263042;
+    --border: #262a33;
+    --border-strong: #2f3542;
+    --text: #dfe3ec;
+    --text2: #9aa2b3;
+    --text3: #5f677a;
+    --accent: #5b9dff;
+    --green: #7ec96f;
+    --orange: #e0a458;
+    --purple: #b392f0;
+    --red: #e5655e;
+    --cyan: #64c7d6;
+    --lane0: #5b9dff;
+    --lane1: #7ec96f;
+    --lane2: #e0a458;
+    --lane3: #b392f0;
+    --lane4: #e5655e;
+    --lane5: #64c7d6;
+    --row-h: 30px;
+    --graph-w: 76px;
+    --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+    --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  html, body { height: 100%; }
+
+  body {
+    background: var(--bg-page);
+    font-family: var(--font-ui);
+    color: var(--text);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .window {
+    width: 1280px;
+    height: 800px;
+    display: flex;
+    flex-direction: column;
+    background: var(--bg-chrome);
+    border: 1px solid var(--border-strong);
+    border-radius: 10px;
+    box-shadow: 0 30px 90px rgba(0, 0, 0, 0.6), 0 2px 8px rgba(0, 0, 0, 0.4);
+    overflow: hidden;
+  }
+
+  /* ── title bar ─────────────────────────────────────────── */
+  .titlebar {
+    height: 38px;
+    flex: none;
+    display: flex;
+    align-items: center;
+    padding: 0 14px;
+    border-bottom: 1px solid var(--border);
+    position: relative;
+  }
+  .traffic { display: flex; gap: 8px; }
+  .traffic span { width: 12px; height: 12px; border-radius: 50%; display: block; }
+  .traffic .r { background: #ff5f57; }
+  .traffic .y { background: #febc2e; }
+  .traffic .g { background: #28c840; }
+  .titlebar h1 {
+    position: absolute;
+    left: 0; right: 0;
+    text-align: center;
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--text2);
+    pointer-events: none;
+  }
+  .titlebar h1 b { color: var(--text); font-weight: 600; }
+
+  /* ── toolbar ───────────────────────────────────────────── */
+  .toolbar {
+    height: 46px;
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 0 10px;
+    border-bottom: 1px solid var(--border);
+  }
+  .tbtn {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    min-width: 54px;
+    padding: 4px 8px;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text2);
+    font-family: var(--font-ui);
+    font-size: 10px;
+    cursor: pointer;
+  }
+  .tbtn:hover { background: var(--bg-hover); color: var(--text); }
+  .tbtn svg { width: 17px; height: 17px; stroke: currentColor; fill: none; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+  .tbtn.planned { opacity: 0.38; }
+  .tbtn.planned:hover { background: transparent; color: var(--text2); cursor: default; }
+  .toolbar .spacer { flex: 1; }
+  .filterbox {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    width: 260px;
+    height: 28px;
+    padding: 0 10px;
+    background: var(--bg-list);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+  }
+  .filterbox:focus-within { border-color: var(--accent); }
+  .filterbox svg { width: 13px; height: 13px; stroke: var(--text3); fill: none; stroke-width: 2; stroke-linecap: round; flex: none; }
+  .filterbox input {
+    flex: 1;
+    background: transparent;
+    border: none;
+    outline: none;
+    color: var(--text);
+    font-family: var(--font-ui);
+    font-size: 12px;
+  }
+  .filterbox input::placeholder { color: var(--text3); }
+  .filterbox kbd {
+    font-family: var(--font-ui);
+    font-size: 10px;
+    color: var(--text3);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 1px 4px;
+    flex: none;
+  }
+
+  /* ── body ──────────────────────────────────────────────── */
+  .body { flex: 1; display: flex; min-height: 0; }
+
+  /* ── sidebar ───────────────────────────────────────────── */
+  .sidebar {
+    width: 236px;
+    flex: none;
+    background: var(--bg-panel);
+    border-right: 1px solid var(--border);
+    overflow-y: auto;
+    padding: 6px 0 12px;
+  }
+  .section-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 14px 4px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text3);
+  }
+  .section-head .count { font-weight: 500; }
+
+  .wt {
+    padding: 6px 14px 7px;
+    cursor: pointer;
+    border-left: 2px solid transparent;
+  }
+  .wt:hover { background: var(--bg-hover); }
+  .wt.selected { background: var(--bg-sel); border-left-color: var(--accent); }
+  .wt-row1 { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+  .wt-dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+  .wt-dot.on { background: var(--green); }
+  .wt-dot.off { background: transparent; border: 1.5px solid var(--text3); }
+  .wt-name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .wt-branch { color: var(--text2); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-left: auto; flex: none; }
+  .wt-path {
+    margin-top: 2px;
+    padding-left: 13px;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--text3);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .chip-current {
+    flex: none;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    color: var(--accent);
+    border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+    border-radius: 3px;
+    padding: 0 4px;
+    line-height: 14px;
+  }
+
+  .branch {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    height: 26px;
+    padding: 0 14px 0 15px;
+    font-size: 12px;
+    cursor: pointer;
+    border-left: 2px solid transparent;
+  }
+  .branch:hover { background: var(--bg-hover); }
+  .branch.selected { background: var(--bg-sel); border-left-color: var(--accent); }
+  .branch .glyph { width: 13px; height: 13px; flex: none; stroke: var(--text3); fill: none; stroke-width: 1.6; stroke-linecap: round; }
+  .branch.selected .glyph { stroke: var(--accent); }
+  .branch .name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .branch.current .name { font-weight: 600; }
+  .branch .ab { margin-left: auto; flex: none; font-size: 10px; font-family: var(--font-mono); color: var(--text3); }
+  .branch .ab .up { color: var(--green); }
+  .branch .ab .down { color: var(--orange); }
+
+  .remote-group {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 14px 2px;
+    font-size: 11.5px;
+    font-weight: 600;
+    color: var(--text2);
+  }
+  .remote-group svg { width: 12px; height: 12px; stroke: var(--text3); fill: none; stroke-width: 1.8; stroke-linecap: round; }
+  .remote-group .url { margin-left: auto; font-size: 9.5px; font-weight: 400; font-family: var(--font-mono); color: var(--text3); }
+  .rbranch {
+    display: flex;
+    align-items: center;
+    height: 24px;
+    padding: 0 14px 0 34px;
+    font-size: 12px;
+    color: var(--text2);
+    cursor: pointer;
+    border-left: 2px solid transparent;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .rbranch:hover { background: var(--bg-hover); color: var(--text); }
+  .rbranch.selected { background: var(--bg-sel); border-left-color: var(--orange); color: var(--text); }
+
+  /* ── main ──────────────────────────────────────────────── */
+  .main { flex: 1; display: flex; flex-direction: column; min-width: 0; background: var(--bg-list); }
+
+  .col-header {
+    flex: none;
+    display: grid;
+    grid-template-columns: var(--graph-w) 1fr 148px 96px 74px;
+    align-items: center;
+    height: 26px;
+    padding-right: 14px;
+    border-bottom: 1px solid var(--border);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    color: var(--text3);
+    background: var(--bg-panel);
+  }
+  .col-header span:not(:first-child) { padding-left: 10px; }
+
+  .list-wrap { flex: 1; min-height: 0; position: relative; overflow-y: auto; }
+  .graph-svg { position: absolute; top: 0; left: 0; pointer-events: none; }
+
+  .row {
+    display: grid;
+    grid-template-columns: var(--graph-w) 1fr 148px 96px 74px;
+    align-items: center;
+    height: var(--row-h);
+    padding-right: 14px;
+    cursor: default;
+    position: relative;
+  }
+  .row:hover { background: var(--bg-hover); }
+  .row.selected { background: var(--bg-sel); }
+  .row.selected::before {
+    content: "";
+    position: absolute;
+    left: 0; top: 0; bottom: 0;
+    width: 2px;
+    background: var(--accent);
+  }
+  .row.dimmed { opacity: 0.32; }
+
+  .msg {
+    padding-left: 10px;
+    font-size: 12.5px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+  }
+  .msg .subject { overflow: hidden; text-overflow: ellipsis; flex: none; max-width: 100%; }
+  .row.merge .subject { color: var(--text2); }
+
+  .lbl {
+    flex: none;
+    font-size: 10px;
+    font-weight: 600;
+    font-family: var(--font-mono);
+    border-radius: 4px;
+    padding: 1px 6px;
+    line-height: 15px;
+    white-space: nowrap;
+  }
+  .lbl.head { color: var(--accent); border: 1px solid color-mix(in srgb, var(--accent) 55%, transparent); }
+  .lbl.local { color: var(--green); background: color-mix(in srgb, var(--green) 14%, transparent); }
+  .lbl.remote { color: var(--orange); background: color-mix(in srgb, var(--orange) 13%, transparent); }
+  .lbl.tag { color: var(--purple); background: color-mix(in srgb, var(--purple) 13%, transparent); }
+
+  .author, .date { font-size: 11.5px; color: var(--text2); padding-left: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .hash { font-family: var(--font-mono); font-size: 11px; color: var(--text3); padding-left: 10px; }
+  .row.selected .hash { color: var(--accent); }
+
+  /* ── details pane ──────────────────────────────────────── */
+  .details {
+    flex: none;
+    height: 268px;
+    border-top: 1px solid var(--border);
+    background: var(--bg-panel);
+    overflow-y: auto;
+  }
+  .details-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 14px 0;
+  }
+  .details-hash { font-family: var(--font-mono); font-size: 12px; color: var(--accent); }
+  .mini-btn {
+    font-family: var(--font-ui);
+    font-size: 10.5px;
+    color: var(--text2);
+    background: var(--bg-list);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 2px 8px;
+    cursor: pointer;
+  }
+  .mini-btn:hover { color: var(--text); border-color: var(--border-strong); }
+  .details-subject { padding: 8px 14px 0; font-size: 13px; font-weight: 600; }
+  .details-body { padding: 4px 14px 0; font-size: 11.5px; color: var(--text2); line-height: 1.5; }
+  .details-meta {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 2px 12px;
+    padding: 8px 14px 0;
+    font-size: 11px;
+  }
+  .details-meta dt { color: var(--text3); }
+  .details-meta dd { color: var(--text2); font-family: var(--font-mono); font-size: 10.5px; }
+
+  .details .section-head { padding: 12px 14px 4px; border-top: 1px solid var(--border); margin-top: 10px; }
+  .file {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 24px;
+    padding: 0 14px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    cursor: pointer;
+  }
+  .file:hover { background: var(--bg-hover); }
+  .file.selected { background: var(--bg-sel); }
+  .file .badge { flex: none; width: 14px; text-align: center; font-weight: 700; font-size: 10px; border-radius: 3px; }
+  .file .badge.m { color: var(--orange); background: color-mix(in srgb, var(--orange) 14%, transparent); }
+  .file .badge.a { color: var(--green); background: color-mix(in srgb, var(--green) 14%, transparent); }
+  .file .path { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text); }
+  .file .stats { flex: none; font-size: 10px; }
+  .file .stats .add { color: var(--green); }
+  .file .stats .del { color: var(--red); }
+
+  .diff {
+    margin: 8px 14px 14px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    overflow: hidden;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    line-height: 1.65;
+  }
+  .diff-file {
+    padding: 4px 10px;
+    background: var(--bg-list);
+    border-bottom: 1px solid var(--border);
+    color: var(--text2);
+  }
+  .dl { padding: 0 10px; white-space: pre; }
+  .dl.hunk { color: var(--cyan); background: color-mix(in srgb, var(--cyan) 6%, transparent); }
+  .dl.add { color: #92d982; background: rgba(126, 201, 111, 0.10); }
+  .dl.del { color: #ef8b84; background: rgba(229, 101, 94, 0.10); }
+  .dl.ctx { color: var(--text3); }
+
+  /* ── status bar ────────────────────────────────────────── */
+  .statusbar {
+    flex: none;
+    height: 26px;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 0 12px;
+    border-top: 1px solid var(--border);
+    font-size: 11px;
+    color: var(--text3);
+  }
+  .statusbar .item { display: flex; align-items: center; gap: 5px; white-space: nowrap; }
+  .statusbar svg { width: 12px; height: 12px; stroke: currentColor; fill: none; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+  .statusbar .branch-name { color: var(--text2); font-weight: 600; }
+  .statusbar .up { color: var(--green); }
+  .statusbar .path { font-family: var(--font-mono); font-size: 10px; }
+  .statusbar .spacer { flex: 1; }
+  .statusbar .perf { font-family: var(--font-mono); font-size: 10px; }
+
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-thumb { background: #31374495; border-radius: 5px; border: 2px solid transparent; background-clip: content-box; }
+  ::-webkit-scrollbar-thumb:hover { background: #3d445295; border: 2px solid transparent; background-clip: content-box; }
+  ::-webkit-scrollbar-track { background: transparent; }
+</style>
+</head>
+<body>
+
+<div class="window">
+  <div class="titlebar">
+    <div class="traffic"><span class="r"></span><span class="y"></span><span class="g"></span></div>
+    <h1>sourcefour — <b>sourcefour</b> — ~/code/sourcefour</h1>
+  </div>
+
+  <div class="toolbar">
+    <button class="tbtn" title="Fetch all remotes (⌘R)">
+      <svg viewBox="0 0 24 24"><path d="M12 3v12m0 0 4-4m-4 4-4-4"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
+      Fetch
+    </button>
+    <button class="tbtn planned" title="Planned after v1">
+      <svg viewBox="0 0 24 24"><path d="M12 21V9m0 0 4 4m-4-4-4 4"/><path d="M4 7V5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v2"/></svg>
+      Pull
+    </button>
+    <button class="tbtn planned" title="Planned after v1">
+      <svg viewBox="0 0 24 24"><path d="M12 3v12m0-12 4 4m-4-4-4 4"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
+      Push
+    </button>
+    <button class="tbtn planned" title="Planned after v1">
+      <svg viewBox="0 0 24 24"><path d="M5 3v14a2 2 0 0 0 2 2h12"/><path d="M16 3h5v5"/><path d="M21 3 9 15"/></svg>
+      Commit
+    </button>
+    <button class="tbtn" title="New branch / checkout">
+      <svg viewBox="0 0 24 24"><circle cx="6" cy="6" r="2.4"/><circle cx="6" cy="18" r="2.4"/><circle cx="18" cy="8" r="2.4"/><path d="M6 8.4v7.2"/><path d="M8.2 7 15.7 7.6M18 10.4c0 3-2.5 4.6-5.5 5"/></svg>
+      Branch
+    </button>
+    <button class="tbtn planned" title="Planned after v1">
+      <svg viewBox="0 0 24 24"><path d="M7 4v9a4 4 0 0 0 4 4h6"/><path d="m14 14 3 3-3 3"/><circle cx="7" cy="4" r="1.6"/><path d="M7 9c4 0 6-1.5 8-4"/></svg>
+      Merge
+    </button>
+    <button class="tbtn planned" title="Planned after v1">
+      <svg viewBox="0 0 24 24"><path d="M4 5h16"/><path d="M4 9h16"/><path d="M6 13h12"/><path d="M8 17h8"/></svg>
+      Stash
+    </button>
+    <div class="spacer"></div>
+    <div class="filterbox">
+      <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+      <input id="filter" type="text" placeholder="Filter commits" spellcheck="false">
+      <kbd>⌘F</kbd>
+    </div>
+  </div>
+
+  <div class="body">
+    <div class="sidebar">
+      <div class="section-head">Worktrees <span class="count">3</span></div>
+      <div id="worktrees"></div>
+
+      <div class="section-head">Branches <span class="count">5</span></div>
+      <div id="branches"></div>
+
+      <div class="section-head">Remotes <span class="count">1</span></div>
+      <div class="remote-group">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3.6 9h16.8M3.6 15h16.8M12 3a15 15 0 0 1 0 18 15 15 0 0 1 0-18"/></svg>
+        origin
+        <span class="url">git@github.com:helge/sourcefour</span>
+      </div>
+      <div id="rbranches"></div>
+    </div>
+
+    <div class="main">
+      <div class="col-header">
+        <span></span><span>Description</span><span>Author</span><span>Date</span><span>Hash</span>
+      </div>
+      <div class="list-wrap" id="listwrap">
+        <svg class="graph-svg" id="graph"></svg>
+        <div id="rows"></div>
+      </div>
+      <div class="details" id="details"></div>
+    </div>
+  </div>
+
+  <div class="statusbar">
+    <span class="item">
+      <svg viewBox="0 0 24 24"><circle cx="6" cy="6" r="2.2"/><circle cx="6" cy="18" r="2.2"/><circle cx="18" cy="8" r="2.2"/><path d="M6 8.2v7.6"/></svg>
+      <span class="branch-name">main</span>
+      <span class="up">↑2</span>
+    </span>
+    <span class="item path">~/code/sourcefour</span>
+    <span class="item">3 worktrees</span>
+    <span class="item">5 branches · 4 remote</span>
+    <div class="spacer"></div>
+    <span class="item perf">16 commits · first batch in 19 ms · gix</span>
+  </div>
+</div>
+
+<script>
+const LANE_COLORS = ["var(--lane0)", "var(--lane1)", "var(--lane2)", "var(--lane3)", "var(--lane4)", "var(--lane5)"];
+
+const COMMITS = [
+  { id: "9f3e21a", full: "9f3e21a4c2b7e8d1", parents: ["7c1d9b4", "4b8e0f2"], merge: true,
+    msg: "Merge branch 'feature/worktrees' into main",
+    body: "Brings in linked-worktree enumeration in the git layer and the worktree section of the sidebar.",
+    author: "Helge Sverre", date: "2 hours ago", labels: [["HEAD", "head"], ["main", "local"], ["origin/main", "remote"]],
+    files: [["M", "apps/gpui/src/sidebar.rs", 184, 22], ["M", "apps/gpui/src/theme.rs", 9, 1], ["A", "crates/sourcefour-git/src/worktree.rs", 96, 0], ["M", "crates/sourcefour-git/src/lib.rs", 4, 0]],
+    diff: ["apps/gpui/src/sidebar.rs", [
+      ["ctx", " fn render_worktrees(&self, cx: &mut Context<Self>) -> Div {"],
+      ["del", "-    div().flex_col().gap(px(2.0))"],
+      ["add", "+    let current = self.state.current_worktree_id;"],
+      ["add", "+    div().flex_col().gap(px(2.0)).children("],
+      ["add", "+        self.state.worktrees.iter().map(|wt| {"],
+      ["add", "+            worktree_row(wt, wt.id == current, cx)"],
+      ["add", "+        }),"],
+      ["add", "+    )"],
+      ["ctx", " }"],
+      ["ctx", ""],
+      ["add", "+fn worktree_row(wt: &Worktree, is_current: bool, cx: &mut Context<Self>) -> Div {"],
+      ["add", "+    div().flex_col().px(px(14.0)).py(px(6.0)).child("],
+      ["add", "+        div().flex().gap(px(6.0)).child(label(wt.branch.clone())),"],
+      ["add", "+    ).child(path_label(&wt.path))"],
+      ["add", "+}"]]],
+  },
+  { id: "7c1d9b4", full: "7c1d9b40a5e2c917", parents: ["e57a109"],
+    msg: "chore(deps): pin gpui to rev v0.179.4",
+    body: "Matches the rev that strek builds against on this machine. Bumps are deliberate, never casual.",
+    author: "Helge Sverre", date: "3 hours ago", labels: [],
+    files: [["M", "apps/gpui/Cargo.toml", 2, 2]],
+    diff: ["apps/gpui/Cargo.toml", [
+      ["ctx", " [dependencies]"],
+      ["del", "-gpui = { git = \"https://github.com/zed-industries/zed\", rev = \"v0.178.0\" }"],
+      ["add", "+gpui = { git = \"https://github.com/zed-industries/zed\", rev = \"v0.179.4\" }"],
+      ["ctx", " log = \"0.4\""]]],
+  },
+  { id: "4b8e0f2", full: "4b8e0f27d1c3aa58", parents: ["5d2c8e1"],
+    msg: "feat(sidebar): list linked worktrees with their locations",
+    body: "Worktree section shows the checked-out branch and the filesystem path for every linked worktree. The invoking worktree is marked current.",
+    author: "Helge Sverre", date: "5 hours ago", labels: [["feature/worktrees", "local"]],
+    files: [["M", "apps/gpui/src/sidebar.rs", 120, 8], ["A", "apps/gpui/src/worktree_row.rs", 74, 0]],
+    diff: ["apps/gpui/src/worktree_row.rs", [
+      ["add", "+use gpui::{div, px, Context, Div};"],
+      ["add", "+"],
+      ["add", "+pub fn render(wt: &WorktreeSnapshot, cx: &mut Window) -> Div {"],
+      ["add", "+    div().flex_col().child(branch_line(wt)).child(path_line(wt))"],
+      ["add", "+}"],
+      ["add", "+"],
+      ["add", "+fn path_line(wt: &WorktreeSnapshot) -> Div {"],
+      ["add", "+    div().font_mono().size(px(10.0)).text_color(theme::text_faint())"],
+      ["add", "+        .child(shortened(&wt.path))"],
+      ["add", "+}"]]],
+  },
+  { id: "e57a109", full: "e57a109b4f6d2c83", parents: ["b91f4a7", "d84c2a6"], merge: true,
+    msg: "Merge branch 'perf/revwalk-batch' into main",
+    body: "Object cache reuse across revwalk batches cuts the 50k-commit walk by 38%.",
+    author: "Helge Sverre", date: "yesterday", labels: [],
+    files: [["M", "crates/sourcefour-git/src/revwalk.rs", 88, 31], ["M", "crates/sourcefour-git/src/cache.rs", 41, 6]],
+    diff: ["crates/sourcefour-git/src/revwalk.rs", [
+      ["ctx", " pub fn next_batch(&mut self, limit: usize) -> Result<Vec<CommitRow>> {"],
+      ["del", "-    let odb = self.repo.objects.clone();"],
+      ["del", "-    self.walk.take(limit).map(|c| decode(&odb, c)).collect()"],
+      ["add", "+    self.walk"],
+      ["add", "+        .take(limit)"],
+      ["add", "+        .map(|c| self.cache.decode(c))"],
+      ["add", "+        .collect()"],
+      ["ctx", " }"]]],
+  },
+  { id: "d84c2a6", full: "d84c2a65e9b0f142", parents: ["2f6e9d0"],
+    msg: "perf(revwalk): reuse object cache across batches",
+    body: "Decoded trees and commit buffers survive between batches instead of being rebuilt per call.",
+    author: "Helge Sverre", date: "yesterday", labels: [["perf/revwalk-batch", "local"]],
+    files: [["M", "crates/sourcefour-git/src/cache.rs", 58, 4]],
+    diff: ["crates/sourcefour-git/src/cache.rs", [
+      ["ctx", " pub struct ObjectCache {"],
+      ["del", "-    commits: HashMap<ObjectId, CommitBuf>,"],
+      ["add", "+    commits: HashMap<ObjectId, Arc<CommitBuf>>,"],
+      ["add", "+    hits: u64,"],
+      ["add", "+    misses: u64,"],
+      ["ctx", " }"]]],
+  },
+  { id: "5d2c8e1", full: "5d2c8e19aa47c365", parents: ["b91f4a7"],
+    msg: "feat(git): enumerate worktrees and resolve their gitdirs",
+    body: "Reads $GIT_DIR/worktrees/* per the git layout: gitdir, HEAD, and commondir for each entry.",
+    author: "Helge Sverre", date: "yesterday", labels: [],
+    files: [["A", "crates/sourcefour-git/src/worktree.rs", 96, 0], ["M", "crates/sourcefour-git/src/lib.rs", 4, 0]],
+    diff: ["crates/sourcefour-git/src/worktree.rs", [
+      ["add", "+pub struct WorktreeInfo {"],
+      ["add", "+    pub name: String,"],
+      ["add", "+    pub path: PathBuf,"],
+      ["add", "+    pub gitdir: PathBuf,"],
+      ["add", "+    pub head: Option<ObjectId>,"],
+      ["add", "+    pub branch: Option<String>,"],
+      ["add", "+    pub is_current: bool,"],
+      ["add", "+}"],
+      ["add", "+"],
+      ["add", "+pub fn list(repo: &gix::Repository) -> Result<Vec<WorktreeInfo>> {"],
+      ["add", "+    read_worktree_dir(repo.common_dir().join(\"worktrees\"))"],
+      ["add", "+}"]]],
+  },
+  { id: "b91f4a7", full: "b91f4a78c2d95e01", parents: ["3e8d5c2", "a47b9f0"], merge: true,
+    msg: "Merge branch 'feature/branches' into main",
+    body: "",
+    author: "Helge Sverre", date: "2 days ago", labels: [["v0.1.0", "tag"]],
+    files: [["M", "apps/gpui/src/sidebar.rs", 88, 12], ["A", "crates/sourcefour-git/src/branches.rs", 143, 0], ["M", "crates/sourcefour-git/src/discover.rs", 34, 6]],
+    diff: ["crates/sourcefour-git/src/branches.rs", [
+      ["add", "+pub struct BranchInfo {"],
+      ["add", "+    pub name: String,"],
+      ["add", "+    pub tip: ObjectId,"],
+      ["add", "+    pub upstream: Option<String>,"],
+      ["add", "+    pub ahead: u32,"],
+      ["add", "+    pub behind: u32,"],
+      ["add", "+}"],
+      ["add", "+"],
+      ["add", "+pub fn local(repo: &gix::Repository) -> Result<Vec<BranchInfo>> {"],
+      ["add", "+    repo.references()?.local_branches().map(decode).collect()"],
+      ["add", "+}"]]],
+  },
+  { id: "2f6e9d0", full: "2f6e9d03b8a15c77", parents: ["f20c6d3"],
+    msg: "perf(git): batch revwalk in chunks of 256",
+    body: "The UI receives ordered batches; the first batch renders without waiting for the full walk.",
+    author: "Helge Sverre", date: "2 days ago", labels: [],
+    files: [["M", "crates/sourcefour-git/src/revwalk.rs", 122, 0]],
+    diff: ["crates/sourcefour-git/src/revwalk.rs", [
+      ["add", "+pub const BATCH_SIZE: usize = 256;"],
+      ["add", "+"],
+      ["add", "+pub struct BatchWalk {"],
+      ["add", "+    inner: gix::revision::walk::Walker,"],
+      ["add", "+}"],
+      ["add", "+"],
+      ["add", "+impl BatchWalk {"],
+      ["add", "+    pub fn next_batch(&mut self, limit: usize) -> Result<Vec<CommitRow>> {"],
+      ["add", "+        todo_batch(limit)"],
+      ["add", "+    }"],
+      ["add", "+}"]]],
+  },
+  { id: "3e8d5c2", full: "3e8d5c24f6b8d209", parents: ["f20c6d3"],
+    msg: "fix(git): resolve commondir when opened from a linked worktree",
+    body: "A .git file points at the per-worktree gitdir; refs and worktrees live in the commondir.",
+    author: "Helge Sverre", date: "2 days ago", labels: [],
+    files: [["M", "crates/sourcefour-git/src/discover.rs", 34, 6]],
+    diff: ["crates/sourcefour-git/src/discover.rs", [
+      ["ctx", " fn open(path: &Path) -> Result<gix::Repository> {"],
+      ["del", "-    gix::open(path)"],
+      ["add", "+    let repo = gix::open(path)?;"],
+      ["add", "+    if repo.is_linked_worktree() {"],
+      ["add", "+        return gix::open(repo.common_dir());"],
+      ["add", "+    }"],
+      ["add", "+    Ok(repo)"],
+      ["ctx", " }"]]],
+  },
+  { id: "a47b9f0", full: "a47b9f01e7c4d6b2", parents: ["f20c6d3"],
+    msg: "feat(sidebar): local and remote branch lists with ahead/behind",
+    body: "Local branches show the current marker and ahead/behind against the upstream. Remote branches are grouped by remote.",
+    author: "Helge Sverre", date: "3 days ago", labels: [],
+    files: [["M", "apps/gpui/src/sidebar.rs", 88, 12], ["A", "apps/gpui/src/branch_row.rs", 61, 0]],
+    diff: ["apps/gpui/src/branch_row.rs", [
+      ["add", "+pub fn ahead_behind(b: &BranchSnapshot) -> Option<Div> {"],
+      ["add", "+    let up = b.ahead;"],
+      ["add", "+    let down = b.behind;"],
+      ["add", "+    (up > 0 || down > 0).then(|| {"],
+      ["add", "+        div().font_mono().child(format!(\"↑{up} ↓{down}\"))"],
+      ["add", "+    })"],
+      ["add", "+}"]]],
+  },
+  { id: "f20c6d3", full: "f20c6d37b5a9e814", parents: ["8ab4e15"],
+    msg: "feat(graph): lane layout for merges and convergences",
+    body: "Incremental lane assignment over the (id, parents) stream. Deterministic: same input, same layout bytes.",
+    author: "Helge Sverre", date: "3 days ago", labels: [],
+    files: [["A", "crates/sourcefour-graph/src/lib.rs", 214, 0], ["A", "crates/sourcefour-graph/src/lanes.rs", 88, 0]],
+    diff: ["crates/sourcefour-graph/src/lanes.rs", [
+      ["add", "+pub fn assign(rows: &[(Id, Vec<Id>)]) -> Vec<RowLayout> {"],
+      ["add", "+    let mut lanes: Vec<Option<Id>> = Vec::new();"],
+      ["add", "+    rows.iter().map(|(id, parents)| {"],
+      ["add", "+        let lane = claim_lane(&mut lanes, id);"],
+      ["add", "+        continue_lane(&mut lanes, lane, parents);"],
+      ["add", "+        RowLayout { lane, edges: edge_segments(&lanes, parents) }"],
+      ["add", "+    }).collect()"],
+      ["add", "+}"]]],
+  },
+  { id: "8ab4e15", full: "8ab4e15d0c3f7a29", parents: ["c73a2f8"],
+    msg: "feat(details): changed files and unified diff pane",
+    body: "Diffs load lazily per file; the pane shows message, metadata, and parent hashes.",
+    author: "Helge Sverre", date: "4 days ago", labels: [["origin/feature/diff-pane", "remote"]],
+    files: [["A", "apps/gpui/src/details.rs", 176, 0], ["A", "crates/sourcefour-git/src/diff.rs", 132, 0]],
+    diff: ["apps/gpui/src/details.rs", [
+      ["add", "+pub fn render(commit: &CommitDetail, cx: &mut Context<Self>) -> Div {"],
+      ["add", "+    div().flex_col().child(header(commit)).child(meta(commit)).child("],
+      ["add", "+        file_list(commit, cx),"],
+      ["add", "+    )"],
+      ["add", "+}"]]],
+  },
+  { id: "c73a2f8", full: "c73a2f89d4e1b056", parents: ["1d9e7b4"],
+    msg: "fix(git): handle detached HEAD and unborn branches",
+    body: "Detached HEAD shows the short hash as the title; unborn HEAD renders an explicit empty state.",
+    author: "Helge Sverre", date: "5 days ago", labels: [],
+    files: [["M", "crates/sourcefour-git/src/head.rs", 29, 7]],
+    diff: ["crates/sourcefour-git/src/head.rs", [
+      ["ctx", " pub fn state(repo: &gix::Repository) -> Result<HeadState> {"],
+      ["del", "-    Ok(HeadState::Branch(repo.head_name()?.to_string()))"],
+      ["add", "+    match repo.head()? {"],
+      ["add", "+        Some(h) if h.is_detached() => Ok(HeadState::Detached(h.id)),"],
+      ["add", "+        Some(h) => Ok(HeadState::Branch(h.name)),"],
+      ["add", "+        None => Ok(HeadState::Unborn),"],
+      ["add", "+    }"],
+      ["ctx", " }"]]],
+  },
+  { id: "1d9e7b4", full: "1d9e7b42a9c7e5f0", parents: ["6f5b0a9"],
+    msg: "feat(history): incremental batch loading on scroll",
+    body: "Scrolling near the end of loaded data requests the next batch; no full-history load ever happens.",
+    author: "Helge Sverre", date: "6 days ago", labels: [],
+    files: [["M", "apps/gpui/src/history.rs", 64, 18]],
+    diff: ["apps/gpui/src/history.rs", [
+      ["ctx", " fn on_scroll(&mut self, offset: Pixels, cx: &mut Context<Self>) {"],
+      ["add", "+    if offset + self.viewport > self.loaded_height - px(800.) {"],
+      ["add", "+        self.request_next_batch(cx);"],
+      ["add", "+    }"],
+      ["ctx", " }"]]],
+  },
+  { id: "6f5b0a9", full: "6f5b0a95c1d8f3e7", parents: ["0c1e4d7"],
+    msg: "feat: repository discovery and first history batch",
+    body: "Walks upward to the .git entry, opens with gix, and renders the first 256 rows.",
+    author: "Helge Sverre", date: "6 days ago", labels: [],
+    files: [["M", "apps/gpui/src/main.rs", 45, 3], ["A", "crates/sourcefour-git/src/discover.rs", 87, 0]],
+    diff: ["crates/sourcefour-git/src/discover.rs", [
+      ["add", "+pub fn discover(start: &Path) -> Result<RepoLocation> {"],
+      ["add", "+    let mut dir = start;"],
+      ["add", "+    loop {"],
+      ["add", "+        if dir.join(\".git\").exists() {"],
+      ["add", "+            return RepoLocation::open(dir);"],
+      ["add", "+        }"],
+      ["add", "+        dir = dir.parent().ok_or(Error::NotARepository)?;"],
+      ["add", "+    }"],
+      ["add", "+}"]]],
+  },
+  { id: "0c1e4d7", full: "0c1e4d72b6f9a8c3", parents: [],
+    msg: "initial commit",
+    body: "Workspace skeleton: sourcefour-git, sourcefour-graph, and the GPUI app.",
+    author: "Helge Sverre", date: "7 days ago", labels: [],
+    files: [["A", "Cargo.toml", 18, 0], ["A", "apps/gpui/src/main.rs", 42, 0], ["A", ".gitignore", 4, 0]],
+    diff: ["Cargo.toml", [
+      ["add", "+[workspace]"],
+      ["add", "+members = [\"crates/sourcefour-git\", \"crates/sourcefour-graph\", \"apps/gpui\"]"],
+      ["add", "+resolver = \"2\""]]],
+  },
+];
+
+const WORKTREES = [
+  { name: "sourcefour", branch: "main", path: "~/code/sourcefour", current: true },
+  { name: "sourcefour-perf", branch: "perf/revwalk-batch", path: "~/code/.worktrees/sourcefour-perf", current: false },
+  { name: "sourcefour-hotfix", branch: "fix/graph-lanes", path: "~/code/.worktrees/sourcefour-hotfix", current: false },
+];
+
+const BRANCHES = [
+  { name: "main", tip: "9f3e21a", current: true, ab: "↑2" },
+  { name: "feature/worktrees", tip: "4b8e0f2", current: false, ab: "" },
+  { name: "perf/revwalk-batch", tip: "d84c2a6", current: false, ab: "↑1" },
+  { name: "feature/diff-pane", tip: "8ab4e15", current: false, ab: "↓1" },
+  { name: "fix/graph-lanes", tip: "f20c6d3", current: false, ab: "" },
+];
+
+const RBRANCHES = ["main", "feature/worktrees", "feature/diff-pane", "perf/revwalk-batch"];
+
+const byId = Object.fromEntries(COMMITS.map(c => [c.id, c]));
+const ROW_H = 30, GRAPH_W = 76, LANE_X0 = 26, LANE_DX = 18;
+
+let state = { selected: COMMITS[0].id, filter: "", branchTip: null };
+
+function reachableFrom(tipId) {
+  const seen = new Set();
+  const stack = [tipId];
+  while (stack.length) {
+    const id = stack.pop();
+    if (seen.has(id) || !byId[id]) continue;
+    seen.add(id);
+    byId[id].parents.forEach(p => stack.push(p));
+  }
+  return seen;
+}
+
+function visibleCommits() {
+  const q = state.filter.trim().toLowerCase();
+  if (!q) return COMMITS;
+  return COMMITS.filter(c =>
+    c.msg.toLowerCase().includes(q) ||
+    c.author.toLowerCase().includes(q) ||
+    c.full.startsWith(q) || c.id.startsWith(q)
+  );
+}
+
+function assignLanes(list) {
+  const lanes = [];
+  const laneOf = new Map();
+  for (const c of list) {
+    let lane = lanes.indexOf(c.id);
+    if (lane === -1) { lane = lanes.length; lanes.push(null); }
+    laneOf.set(c.id, lane);
+    lanes[lane] = c.parents[0] ?? null;
+    for (let i = 0; i < lanes.length; i++) {
+      if (i !== lane && lanes[i] === c.id) lanes[i] = null;
+    }
+    for (const p of c.parents.slice(1)) {
+      if (lanes.includes(p)) continue;
+      const free = lanes.indexOf(null);
+      if (free === -1) lanes.push(p); else lanes[free] = p;
+    }
+  }
+  return { laneOf, maxLane: Math.max(0, ...laneOf.values()) };
+}
+
+function laneX(l) { return LANE_X0 + l * LANE_DX; }
+function rowY(i) { return i * ROW_H + ROW_H / 2; }
+
+function renderGraph(list, laneOf) {
+  const svg = document.getElementById("graph");
+  const h = list.length * ROW_H;
+  svg.setAttribute("width", GRAPH_W);
+  svg.setAttribute("height", h);
+  svg.setAttribute("viewBox", `0 0 ${GRAPH_W} ${h}`);
+  let out = "";
+  const idx = new Map(list.map((c, i) => [c.id, i]));
+  for (let i = 0; i < list.length; i++) {
+    const c = list[i];
+    const l = laneOf.get(c.id);
+    for (const p of c.parents) {
+      const pi = idx.get(p);
+      if (pi === undefined) continue;
+      const pl = laneOf.get(p);
+      const x1 = laneX(l), y1 = rowY(i), x2 = laneX(pl), y2 = rowY(pi);
+      const color = LANE_COLORS[pl % LANE_COLORS.length];
+      if (l === pl) {
+        out += `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${color}" stroke-width="2"/>`;
+      } else {
+        const c1y = y1 + ROW_H * 0.8, c2y = y2 - ROW_H * 0.8;
+        out += `<path d="M ${x1} ${y1} C ${x1} ${c1y}, ${x2} ${c2y}, ${x2} ${y2}" stroke="${color}" stroke-width="2" fill="none"/>`;
+      }
+    }
+  }
+  for (let i = 0; i < list.length; i++) {
+    const c = list[i];
+    const l = laneOf.get(c.id);
+    const color = LANE_COLORS[l % LANE_COLORS.length];
+    out += `<circle cx="${laneX(l)}" cy="${rowY(i)}" r="4" fill="var(--bg-list)" stroke="${color}" stroke-width="2"/>`;
+    if (c.labels.some(([_, t]) => t === "head")) {
+      out += `<circle cx="${laneX(l)}" cy="${rowY(i)}" r="7.5" fill="none" stroke="${color}" stroke-width="1" opacity="0.55"/>`;
+    }
+  }
+  svg.innerHTML = out;
+}
+
+function chip([text, kind]) {
+  return `<span class="lbl ${kind}">${text}</span>`;
+}
+
+function renderRows(list, laneOf) {
+  const rowsEl = document.getElementById("rows");
+  const reach = state.branchTip ? reachableFrom(state.branchTip) : null;
+  rowsEl.innerHTML = list.map(c => {
+    const cls = [
+      "row",
+      c.id === state.selected ? "selected" : "",
+      c.merge ? "merge" : "",
+      reach && !reach.has(c.id) ? "dimmed" : "",
+    ].join(" ");
+    return `<div class="${cls}" data-id="${c.id}">
+      <span></span>
+      <div class="msg">${c.labels.map(chip).join("")}<span class="subject">${c.msg}</span></div>
+      <span class="author">${c.author}</span>
+      <span class="date">${c.date}</span>
+      <span class="hash">${c.id}</span>
+    </div>`;
+  }).join("");
+  rowsEl.querySelectorAll(".row").forEach(el => {
+    el.addEventListener("click", () => { state.selected = el.dataset.id; render(); });
+  });
+}
+
+function renderDetails() {
+  const c = byId[state.selected];
+  const el = document.getElementById("details");
+  const parents = c.parents.length ? c.parents.join(" ") : "—";
+  const diffHtml = c.diff ? `
+    <div class="section-head">Diff</div>
+    <div class="diff">
+      <div class="diff-file">${c.diff[0]}</div>
+      ${c.diff[1].map(([k, line]) => `<div class="dl ${k}">${line || "&nbsp;"}</div>`).join("")}
+    </div>` : "";
+  el.innerHTML = `
+    <div class="details-head">
+      <span class="details-hash">${c.full}</span>
+      <button class="mini-btn">Copy SHA</button>
+      <button class="mini-btn">Browse files</button>
+    </div>
+    <div class="details-subject">${c.msg}</div>
+    ${c.body ? `<div class="details-body">${c.body}</div>` : ""}
+    <dl class="details-meta">
+      <dt>Author</dt><dd>${c.author} &lt;helge@sourcefour.dev&gt;</dd>
+      <dt>Parents</dt><dd>${parents}</dd>
+    </dl>
+    <div class="section-head">Files <span class="count">${c.files.length}</span></div>
+    ${c.files.map(([badge, path, add, del], i) => `
+      <div class="file ${i === 0 ? "selected" : ""}">
+        <span class="badge ${badge.toLowerCase()}">${badge}</span>
+        <span class="path">${path}</span>
+        <span class="stats"><span class="add">+${add}</span> <span class="del">−${del}</span></span>
+      </div>`).join("")}
+    ${diffHtml}`;
+}
+
+function renderSidebar() {
+  document.getElementById("worktrees").innerHTML = WORKTREES.map(w => `
+    <div class="wt ${w.current ? "selected" : ""}">
+      <div class="wt-row1">
+        <span class="wt-dot ${w.current ? "on" : "off"}"></span>
+        <span class="wt-name">${w.name}</span>
+        ${w.current ? '<span class="chip-current">CURRENT</span>' : ""}
+        <span class="wt-branch">${w.branch}</span>
+      </div>
+      <div class="wt-path">${w.path}</div>
+    </div>`).join("");
+
+  document.getElementById("branches").innerHTML = BRANCHES.map(b => `
+    <div class="branch ${b.current ? "current" : ""} ${state.branchTip === b.tip ? "selected" : ""}" data-tip="${b.tip}">
+      <svg class="glyph" viewBox="0 0 24 24"><circle cx="6" cy="6" r="2.4"/><circle cx="6" cy="18" r="2.4"/><circle cx="18" cy="8" r="2.4"/><path d="M6 8.4v7.2"/></svg>
+      <span class="name">${b.name}</span>
+      ${b.ab ? `<span class="ab">${b.ab.replace("↑", '<span class="up">↑</span>').replace("↓", '<span class="down">↓</span>')}</span>` : ""}
+    </div>`).join("");
+
+  document.getElementById("rbranches").innerHTML = RBRANCHES.map(n =>
+    `<div class="rbranch" data-name="${n}">origin/${n}</div>`).join("");
+
+  document.querySelectorAll(".branch").forEach(el => {
+    el.addEventListener("click", () => {
+      state.branchTip = state.branchTip === el.dataset.tip ? null : el.dataset.tip;
+      render();
+    });
+  });
+  document.querySelectorAll(".rbranch").forEach(el => {
+    el.addEventListener("click", () => {
+      document.querySelectorAll(".rbranch").forEach(x => x.classList.remove("selected"));
+      el.classList.add("selected");
+    });
+  });
+  document.querySelectorAll(".wt").forEach(el => {
+    el.addEventListener("click", () => {
+      document.querySelectorAll(".wt").forEach(x => x.classList.remove("selected"));
+      el.classList.add("selected");
+    });
+  });
+}
+
+function render() {
+  const list = visibleCommits();
+  const { laneOf } = assignLanes(list);
+  if (!list.some(c => c.id === state.selected)) state.selected = list[0]?.id ?? COMMITS[0].id;
+  renderGraph(list, laneOf);
+  renderRows(list, laneOf);
+  renderDetails();
+  renderSidebar();
+  const sel = document.querySelector(".row.selected");
+  if (sel) sel.scrollIntoView({ block: "nearest" });
+}
+
+document.getElementById("filter").addEventListener("input", e => {
+  state.filter = e.target.value;
+  render();
+});
+
+window.addEventListener("keydown", e => {
+  if ((e.metaKey || e.ctrlKey) && e.key === "f") {
+    e.preventDefault();
+    document.getElementById("filter").focus();
+    return;
+  }
+  if (document.activeElement === document.getElementById("filter")) {
+    if (e.key === "Escape") { e.target.value = ""; state.filter = ""; render(); e.target.blur(); }
+    return;
+  }
+  const list = visibleCommits();
+  const i = list.findIndex(c => c.id === state.selected);
+  if (e.key === "ArrowDown" && i < list.length - 1) { state.selected = list[i + 1].id; render(); }
+  if (e.key === "ArrowUp" && i > 0) { state.selected = list[i - 1].id; render(); }
+});
+
+render();
+</script>
+</body>
+</html>
