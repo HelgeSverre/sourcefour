@@ -24,4 +24,7 @@ build:
 build-release:
     cargo build --workspace --release --locked
 
+run *ARGS:
+    cargo run -p sourcefour -- {{ARGS}}
+
 check: fmt-check lint test doctest build build-release
