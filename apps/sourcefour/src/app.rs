@@ -3,6 +3,10 @@ use std::{
     fs,
     path::{Path, PathBuf},
     process::ExitCode,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 use gpui::{
@@ -19,6 +23,8 @@ use crate::{
 pub(crate) fn run(request: LaunchRequest) -> ExitCode {
     let path = request.path;
     let demo = request.demo;
+    let opened = Arc::new(AtomicBool::new(false));
+    let opened_in_app = Arc::clone(&opened);
     Application::new()
         .with_assets(SourcefourAssets::new())
         .run(move |cx: &mut App| {
@@ -38,10 +44,20 @@ pub(crate) fn run(request: LaunchRequest) -> ExitCode {
             );
             if let Err(error) = result {
                 tracing::error!(%error, "could not open Sourcefour window");
+            } else {
+                opened_in_app.store(true, Ordering::Release);
             }
             cx.activate(true);
         });
-    ExitCode::SUCCESS
+    launch_exit_code(opened.load(Ordering::Acquire))
+}
+
+fn launch_exit_code(opened: bool) -> ExitCode {
+    if opened {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(1)
+    }
 }
 
 pub(crate) fn display_path(path: &Path) -> String {
@@ -80,5 +96,18 @@ impl AssetSource for SourcefourAssets {
                     .collect()
             })
             .map_err(Into::into)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::process::ExitCode;
+
+    use super::launch_exit_code;
+
+    #[test]
+    fn window_open_failure_is_nonzero() {
+        assert_eq!(launch_exit_code(false), ExitCode::from(1));
+        assert_eq!(launch_exit_code(true), ExitCode::SUCCESS);
     }
 }
