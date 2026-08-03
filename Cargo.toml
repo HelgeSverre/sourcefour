@@ -1,0 +1,39 @@
+[workspace]
+members = [
+    "apps/sourcefour",
+    "crates/sourcefour-model",
+    "crates/sourcefour-git",
+    "crates/sourcefour-graph",
+    "crates/sourcefour-test-support",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/helge/sourcefour"
+authors = ["Sourcefour contributors"]
+
+[workspace.dependencies]
+gix = "0.85.0"
+smallvec = "1.15.1"
+thiserror = "2.0.17"
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3.20", features = ["env-filter", "fmt"] }
+uuid = { version = "1.18.1", features = ["v4"] }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"

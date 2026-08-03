@@ -1,0 +1,21 @@
+[package]
+name = "sourcefour"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "sourcefour"
+path = "src/main.rs"
+
+[dependencies]
+gpui = { git = "https://github.com/zed-industries/zed", package = "gpui", rev = "d637307bd75389f63adbb7d86bc66174ee817d0d" }
+sourcefour-model = { path = "../../crates/sourcefour-model" }
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[lints]
+workspace = true
