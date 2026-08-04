@@ -74,13 +74,71 @@ impl TempRepo {
     /// Panics when `git worktree add` fails.
     #[must_use]
     pub fn add_worktree(&self, name: &str) -> PathBuf {
-        let path = self
-            .root
-            .parent()
-            .expect("the fixture root always has a parent")
-            .join(name);
+        let path = self.sibling(name);
         self.git(&["worktree", "add", "-b", name, &path.to_string_lossy()]);
         canonical(&path)
+    }
+
+    /// Path beside the repository root, outside any of its working trees.
+    fn sibling(&self, name: &str) -> PathBuf {
+        self.root
+            .parent()
+            .expect("the fixture root always has a parent")
+            .join(name)
+    }
+
+    /// Creates a repository with a working tree but no commit yet.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the temporary directory or `git init` fails.
+    #[must_use]
+    pub fn init_unborn() -> Self {
+        let directory = temporary_directory();
+        let root = directory.path().join("repository");
+        std::fs::create_dir(&root).expect("could not create the fixture working tree");
+        run_git(&root, &["init", "--initial-branch", "main"]);
+        Self::new(directory, &root)
+    }
+
+    /// Adds a linked worktree checked out at a commit rather than a branch.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `git worktree add` fails.
+    #[must_use]
+    pub fn add_detached_worktree(&self, name: &str) -> PathBuf {
+        let path = self.sibling(name);
+        self.git(&["worktree", "add", "--detach", &path.to_string_lossy()]);
+        canonical(&path)
+    }
+
+    /// Marks a linked worktree locked, as `git worktree lock` does.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `git worktree lock` fails.
+    pub fn lock_worktree(&self, path: &Path, reason: &str) {
+        self.git(&[
+            "worktree",
+            "lock",
+            "--reason",
+            reason,
+            &path.to_string_lossy(),
+        ]);
+    }
+
+    /// Deletes a linked worktree's checkout behind Git's back.
+    ///
+    /// This is how a worktree on an unmounted volume or a deleted directory
+    /// presents itself: registered in `worktrees/`, but with no checkout.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the directory cannot be removed.
+    pub fn remove_worktree_checkout(path: &Path) {
+        std::fs::remove_dir_all(path)
+            .unwrap_or_else(|error| panic!("could not remove `{}`: {error}", path.display()));
     }
 
     /// Path of the repository root: the working tree, or the bare Git directory.

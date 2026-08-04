@@ -5,10 +5,14 @@
 //! `sourcefour-model` values.
 
 mod discover;
+mod worktrees;
 
 use std::sync::atomic::AtomicBool;
 
-pub use crate::discover::{discover, display_name};
+pub use crate::{
+    discover::{discover, display_name},
+    worktrees::worktrees,
+};
 
 use sourcefour_model::{
     CommitDetail, CommitFiles, CreateBranchRequest, FetchRequest, FileDiff, FileDiffRequest,
