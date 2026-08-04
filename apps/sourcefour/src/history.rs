@@ -2,7 +2,7 @@
 //!
 //! Everything here is plain data: no GPUI entity exists per commit (§15).
 
-use sourcefour_model::{CommitRow, GitTime, GraphRow, HistoryScope, Oid};
+use sourcefour_model::{BranchSnapshot, CommitRow, GitTime, GraphRow, HistoryScope, Oid};
 
 /// Rows of the loaded tail within which the next batch is requested (§6.9).
 const PREFETCH_ROWS: usize = 30;
@@ -125,6 +125,27 @@ pub(crate) fn toggled_scope(
     }
 }
 
+/// The scope a metadata refresh should restart history with.
+///
+/// The user's branch scope survives an external refresh, with its tip
+/// re-resolved from the fresh snapshot so the restarted walk sees new commits.
+/// A scope whose branch disappeared falls back to all refs (§6.12).
+pub(crate) fn refreshed_scope(
+    current: Option<&HistoryScope>,
+    branches: &[BranchSnapshot],
+) -> HistoryScope {
+    match current {
+        Some(HistoryScope::Ref { full_name, .. }) => branches
+            .iter()
+            .find(|branch| branch.full_name == *full_name)
+            .map_or(HistoryScope::AllRefs, |branch| HistoryScope::Ref {
+                full_name: full_name.clone(),
+                tip: branch.tip,
+            }),
+        _ => HistoryScope::AllRefs,
+    }
+}
+
 /// Whether `full_name` is the ref history is currently scoped to.
 pub(crate) fn is_scoped_to(current: Option<&HistoryScope>, full_name: &str) -> bool {
     matches!(
@@ -164,7 +185,7 @@ mod tests {
         CommitFlags, CommitRow, GitTime, GraphFlags, GraphRow, HistoryScope, Oid,
     };
 
-    use super::{HistoryState, is_scoped_to, relative_date, toggled_scope};
+    use super::{HistoryState, is_scoped_to, refreshed_scope, relative_date, toggled_scope};
 
     #[test]
     fn clicking_a_branch_narrows_then_widens_again() {
@@ -193,6 +214,55 @@ mod tests {
                 tip
             }
         );
+    }
+
+    #[test]
+    fn a_refresh_keeps_the_branch_scope_and_follows_its_new_tip() {
+        let scoped = HistoryScope::Ref {
+            full_name: String::from("refs/heads/main"),
+            tip: oid(1),
+        };
+        let branches = [branch_snapshot("refs/heads/main", oid(9))];
+
+        assert_eq!(
+            refreshed_scope(Some(&scoped), &branches),
+            HistoryScope::Ref {
+                full_name: String::from("refs/heads/main"),
+                tip: oid(9),
+            },
+            "the restarted walk must see commits added since the last snapshot"
+        );
+    }
+
+    #[test]
+    fn a_refresh_widens_when_the_scoped_branch_disappeared() {
+        let scoped = HistoryScope::Ref {
+            full_name: String::from("refs/heads/gone"),
+            tip: oid(1),
+        };
+        let branches = [branch_snapshot("refs/heads/main", oid(9))];
+
+        assert_eq!(
+            refreshed_scope(Some(&scoped), &branches),
+            HistoryScope::AllRefs
+        );
+        assert_eq!(
+            refreshed_scope(Some(&HistoryScope::AllRefs), &branches),
+            HistoryScope::AllRefs
+        );
+        assert_eq!(refreshed_scope(None, &branches), HistoryScope::AllRefs);
+    }
+
+    fn branch_snapshot(full_name: &str, tip: Oid) -> sourcefour_model::BranchSnapshot {
+        sourcefour_model::BranchSnapshot {
+            full_name: full_name.to_owned(),
+            short_name: full_name.rsplit('/').next().unwrap_or(full_name).to_owned(),
+            tip,
+            is_current: false,
+            upstream: None,
+            ahead_behind: sourcefour_model::AheadBehindState::Unavailable,
+            checked_out_in: None,
+        }
     }
 
     #[test]

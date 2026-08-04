@@ -12,7 +12,7 @@ use sourcefour_model::{
 use crate::{
     app::WindowLaunch,
     demo,
-    history::{HistoryState, is_scoped_to, relative_date, toggled_scope},
+    history::{HistoryState, is_scoped_to, refreshed_scope, relative_date, toggled_scope},
     theme::{
         DETAILS_HEIGHT, GRAPH_WIDTH, HEADER_HEIGHT, HISTORY_ROW_HEIGHT, SIDEBAR_WIDTH,
         STATUS_HEIGHT, TITLEBAR_HEIGHT, TOOLBAR_HEIGHT, Theme,
@@ -416,6 +416,7 @@ impl SourcefourWindow {
                     async move { sourcefour_git::snapshot(&location) }
                 })
                 .await;
+            let loaded = payload.is_ok();
             let branches = payload
                 .as_ref()
                 .map(|snapshot| snapshot.local_branches.clone())
@@ -428,10 +429,18 @@ impl SourcefourWindow {
                         request: SNAPSHOT_REQUEST,
                         payload,
                     });
-                    if applied {
-                        // Labels come from the snapshot, so history starts only
-                        // once the reference pass has produced them (§6.6).
-                        this.start_history(HistoryScope::AllRefs, cx);
+                    // Labels come from the snapshot, so history starts only once
+                    // the reference pass has produced them (§6.6). A failed
+                    // reload keeps the stale-but-usable history instead (§11.2).
+                    if applied && loaded {
+                        // A watcher-triggered reload must not discard the user's
+                        // context: the scope survives with a re-resolved tip and
+                        // the selection re-attaches when its commit reloads
+                        // (§6.12).
+                        let scope = refreshed_scope(this.history.scope.as_ref(), &branches);
+                        let selected = this.history.selected;
+                        this.start_history(scope, cx);
+                        this.history.selected = selected;
                     }
                     cx.notify();
                     applied
