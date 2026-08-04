@@ -5,11 +5,13 @@
 
 use gix_imara_diff::{Algorithm, BasicLineDiffPrinter, Diff, InternedInput, UnifiedDiffConfig};
 use sourcefour_model::{
-    DiffContent, DiffLine, DiffLineKind, DiffParent, FileDiff, FileDiffRequest, RepoFailure,
-    RepoLocation,
+    DiffContent, DiffLine, DiffLineKind, FileDiff, FileDiffRequest, RepoFailure, RepoLocation,
 };
 
-use crate::{files::missing, history::open_failure};
+use crate::{
+    files::{is_binary, missing},
+    history::open_failure,
+};
 
 /// §6.11 safety thresholds for formatted diff output.
 #[derive(Clone, Copy, Debug)]
@@ -64,32 +66,7 @@ pub fn file_diff_with_limits(
     let new_tree = commit
         .tree()
         .map_err(|error| missing(request.oid, &error))?;
-    let old_tree = match request.parent {
-        DiffParent::EmptyTree => None,
-        DiffParent::FirstParent => match commit.parent_ids().next() {
-            Some(id) => {
-                let parent = repository
-                    .find_commit(id)
-                    .map_err(|error| missing(request.oid, &error))?;
-                Some(
-                    parent
-                        .tree()
-                        .map_err(|error| missing(request.oid, &error))?,
-                )
-            }
-            None => None,
-        },
-        DiffParent::Parent(parent) => {
-            let parent_commit = repository
-                .find_commit(gix::ObjectId::from_bytes_or_panic(parent.as_bytes()))
-                .map_err(|error| missing(parent, &error))?;
-            Some(
-                parent_commit
-                    .tree()
-                    .map_err(|error| missing(parent, &error))?,
-            )
-        }
-    };
+    let old_tree = crate::files::parent_tree(&repository, &commit, request.parent)?;
 
     let old_bytes = blob_at(old_tree.as_ref(), &request.path.0);
     let new_bytes = blob_at(Some(&new_tree), &request.path.0);
@@ -131,11 +108,6 @@ fn blob_at(tree: Option<&gix::Tree<'_>>, path: &[u8]) -> Option<Vec<u8>> {
 fn bytes_path(path: &[u8]) -> &std::path::Path {
     use std::os::unix::ffi::OsStrExt;
     std::path::Path::new(std::ffi::OsStr::from_bytes(path))
-}
-
-/// Git's own heuristic: a NUL in the first 8000 bytes means binary.
-fn is_binary(bytes: &[u8]) -> bool {
-    bytes[..bytes.len().min(8000)].contains(&0)
 }
 
 /// Formats a unified diff (3 context lines) and classifies each line.

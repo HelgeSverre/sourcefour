@@ -58,6 +58,8 @@ pub(crate) struct SourcefourWindow {
     diff_focus: FocusHandle,
     /// The last chosen diff layout, persisted across launches.
     preferred_diff_mode: DiffMode,
+    /// Which parent the selection's files and diffs compare against (§6.10).
+    compare_parent: DiffParent,
     list_scroll: UniformListScrollHandle,
     focus: FocusHandle,
     /// The §4.7 filter field.
@@ -198,7 +200,8 @@ struct DetailLines {
     author: String,
     date: Option<String>,
     committer: Option<String>,
-    parents: Option<String>,
+    /// Abbreviated hash and comparison choice per parent, commit order.
+    parent_choices: Vec<(String, DiffParent)>,
     body: Option<String>,
 }
 
@@ -599,6 +602,7 @@ impl SourcefourWindow {
             diff_request: 0,
             diff_focus: cx.focus_handle(),
             preferred_diff_mode: DiffMode::Unified,
+            compare_parent: DiffParent::FirstParent,
             list_scroll: UniformListScrollHandle::new(),
             focus: cx.focus_handle(),
             filter_input: cx
@@ -886,11 +890,16 @@ impl SourcefourWindow {
         if self.files_for == Some(oid) {
             return;
         }
+        if self.files_for.is_some_and(|previous| previous != oid) {
+            // A different commit resets the comparison to the first parent.
+            self.compare_parent = DiffParent::FirstParent;
+        }
         self.files_for = Some(oid);
         self.detail = None;
         self.files = None;
         self.files_request += 1;
         let token = self.files_request;
+        let parent = self.compare_parent;
         let Some(location) = self.location.clone() else {
             return;
         };
@@ -907,7 +916,7 @@ impl SourcefourWindow {
                 .spawn(async move {
                     (
                         sourcefour_git::commit_detail(&location, oid),
-                        sourcefour_git::commit_files(&location, oid),
+                        sourcefour_git::commit_files(&location, oid, parent),
                     )
                 })
                 .await;
@@ -1743,20 +1752,91 @@ impl SourcefourWindow {
                         relative_date(now, detail.committer.time)
                     )
                 }),
-            parents: detail
-                .filter(|detail| !detail.parents.is_empty())
-                .map(|detail| {
-                    let hashes: Vec<String> = detail
-                        .parents
-                        .iter()
-                        .map(|parent| parent.abbreviated(7))
-                        .collect();
-                    format!("Parents  {}", hashes.join("  "))
-                }),
+            parent_choices: detail.map_or_else(Vec::new, |detail| {
+                detail
+                    .parents
+                    .iter()
+                    .enumerate()
+                    .map(|(index, parent)| {
+                        let choice = if index == 0 {
+                            DiffParent::FirstParent
+                        } else {
+                            DiffParent::Parent(*parent)
+                        };
+                        (parent.abbreviated(7), choice)
+                    })
+                    .collect()
+            }),
             body: detail
                 .map(|detail| detail.body.clone())
                 .filter(|body| !body.is_empty()),
         }
+    }
+
+    /// The details pane's first row: hash, and parent hashes — clickable
+    /// comparison choices when the commit is a merge (§6.10).
+    fn details_hash_row(
+        &self,
+        hash: &str,
+        parent_choices: &[(String, DiffParent)],
+        cx: &mut gpui::Context<Self>,
+    ) -> Div {
+        let comparing = self.compare_parent;
+        let hash = hash.to_owned();
+
+        div()
+            .flex()
+            .items_center()
+            .gap(px(10.0))
+            .text_size(px(12.0))
+            .font_family(MONO_FONT)
+            .text_color(self.theme.accent)
+            .child(hash)
+            .children((parent_choices.len() == 1).then(|| {
+                div()
+                    .text_size(px(10.5))
+                    .text_color(self.theme.text_faint)
+                    .child(format!("Parent  {}", parent_choices[0].0))
+            }))
+            .children((parent_choices.len() > 1).then(|| {
+                // A merge: pick which parent to compare against.
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(4.0))
+                    .text_size(px(10.5))
+                    .text_color(self.theme.text_faint)
+                    .child("vs")
+                    .children(
+                        parent_choices
+                            .iter()
+                            .enumerate()
+                            .map(|(index, (hash, choice))| {
+                                let choice = *choice;
+                                let selected = comparing == choice;
+                                div()
+                                    .id(("parent-choice", index))
+                                    .px(px(6.0))
+                                    .rounded(px(4.0))
+                                    .border_1()
+                                    .cursor_pointer()
+                                    .border_color(if selected {
+                                        self.theme.accent
+                                    } else {
+                                        self.theme.border_strong
+                                    })
+                                    .text_color(if selected {
+                                        self.theme.accent
+                                    } else {
+                                        self.theme.text_secondary
+                                    })
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.set_compare_parent(choice, cx);
+                                    }))
+                                    .child(hash.clone())
+                            }),
+                    )
+            }))
     }
 
     fn details(&self, cx: &mut gpui::Context<Self>) -> impl IntoElement {
@@ -1766,7 +1846,7 @@ impl SourcefourWindow {
             author,
             date,
             committer,
-            parents,
+            parent_choices,
             body,
         } = self.detail_lines();
         div()
@@ -1778,21 +1858,7 @@ impl SourcefourWindow {
             .px(px(14.0))
             .pt(px(10.0))
             .bg(self.theme.bg_panel)
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(10.0))
-                    .text_size(px(12.0))
-                    .text_color(self.theme.accent)
-                    .child(hash)
-                    .children(parents.map(|parents| {
-                        div()
-                            .text_size(px(10.5))
-                            .text_color(self.theme.text_faint)
-                            .child(parents)
-                    })),
-            )
+            .child(self.details_hash_row(&hash, &parent_choices, cx))
             .child(
                 div()
                     .text_size(px(13.0))
@@ -1859,6 +1925,17 @@ impl SourcefourWindow {
             )
     }
 
+    /// Switches the comparison parent and reloads files for the selection.
+    fn set_compare_parent(&mut self, parent: DiffParent, cx: &mut gpui::Context<Self>) {
+        if self.compare_parent == parent {
+            return;
+        }
+        self.compare_parent = parent;
+        self.files_for = None;
+        self.load_selected_files(cx);
+        cx.notify();
+    }
+
     /// Opens the diff overlay for one changed file of the selection (§6.11).
     fn open_diff(&mut self, file: &ChangedFile, window: &mut Window, cx: &mut gpui::Context<Self>) {
         let Some(oid) = self.history.selected else {
@@ -1875,7 +1952,7 @@ impl SourcefourWindow {
             .unwrap_or_else(|| sourcefour_model::RepoPath(Vec::new()));
         let request = FileDiffRequest {
             oid,
-            parent: DiffParent::FirstParent,
+            parent: self.compare_parent,
             path,
         };
         self.diff_view = Some(DiffView {
