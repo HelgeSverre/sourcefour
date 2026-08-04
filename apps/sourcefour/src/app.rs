@@ -130,7 +130,7 @@ pub(crate) fn run(request: &LaunchRequest) -> ExitCode {
 /// History navigation keys, declared once rather than matched ad hoc (§8.5).
 fn history_keymap() -> Vec<gpui::KeyBinding> {
     use crate::views::{
-        PageDown, PageUp, SelectFirstCommit, SelectLastLoadedCommit, SelectNextCommit,
+        FocusFilter, PageDown, PageUp, SelectFirstCommit, SelectLastLoadedCommit, SelectNextCommit,
         SelectPreviousCommit,
     };
     vec![
@@ -140,6 +140,8 @@ fn history_keymap() -> Vec<gpui::KeyBinding> {
         gpui::KeyBinding::new("pageup", PageUp, Some("History")),
         gpui::KeyBinding::new("home", SelectFirstCommit, Some("History")),
         gpui::KeyBinding::new("end", SelectLastLoadedCommit, Some("History")),
+        // The filter is reachable from anywhere in the window (§4.7).
+        gpui::KeyBinding::new("cmd-f", FocusFilter, None),
     ]
 }
 

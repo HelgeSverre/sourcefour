@@ -35,9 +35,7 @@ pub fn commit_detail(location: &RepoLocation, oid: Oid) -> Result<CommitDetail, 
 }
 
 /// Owns a borrowed signature, tolerating an unparseable identity or timestamp.
-fn signature(
-    parsed: Result<gix::actor::SignatureRef<'_>, gix::objs::decode::Error>,
-) -> Signature {
+fn signature(parsed: Result<gix::actor::SignatureRef<'_>, gix::objs::decode::Error>) -> Signature {
     let Ok(reference) = parsed else {
         return Signature {
             name: String::new(),

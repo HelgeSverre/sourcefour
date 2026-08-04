@@ -49,6 +49,8 @@ pub(crate) struct SourcefourWindow {
     files_for: Option<sourcefour_model::Oid>,
     list_scroll: UniformListScrollHandle,
     focus: FocusHandle,
+    /// Focus target of the §4.7 filter field.
+    filter_focus: FocusHandle,
 }
 
 actions!(
@@ -60,6 +62,7 @@ actions!(
         SelectLastLoadedCommit,
         PageDown,
         PageUp,
+        FocusFilter,
     ]
 );
 
@@ -283,23 +286,22 @@ fn paint_graph(
     window: &mut Window,
 ) {
     let viewport = bounds.size.height.0;
-    let content = row_count_as_f32(history.len()) * HISTORY_ROW_HEIGHT;
+    let content = row_count_as_f32(history.visible_len()) * HISTORY_ROW_HEIGHT;
     // Mirror the list's own clamp so rubber-band overscroll cannot shear the
     // graph away from the rows it annotates.
     let scroll_top =
         (-scroll.0.borrow().base_handle.offset().y.0).clamp(0.0, (content - viewport).max(0.0));
     let first = usize_from_f32((scroll_top / HISTORY_ROW_HEIGHT).floor());
     let last = history
-        .len()
+        .visible_len()
         .min(first + usize_from_f32((viewport / HISTORY_ROW_HEIGHT).ceil()) + 1);
     window.with_content_mask(Some(gpui::ContentMask { bounds }), |window| {
         for index in first..last {
-            let Some(graph) = history.layout.get(index) else {
+            let Some(graph) = history.layout_at(index) else {
                 break;
             };
             let is_head = history
-                .rows
-                .get(index)
+                .row_at(index)
                 .is_some_and(|row| row.labels.iter().any(|label| label.is_head));
             let row_top = row_count_as_f32(index) * HISTORY_ROW_HEIGHT - scroll_top;
             for shape in row_shapes(row_top, HISTORY_ROW_HEIGHT, graph, is_head) {
@@ -416,6 +418,7 @@ impl SourcefourWindow {
             files_for: None,
             list_scroll: UniformListScrollHandle::new(),
             focus: cx.focus_handle(),
+            filter_focus: cx.focus_handle(),
         };
         if launch.demo {
             // The fixture is seeded as if a traversal had already completed, so
@@ -800,7 +803,7 @@ impl SourcefourWindow {
             .child(format!("sourcefour - {repository} - {path}"))
     }
 
-    fn toolbar(&self) -> impl IntoElement {
+    fn toolbar(&self, window: &Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
         let action = |name: &'static str, icon: &'static str, planned: bool| {
             div()
                 .h_full()
@@ -842,24 +845,104 @@ impl SourcefourWindow {
             .child(action("Merge", "icons/git-merge.svg", true))
             .child(action("Stash", "icons/archive.svg", true))
             .child(div().flex_grow())
+            .child(self.filter_box(window, cx))
+    }
+
+    /// The §4.7 filter field: a minimal single-line input.
+    ///
+    /// Escape clears the query; a second Escape returns focus to history.
+    fn filter_box(
+        &self,
+        window: &Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> impl IntoElement + use<> {
+        let query = self.history.filter.clone();
+        let focused = self.filter_focus.is_focused(window);
+        let matches = self
+            .history
+            .is_filtering()
+            .then(|| format!("{}", self.history.visible_len()));
+        div()
+            .id("filter")
+            .track_focus(&self.filter_focus)
+            .key_context("Filter")
+            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
+                let keystroke = &event.keystroke;
+                if keystroke.modifiers.platform || keystroke.modifiers.control {
+                    return;
+                }
+                match keystroke.key.as_str() {
+                    "backspace" => {
+                        let mut text = this.history.filter.clone();
+                        text.pop();
+                        this.history.set_filter(&text);
+                    }
+                    "escape" => {
+                        if this.history.filter.is_empty() {
+                            this.focus.focus(window);
+                        } else {
+                            this.history.set_filter("");
+                        }
+                    }
+                    "enter" => this.focus.focus(window),
+                    _ => {
+                        let Some(typed) = keystroke.key_char.clone() else {
+                            return;
+                        };
+                        let text = format!("{}{typed}", this.history.filter);
+                        this.history.set_filter(&text);
+                    }
+                }
+                cx.notify();
+            }))
+            .on_click(cx.listener(|this, _, window, cx| {
+                this.filter_focus.focus(window);
+                cx.notify();
+            }))
+            .w(px(260.0))
+            .h(px(28.0))
+            .flex()
+            .items_center()
+            .px(px(10.0))
+            .gap(px(7.0))
+            .rounded(px(6.0))
+            .border_1()
+            .border_color(if focused {
+                self.theme.accent
+            } else {
+                self.theme.border_strong
+            })
+            .bg(self.theme.bg_list)
+            .text_size(px(12.0))
+            .text_color(if query.is_empty() {
+                self.theme.text_faint
+            } else {
+                self.theme.text_primary
+            })
+            .child(filter_icon(&self.theme))
             .child(
                 div()
-                    .w(px(260.0))
-                    .h(px(28.0))
-                    .flex()
-                    .items_center()
-                    .px(px(10.0))
-                    .gap(px(7.0))
-                    .rounded(px(6.0))
-                    .border_1()
-                    .border_color(self.theme.border_strong)
-                    .bg(self.theme.bg_list)
-                    .text_size(px(12.0))
+                    .flex_1()
+                    .min_w(px(1.0))
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .child(if query.is_empty() {
+                        String::from("Filter commits")
+                    } else {
+                        query
+                    }),
+            )
+            .children(matches.map(|matches| {
+                div()
+                    .flex_none()
+                    .text_color(self.theme.accent)
+                    .child(matches)
+            }))
+            .child(
+                div()
+                    .flex_none()
                     .text_color(self.theme.text_faint)
-                    .child(filter_icon(&self.theme))
-                    .child("Filter commits")
-                    .child(div().flex_grow())
-                    .child("Cmd+F"),
+                    .child(if focused { "Esc" } else { "Cmd+F" }),
             )
     }
 
@@ -1210,7 +1293,7 @@ impl SourcefourWindow {
     ///
     /// It carries no listeners, so clicks fall through to the rows beneath it.
     fn graph_overlay(&self, cx: &gpui::Context<Self>) -> Option<impl IntoElement + use<>> {
-        if self.history.len() == 0 {
+        if self.history.visible_len() == 0 {
             return None;
         }
         let entity = cx.entity();
@@ -1233,7 +1316,7 @@ impl SourcefourWindow {
 
     /// The virtualized commit list: one element per visible row only (§8.3).
     fn history_list(&self, columns: ColumnVisibility, cx: &mut gpui::Context<Self>) -> Div {
-        if self.history.len() == 0 {
+        if self.history.visible_len() == 0 {
             return div()
                 .size_full()
                 .flex()
@@ -1253,7 +1336,7 @@ impl SourcefourWindow {
             uniform_list(
                 cx.entity(),
                 "history",
-                self.history.len(),
+                self.history.visible_len(),
                 move |this, visible, _window, cx| {
                     // Scrolling near the tail is what asks for the next batch.
                     if this.history.wants_more(visible.end) {
@@ -1278,7 +1361,7 @@ impl SourcefourWindow {
         now: i64,
         cx: &mut gpui::Context<Self>,
     ) -> gpui::Stateful<Div> {
-        let Some(row) = self.history.rows.get(index) else {
+        let Some(row) = self.history.row_at(index) else {
             return div()
                 .id(("commit-missing", index))
                 .h(px(HISTORY_ROW_HEIGHT));
@@ -1316,7 +1399,12 @@ impl SourcefourWindow {
                     .pr(px(10.0))
                     // Ref labels for this commit, capped so a tag pile-up
                     // cannot push the subject out of the row (§6.6).
-                    .children(row.labels.iter().take(3).map(|label| self.label_chip(label)))
+                    .children(
+                        row.labels
+                            .iter()
+                            .take(3)
+                            .map(|label| self.label_chip(label)),
+                    )
                     .children((row.labels.len() > 3).then(|| {
                         div()
                             .flex_none()
@@ -1514,12 +1602,12 @@ impl SourcefourWindow {
                     .text_size(px(11.5))
                     .text_color(self.theme.text_secondary)
                     .child(author)
-                    .children(date.map(|date| {
-                        div().text_color(self.theme.text_faint).child(date)
-                    }))
-                    .children(committer.map(|committer| {
-                        div().text_color(self.theme.text_faint).child(committer)
-                    })),
+                    .children(date.map(|date| div().text_color(self.theme.text_faint).child(date)))
+                    .children(
+                        committer.map(|committer| {
+                            div().text_color(self.theme.text_faint).child(committer)
+                        }),
+                    ),
             )
             .child(
                 div()
@@ -1661,8 +1749,12 @@ impl Render for SourcefourWindow {
                 this.select_row(0, cx);
             }))
             .on_action(cx.listener(|this, _: &SelectLastLoadedCommit, _, cx| {
-                let last = this.history.len().saturating_sub(1);
+                let last = this.history.visible_len().saturating_sub(1);
                 this.select_row(last, cx);
+            }))
+            .on_action(cx.listener(|this, _: &FocusFilter, window, cx| {
+                this.filter_focus.focus(window);
+                cx.notify();
             }))
             // Splitter handles arm `dragging`; the window-wide handlers below
             // do the moving, so a fast drag cannot escape a 3px handle.
@@ -1693,7 +1785,7 @@ impl Render for SourcefourWindow {
             .bg(self.theme.bg_page)
             .text_color(self.theme.text_primary)
             .child(self.titlebar())
-            .child(self.toolbar())
+            .child(self.toolbar(window, cx))
             .child(
                 div()
                     .flex_grow()

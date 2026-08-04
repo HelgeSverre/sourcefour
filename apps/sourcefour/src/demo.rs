@@ -10,10 +10,9 @@ use smallvec::SmallVec;
 use sourcefour_graph::GraphState;
 use sourcefour_model::{
     AheadBehindState, BranchSnapshot, ChangeKind, ChangedFile, CommitDetail, CommitFiles,
-    CommitFlags, CommitRow, Signature,
-    DiffParent, GitTime, GraphRow, HeadSnapshot, Oid, RefKind, RefLabel, RemoteBranchSnapshot,
-    RemoteSnapshot, RepoKind, RepoLocation, RepoPath, RepoSnapshot, UpstreamSnapshot,
-    WorktreeAccessibility, WorktreeId, WorktreeSnapshot,
+    CommitFlags, CommitRow, DiffParent, GitTime, GraphRow, HeadSnapshot, Oid, RefKind, RefLabel,
+    RemoteBranchSnapshot, RemoteSnapshot, RepoKind, RepoLocation, RepoPath, RepoSnapshot,
+    Signature, UpstreamSnapshot, WorktreeAccessibility, WorktreeId, WorktreeSnapshot,
 };
 
 /// Repository identity shown by `--demo`, matching the screenshot fixture.
@@ -220,15 +219,23 @@ pub(crate) fn history() -> (Vec<CommitRow>, Vec<GraphRow>) {
         is_head: false,
         is_current: false,
     };
-    rows[1].labels.push(chip("origin/main", RefKind::RemoteBranch));
-    rows[2].labels.push(chip("feature/worktrees", RefKind::LocalBranch));
+    rows[1]
+        .labels
+        .push(chip("origin/main", RefKind::RemoteBranch));
+    rows[2]
+        .labels
+        .push(chip("feature/worktrees", RefKind::LocalBranch));
     rows[2]
         .labels
         .push(chip("origin/feature/worktrees", RefKind::RemoteBranch));
-    rows[8].labels.push(chip("release/v1", RefKind::LocalBranch));
+    rows[8]
+        .labels
+        .push(chip("release/v1", RefKind::LocalBranch));
     rows[9].labels.push(chip("prototype", RefKind::LocalBranch));
     rows[10].labels.push(chip("v0.1.0", RefKind::Tag));
-    rows[11].labels.push(chip("feature/history", RefKind::LocalBranch));
+    rows[11]
+        .labels
+        .push(chip("feature/history", RefKind::LocalBranch));
 
     let mut state = GraphState::default();
     let layout = rows
