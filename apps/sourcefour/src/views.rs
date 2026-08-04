@@ -1,6 +1,6 @@
 use gpui::{
-    Div, FocusHandle, FontWeight, IntoElement, Render, ScrollHandle, StatefulInteractiveElement,
-    UniformListScrollHandle, Window, actions, div, point, prelude::*, px, svg, uniform_list,
+    Div, FocusHandle, FontWeight, IntoElement, Render, StatefulInteractiveElement,
+    UniformListScrollHandle, Window, actions, div, prelude::*, px, svg, uniform_list,
 };
 use sourcefour_git::{GixHistoryCursor, HistoryCursor as _};
 use sourcefour_model::{
@@ -11,7 +11,7 @@ use sourcefour_model::{
 
 use crate::{
     app::WindowLaunch,
-    demo::COMMITS,
+    demo,
     history::{HistoryState, is_scoped_to, relative_date, toggled_scope},
     theme::{
         DETAILS_HEIGHT, GRAPH_WIDTH, HEADER_HEIGHT, HISTORY_ROW_HEIGHT, SIDEBAR_WIDTH,
@@ -36,7 +36,6 @@ pub(crate) struct SourcefourWindow {
     cursor: Option<GixHistoryCursor>,
     theme: Theme,
     sections: SidebarSections,
-    history_scroll: ScrollHandle,
     list_scroll: UniformListScrollHandle,
     focus: FocusHandle,
 }
@@ -83,35 +82,6 @@ impl ColumnVisibility {
             hash: width >= 940.0,
         }
     }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct ScrollbarMetrics {
-    thumb_height: f32,
-    thumb_top: f32,
-    maximum_offset: f32,
-}
-
-fn scrollbar_metrics(
-    content_height: f32,
-    viewport_height: f32,
-    offset: f32,
-) -> Option<ScrollbarMetrics> {
-    if content_height <= viewport_height || viewport_height <= 0.0 {
-        return None;
-    }
-    let thumb_height = (viewport_height * viewport_height / content_height)
-        .max(24.0)
-        .min(viewport_height);
-    let maximum_offset = content_height - viewport_height;
-    let offset = offset.clamp(0.0, maximum_offset);
-    let thumb_top =
-        3.0 + (offset / maximum_offset) * (viewport_height - thumb_height - 6.0).max(0.0);
-    Some(ScrollbarMetrics {
-        thumb_height,
-        thumb_top,
-        maximum_offset,
-    })
 }
 
 impl Default for SidebarSections {
@@ -355,11 +325,17 @@ impl SourcefourWindow {
             cursor: None,
             theme: Theme::dark(),
             sections: SidebarSections::default(),
-            history_scroll: ScrollHandle::new(),
             list_scroll: UniformListScrollHandle::new(),
             focus: cx.focus_handle(),
         };
-        if let Some(location) = launch.location {
+        if launch.demo {
+            // The fixture is seeded as if a traversal had already completed, so
+            // every capture goes through the real rendering path (§12.4).
+            window.repo = LoadState::Ready(demo::snapshot());
+            window.history.reset(HistoryScope::AllRefs);
+            let (rows, layout) = demo::history();
+            window.history.extend(rows, layout, false);
+        } else if let Some(location) = launch.location {
             window.repo = LoadState::Loading {
                 started_at: std::time::Instant::now(),
             };
@@ -727,141 +703,11 @@ impl SourcefourWindow {
             }))
     }
 
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the fixed M0 sidebar keeps its visual contract together"
-    )]
     fn sidebar(&self, cx: &mut gpui::Context<Self>) -> Div {
-        if !self.demo {
-            return match self.snapshot() {
-                Some(snapshot) => self.repository_sidebar(snapshot, cx),
-                None => self.loading_sidebar(cx),
-            };
+        match self.snapshot() {
+            Some(snapshot) => self.repository_sidebar(snapshot, cx),
+            None => self.loading_sidebar(cx),
         }
-        let worktree = |name: &'static str, path: &'static str, current: bool| {
-            div()
-                .h(px(47.0))
-                .flex()
-                .flex_col()
-                .justify_center()
-                .px(px(14.0))
-                .bg(if current {
-                    self.theme.bg_selected
-                } else {
-                    self.theme.bg_panel
-                })
-                .text_color(self.theme.text_primary)
-                .child(
-                    div()
-                        .flex()
-                        .justify_between()
-                        .text_size(px(12.0))
-                        .font_weight(FontWeight::MEDIUM)
-                        .child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap(px(6.0))
-                                .child(div().size(px(7.0)).rounded_full().bg(if current {
-                                    self.theme.green
-                                } else {
-                                    self.theme.text_faint
-                                }))
-                                .child(name),
-                        )
-                        .child(if current { "CURRENT" } else { "" }),
-                )
-                .child(
-                    div()
-                        .text_size(px(10.0))
-                        .text_color(self.theme.text_faint)
-                        .child(path),
-                )
-        };
-        let branch = |name: &'static str, selected: bool| {
-            div()
-                .h(px(26.0))
-                .flex()
-                .items_center()
-                .px(px(15.0))
-                .gap(px(7.0))
-                .bg(if selected {
-                    self.theme.bg_selected
-                } else {
-                    self.theme.bg_panel
-                })
-                .text_size(px(12.0))
-                .text_color(if selected {
-                    self.theme.text_primary
-                } else {
-                    self.theme.text_secondary
-                })
-                .child(branch_marker(&self.theme))
-                .child(name)
-        };
-        div()
-            .w(px(SIDEBAR_WIDTH))
-            .flex_none()
-            .flex()
-            .flex_col()
-            .bg(self.theme.bg_panel)
-            .border_r_1()
-            .border_color(self.theme.border)
-            .child(self.section("WORKTREES", "3", SidebarSection::Worktrees, cx))
-            .when(self.sections.worktrees, |this| {
-                this.child(worktree("sourcefour", "~/code/sourcefour", true))
-                    .child(worktree(
-                        "sourcefour-history",
-                        "~/code/sourcefour-history",
-                        false,
-                    ))
-                    .child(worktree("scratch", "~/code/scratch", false))
-            })
-            .child(self.section("BRANCHES", "5", SidebarSection::Branches, cx))
-            .when(self.sections.branches, |this| {
-                this.child(branch("main   +2", true))
-                    .child(branch("feature/worktrees", false))
-                    .child(branch("feature/history", false))
-                    .child(branch("release/v1", false))
-                    .child(branch("prototype", false))
-            })
-            .child(self.section("REMOTES", "1", SidebarSection::Remotes, cx))
-            .when(self.sections.remotes, |this| {
-                this.child(
-                    div()
-                        .h(px(29.0))
-                        .flex()
-                        .items_center()
-                        .px(px(14.0))
-                        .text_size(px(11.5))
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(self.theme.orange)
-                        .child(remote_marker(&self.theme))
-                        .child("origin")
-                        .child(div().flex_grow())
-                        .child("git@github.com:helge/sourcefour"),
-                )
-                .child(
-                    div()
-                        .h(px(24.0))
-                        .flex()
-                        .items_center()
-                        .pl(px(34.0))
-                        .text_size(px(12.0))
-                        .text_color(self.theme.purple)
-                        .child("main"),
-                )
-                .child(
-                    div()
-                        .h(px(24.0))
-                        .flex()
-                        .items_center()
-                        .pl(px(34.0))
-                        .text_size(px(12.0))
-                        .text_color(self.theme.cyan)
-                        .child("feature/worktrees"),
-                )
-            })
     }
 
     /// The sidebar built from real repository metadata.
@@ -1106,19 +952,11 @@ impl SourcefourWindow {
     }
 
     fn history(&self, columns: ColumnVisibility, cx: &mut gpui::Context<Self>) -> Div {
-        if !self.demo {
-            return div()
-                .relative()
-                .flex_grow()
-                .min_h(px(1.0))
-                .child(self.history_list(columns, cx));
-        }
         div()
             .relative()
             .flex_grow()
             .min_h(px(1.0))
-            .child(self.history_rows(columns))
-            .child(self.history_scrollbar(cx))
+            .child(self.history_list(columns, cx))
     }
 
     /// The virtualized commit list: one element per visible row only (§8.3).
@@ -1138,11 +976,16 @@ impl SourcefourWindow {
                     String::from("No commits yet")
                 });
         }
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |elapsed| {
-                i64::try_from(elapsed.as_secs()).unwrap_or(i64::MAX)
-            });
+        // Demo captures anchor "now" so relative dates never drift between runs.
+        let now = if self.demo {
+            demo::NOW_SECONDS
+        } else {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |elapsed| {
+                    i64::try_from(elapsed.as_secs()).unwrap_or(i64::MAX)
+                })
+        };
         div().size_full().bg(self.theme.bg_list).child(
             uniform_list(
                 cx.entity(),
@@ -1262,202 +1105,59 @@ impl SourcefourWindow {
             }))
     }
 
-    fn history_rows(&self, columns: ColumnVisibility) -> impl IntoElement {
-        if !self.demo {
-            return div()
-                .id("history-scroll")
-                .size_full()
-                .flex()
-                .items_center()
-                .justify_center()
-                .bg(self.theme.bg_list)
-                .text_size(px(12.0))
-                .text_color(self.theme.text_faint)
-                .child(format!("Loading history from {}...", self.path));
-        }
-        let rows = &COMMITS[..];
-        div()
-            .id("history-scroll")
-            .size_full()
-            .overflow_y_scroll()
-            .track_scroll(&self.history_scroll)
-            .bg(self.theme.bg_list)
-            .children(rows.iter().enumerate().map(|(index, commit)| {
-                let selected = index == 0;
-                div()
-                    .h(px(HISTORY_ROW_HEIGHT))
-                    .flex_none()
-                    .flex()
-                    .items_center()
-                    .bg(if selected {
-                        self.theme.bg_selected
-                    } else {
-                        self.theme.bg_list
-                    })
-                    .text_color(self.theme.text_primary)
-                    .child(lane_marker(&self.theme, commit.lane, commit.merge))
-                    .child(
-                        div()
-                            .flex_grow()
-                            .min_w(px(1.0))
-                            .pl(px(10.0))
-                            .text_size(px(12.5))
-                            .text_color(if commit.merge {
-                                self.theme.text_secondary
-                            } else {
-                                self.theme.text_primary
-                            })
-                            .child(commit.subject),
-                    )
-                    .when(columns.author, |this| {
-                        this.child(
-                            div()
-                                .w(px(148.0))
-                                .text_size(px(11.5))
-                                .text_color(self.theme.text_secondary)
-                                .child(commit.author),
-                        )
-                    })
-                    .child(
-                        div()
-                            .w(px(96.0))
-                            .text_size(px(11.5))
-                            .text_color(self.theme.text_secondary)
-                            .child(commit.date),
-                    )
-                    .when(columns.hash, |this| {
-                        this.child(
-                            div()
-                                .w(px(74.0))
-                                .text_size(px(11.0))
-                                .text_color(if selected {
-                                    self.theme.accent
-                                } else {
-                                    self.theme.text_faint
-                                })
-                                .child(commit.hash),
-                        )
-                    })
-            }))
-    }
-
-    fn history_scrollbar(&self, cx: &gpui::Context<Self>) -> impl IntoElement {
-        if !self.demo {
-            return div().id("history-scrollbar");
-        }
-        let content_height = COMMITS
-            .iter()
-            .fold(0.0, |height, _| height + HISTORY_ROW_HEIGHT);
-        let measured_height = self.history_scroll.bounds().size.height.0;
-        let viewport_height = if measured_height > 0.0 {
-            measured_height
-        } else {
-            390.0
-        };
-        if content_height <= viewport_height {
-            return div().id("history-scrollbar");
-        }
-
-        let metrics = scrollbar_metrics(
-            content_height,
-            viewport_height,
-            -self.history_scroll.offset().y.0,
+    fn details(&self) -> impl IntoElement {
+        // §6.10: the header is populated from the already-loaded row while
+        // the exact metadata, files, and diff arrive in M4.
+        let selected = self
+            .history
+            .selected_index()
+            .and_then(|index| self.history.rows.get(index));
+        let (hash, subject, author) = selected.map_or_else(
+            || {
+                (
+                    String::new(),
+                    String::from("No commit selected"),
+                    String::new(),
+                )
+            },
+            |row| {
+                (
+                    row.oid.abbreviated(9),
+                    row.summary.clone(),
+                    row.author_name.clone(),
+                )
+            },
         );
-        let Some(metrics) = metrics else {
-            return div().id("history-scrollbar");
-        };
-        let scroll = self.history_scroll.clone();
-        let entity = cx.entity();
-
         div()
-            .id("history-scrollbar")
-            .absolute()
-            .top(px(0.0))
-            .right(px(0.0))
-            .h_full()
-            .w(px(10.0))
-            .bg(self.theme.bg_hover)
-            .cursor_pointer()
-            .on_click(move |event, _, cx| {
-                let bounds = scroll.bounds();
-                let viewport = bounds.size.height.0;
-                if viewport > 0.0 {
-                    let percentage =
-                        ((event.up.position.y - bounds.origin.y).0 / viewport).clamp(0.0, 1.0);
-                    scroll.set_offset(point(px(0.0), px(-metrics.maximum_offset * percentage)));
-                    cx.notify(entity.entity_id());
-                }
-            })
+            .h(px(DETAILS_HEIGHT))
+            .flex_none()
+            .flex()
+            .flex_col()
+            .gap(px(6.0))
+            .px(px(14.0))
+            .pt(px(10.0))
+            .border_t_1()
+            .border_color(self.theme.border)
+            .bg(self.theme.bg_panel)
             .child(
                 div()
-                    .absolute()
-                    .top(px(metrics.thumb_top))
-                    .right(px(2.0))
-                    .w(px(6.0))
-                    .h(px(metrics.thumb_height))
-                    .rounded_full()
-                    .bg(self.theme.text_secondary),
+                    .text_size(px(12.0))
+                    .text_color(self.theme.accent)
+                    .child(hash),
             )
-    }
-
-    fn details(&self) -> impl IntoElement {
-        if !self.demo {
-            // §6.10: the header is populated from the already-loaded row while
-            // the exact metadata, files, and diff arrive in M4.
-            let selected = self
-                .history
-                .selected_index()
-                .and_then(|index| self.history.rows.get(index));
-            let (hash, subject, author) = selected.map_or_else(
-                || {
-                    (
-                        String::new(),
-                        String::from("No commit selected"),
-                        String::new(),
-                    )
-                },
-                |row| {
-                    (
-                        row.oid.abbreviated(9),
-                        row.summary.clone(),
-                        row.author_name.clone(),
-                    )
-                },
-            );
-            return div()
-                .h(px(DETAILS_HEIGHT))
-                .flex_none()
-                .flex()
-                .flex_col()
-                .gap(px(6.0))
-                .px(px(14.0))
-                .pt(px(10.0))
-                .border_t_1()
-                .border_color(self.theme.border)
-                .bg(self.theme.bg_panel)
-                .child(
-                    div()
-                        .text_size(px(12.0))
-                        .text_color(self.theme.accent)
-                        .child(hash),
-                )
-                .child(
-                    div()
-                        .text_size(px(13.0))
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(self.theme.text_primary)
-                        .child(subject),
-                )
-                .child(
-                    div()
-                        .text_size(px(11.5))
-                        .text_color(self.theme.text_secondary)
-                        .child(author),
-                );
-        }
-        let hash = COMMITS[0].hash;
-        let title = COMMITS[0].subject;
-        div().h(px(DETAILS_HEIGHT)).flex_none().flex().flex_col().border_t_1().border_color(self.theme.border).bg(self.theme.bg_panel).px(px(14.0)).pt(px(10.0)).text_color(self.theme.text_primary).child(div().flex().gap(px(10.0)).items_center().text_size(px(12.0)).text_color(self.theme.accent).child(hash).child(div().rounded(px(5.0)).border_1().border_color(self.theme.border).px(px(8.0)).text_size(px(10.5)).text_color(self.theme.text_secondary).child("Copy"))).child(div().pt(px(8.0)).text_size(px(13.0)).font_weight(FontWeight::SEMIBOLD).child(title)).child(div().pt(px(4.0)).text_size(px(11.5)).text_color(self.theme.text_secondary).child("Brings linked-worktree enumeration and the metadata sidebar into the shell.")).child(div().mt(px(10.0)).pt(px(8.0)).border_t_1().border_color(self.theme.border).text_size(px(10.0)).font_weight(FontWeight::BOLD).text_color(self.theme.text_faint).child("CHANGED FILES")).child(div().h(px(24.0)).flex().items_center().gap(px(8.0)).text_size(px(11.0)).text_color(self.theme.text_secondary).child("M   apps/sourcefour/src/views.rs").child(div().text_color(self.theme.red).child("-22"))).child(div().h(px(24.0)).flex().items_center().text_size(px(11.0)).text_color(self.theme.text_secondary).child("A   crates/sourcefour-git/src/worktree.rs"))
+            .child(
+                div()
+                    .text_size(px(13.0))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(self.theme.text_primary)
+                    .child(subject),
+            )
+            .child(
+                div()
+                    .text_size(px(11.5))
+                    .text_color(self.theme.text_secondary)
+                    .child(author),
+            )
     }
 
     fn status(&self) -> impl IntoElement {
@@ -1476,14 +1176,10 @@ impl SourcefourWindow {
             .text_color(self.theme.text_faint)
             .child(path)
             .child(div().flex_grow())
-            .child(if self.demo {
-                String::from("main +2 / 3 worktrees / 5 branches / 4 remote / 18 commits / demo")
-            } else {
-                self.snapshot().map_or_else(
-                    || String::from("Loading repository metadata..."),
-                    status_summary,
-                )
-            })
+            .child(self.snapshot().map_or_else(
+                || String::from("Loading repository metadata..."),
+                status_summary,
+            ))
     }
 }
 
@@ -1594,7 +1290,7 @@ mod tests {
 
     use super::{
         ColumnVisibility, ErrorWindow, SidebarSection, SidebarSections, ahead_behind_text,
-        belongs_to, counted, head_label, scrollbar_metrics,
+        belongs_to, counted, head_label,
     };
 
     #[test]
@@ -1741,15 +1437,6 @@ mod tests {
                 hash: false
             }
         );
-    }
-
-    #[test]
-    fn scrollbar_metrics_map_offsets_to_the_track() {
-        let top = scrollbar_metrics(540.0, 390.0, 0.0).expect("scrollable content");
-        let bottom = scrollbar_metrics(540.0, 390.0, 150.0).expect("scrollable content");
-        assert!((top.maximum_offset - 150.0).abs() < f32::EPSILON);
-        assert!(bottom.thumb_top > top.thumb_top);
-        assert_eq!(scrollbar_metrics(390.0, 390.0, 0.0), None);
     }
 
     #[test]

@@ -34,7 +34,6 @@ pub(crate) struct Theme {
     pub(crate) orange: Hsla,
     pub(crate) purple: Hsla,
     pub(crate) red: Hsla,
-    pub(crate) cyan: Hsla,
     /// Sized by the model so a graph color index can never fall outside it.
     pub(crate) graph_lanes: [Hsla; GRAPH_COLOR_COUNT as usize],
 }
@@ -64,7 +63,6 @@ impl Theme {
             orange,
             purple,
             red,
-            cyan,
             graph_lanes: [accent, green, orange, purple, red, cyan],
         }
     }
