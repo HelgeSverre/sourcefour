@@ -12,6 +12,7 @@ use sourcefour_model::{
 use crate::{
     app::WindowLaunch,
     demo,
+    graph_paint::{HALO_OPACITY, HALO_RADIUS, NODE_RADIUS, STROKE_WIDTH, Shape, row_shapes},
     history::{HistoryState, is_scoped_to, refreshed_scope, relative_date, toggled_scope},
     theme::{
         DETAILS_HEIGHT, GRAPH_WIDTH, HEADER_HEIGHT, HISTORY_ROW_HEIGHT, SIDEBAR_WIDTH,
@@ -296,22 +297,131 @@ fn remote_marker(theme: &Theme) -> Div {
         .border_color(theme.orange)
 }
 
-fn lane_marker(theme: &Theme, color_index: usize, merge: bool) -> Div {
-    let color = theme.graph_lanes[color_index];
-    div()
-        .w(px(GRAPH_WIDTH))
-        .h_full()
-        .flex()
-        .items_center()
-        .justify_center()
-        .gap(px(2.0))
-        .child(div().w(px(1.0)).h_full().bg(color))
-        .child(
-            div()
-                .size(px(if merge { 9.0 } else { 7.0 }))
-                .rounded_full()
-                .bg(color),
-        )
+/// Color of a graph line, wrapping when lanes exceed the palette.
+fn lane_color(theme: &Theme, color: u8) -> gpui::Hsla {
+    theme.graph_lanes[usize::from(color) % theme.graph_lanes.len()]
+}
+
+/// Paints every visible row's graph into one element per frame (§7.4).
+///
+/// The overlay shares the list's scroll offset, so the same frame that moves
+/// the rows moves their lines.
+fn paint_graph(
+    bounds: gpui::Bounds<gpui::Pixels>,
+    history: &HistoryState,
+    scroll: &UniformListScrollHandle,
+    theme: &Theme,
+    window: &mut Window,
+) {
+    let viewport = bounds.size.height.0;
+    let content = row_count_as_f32(history.len()) * HISTORY_ROW_HEIGHT;
+    // Mirror the list's own clamp so rubber-band overscroll cannot shear the
+    // graph away from the rows it annotates.
+    let scroll_top =
+        (-scroll.0.borrow().base_handle.offset().y.0).clamp(0.0, (content - viewport).max(0.0));
+    let first = usize_from_f32((scroll_top / HISTORY_ROW_HEIGHT).floor());
+    let last = history
+        .len()
+        .min(first + usize_from_f32((viewport / HISTORY_ROW_HEIGHT).ceil()) + 1);
+    window.with_content_mask(Some(gpui::ContentMask { bounds }), |window| {
+        for index in first..last {
+            let Some(graph) = history.layout.get(index) else {
+                break;
+            };
+            let is_head = history
+                .rows
+                .get(index)
+                .is_some_and(|row| row.labels.iter().any(|label| label.is_head));
+            let row_top = row_count_as_f32(index) * HISTORY_ROW_HEIGHT - scroll_top;
+            for shape in row_shapes(row_top, HISTORY_ROW_HEIGHT, graph, is_head) {
+                paint_shape(bounds.origin, shape, theme, window);
+            }
+        }
+    });
+}
+
+fn paint_shape(
+    origin: gpui::Point<gpui::Pixels>,
+    shape: Shape,
+    theme: &Theme,
+    window: &mut Window,
+) {
+    match shape {
+        Shape::Line {
+            x,
+            top,
+            bottom,
+            color,
+        } => window.paint_quad(gpui::fill(
+            gpui::Bounds::new(
+                gpui::point(origin.x + px(x - STROKE_WIDTH / 2.0), origin.y + px(top)),
+                gpui::size(px(STROKE_WIDTH), px(bottom - top)),
+            ),
+            lane_color(theme, color),
+        )),
+        Shape::Curve { from, to, color } => {
+            let start = gpui::point(origin.x + px(from.0), origin.y + px(from.1));
+            let end = gpui::point(origin.x + px(to.0), origin.y + px(to.1));
+            // Control points directly below/above the endpoints give the §7.4
+            // vertical tangents.
+            let middle = origin.y + px(f32::midpoint(from.1, to.1));
+            let mut path = gpui::PathBuilder::stroke(px(STROKE_WIDTH));
+            path.move_to(start);
+            path.cubic_bezier_to(
+                end,
+                gpui::point(start.x, middle),
+                gpui::point(end.x, middle),
+            );
+            if let Ok(path) = path.build() {
+                window.paint_path(path, lane_color(theme, color));
+            }
+        }
+        Shape::Node { x, y, color, halo } => {
+            let color = lane_color(theme, color);
+            window.paint_quad(
+                gpui::fill(circle(origin, x, y, NODE_RADIUS), color).corner_radii(px(NODE_RADIUS)),
+            );
+            if halo {
+                window.paint_quad(
+                    gpui::outline(
+                        circle(origin, x, y, HALO_RADIUS),
+                        color.opacity(HALO_OPACITY),
+                    )
+                    .corner_radii(px(HALO_RADIUS)),
+                );
+            }
+        }
+    }
+}
+
+/// Square bounds of radius `radius` centered on a graph-column point.
+fn circle(
+    origin: gpui::Point<gpui::Pixels>,
+    x: f32,
+    y: f32,
+    radius: f32,
+) -> gpui::Bounds<gpui::Pixels> {
+    gpui::Bounds::new(
+        gpui::point(origin.x + px(x - radius), origin.y + px(y - radius)),
+        gpui::size(px(radius * 2.0), px(radius * 2.0)),
+    )
+}
+
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "row indices stay far below f32's exact-integer range"
+)]
+fn row_count_as_f32(value: usize) -> f32 {
+    value as f32
+}
+
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "the value is a non-negative floor/ceil of a visible row count"
+)]
+fn usize_from_f32(value: f32) -> usize {
+    value.max(0.0) as usize
 }
 
 impl SourcefourWindow {
@@ -980,6 +1090,32 @@ impl SourcefourWindow {
             .flex_grow()
             .min_h(px(1.0))
             .child(self.history_list(columns, cx))
+            .children(self.graph_overlay(cx))
+    }
+
+    /// The single absolute canvas painting all visible graph rows (§8.4).
+    ///
+    /// It carries no listeners, so clicks fall through to the rows beneath it.
+    fn graph_overlay(&self, cx: &gpui::Context<Self>) -> Option<impl IntoElement + use<>> {
+        if self.history.len() == 0 {
+            return None;
+        }
+        let entity = cx.entity();
+        let scroll = self.list_scroll.clone();
+        let theme = self.theme;
+        Some(
+            gpui::canvas(
+                |_, _, _| (),
+                move |bounds, (), window, cx| {
+                    paint_graph(bounds, &entity.read(cx).history, &scroll, &theme, window);
+                },
+            )
+            .absolute()
+            .top_0()
+            .left_0()
+            .w(px(GRAPH_WIDTH))
+            .h_full(),
+        )
     }
 
     /// The virtualized commit list: one element per visible row only (§8.3).
@@ -1044,11 +1180,6 @@ impl SourcefourWindow {
                 .h(px(HISTORY_ROW_HEIGHT));
         };
         let selected = self.history.selected == Some(row.oid);
-        let color = self
-            .history
-            .layout
-            .get(index)
-            .map_or(0, |graph| graph.node_color);
         let oid = row.oid;
         div()
             .id(("commit", index))
@@ -1065,11 +1196,8 @@ impl SourcefourWindow {
             })
             .hover(|style| style.bg(self.theme.bg_hover))
             .text_color(self.theme.text_primary)
-            .child(lane_marker(
-                &self.theme,
-                usize::from(color) % self.theme.graph_lanes.len(),
-                row.flags.is_merge,
-            ))
+            // The graph column is reserved per row but painted by the overlay.
+            .child(div().w(px(GRAPH_WIDTH)).h_full().flex_none())
             .child(
                 div()
                     .flex_grow()
