@@ -250,7 +250,15 @@ fn roots(repository: &gix::Repository, scope: &HistoryScope) -> Vec<gix::ObjectI
                 for iter in groups.into_iter().flatten() {
                     for mut reference in iter.filter_map(Result::ok) {
                         // Refs that do not peel to commits are ignored (§6.8).
-                        if let Ok(id) = reference.peel_to_id() {
+                        // Peeling alone is not enough: git.git tags a blob
+                        // (junio-gpg-pub), and a single non-commit root would
+                        // error the walk's first step and end the whole
+                        // traversal as if the repository were empty.
+                        if let Ok(id) = reference.peel_to_id()
+                            && repository
+                                .find_header(id)
+                                .is_ok_and(|header| header.kind() == gix::object::Kind::Commit)
+                        {
                             roots.push(id.detach());
                         }
                     }
@@ -468,6 +476,27 @@ mod tests {
             batch.rows.len(),
             1,
             "a branch scope walks only that branch's history"
+        );
+        Ok(())
+    }
+
+    /// git.git tags a blob (`junio-gpg-pub`); a root that is not a commit must
+    /// not poison the whole walk (§6.8).
+    #[test]
+    fn a_tag_pointing_to_a_blob_does_not_break_history() -> Result<(), Box<dyn std::error::Error>> {
+        let repository = TempRepo::init();
+        commits(&repository, "commit", 2);
+        std::fs::write(repository.path().join("key.txt"), "not a commit")?;
+        let blob = repository.git(&["hash-object", "-w", "key.txt"]);
+        repository.git(&["tag", "gpg-pub-key", &blob]);
+        let mut cursor = cursor(&repository)?;
+
+        let batch = cursor.next_batch(100)?;
+
+        assert_eq!(
+            batch.rows.len(),
+            3,
+            "every commit is still delivered despite the blob tag"
         );
         Ok(())
     }
