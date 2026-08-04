@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Sourcefour — social loop frames</title>
+<style>
+  /* Palette lifted from website/brand.css (theme.rs). Standalone on purpose:
+     these frames render headlessly with no other file next to them. */
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100vw; height: 100vh; overflow: hidden; }
+  body {
+    background: #0b0c0f;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+  }
+  body::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: radial-gradient(ellipse 70% 45% at 50% 52%,
+      rgba(91, 157, 255, 0.16), transparent 70%);
+  }
+  h1 {
+    position: relative;
+    color: #dfe3ec;
+    font-weight: 600;
+    letter-spacing: -0.045em;
+    line-height: 1;
+    font-size: 132px;
+    white-space: nowrap;
+  }
+  body.wide h1 { font-size: 168px; }
+  .sfx { display: inline-block; text-align: left; min-width: 2.15em; }
+  .sfx .hid { visibility: hidden; }
+  .acc { color: #5b9dff; }
+  .cmd {
+    position: absolute;
+    bottom: 7%;
+    left: 0;
+    right: 0;
+    text-align: center;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 22px;
+    color: #5f677a;
+  }
+  body.wide .cmd { font-size: 26px; }
+  .cmd .sigil { color: #2f3542; margin-right: 10px; }
+</style>
+</head>
+<body>
+  <h1>Source<span class="sfx" id="sfx"></span></h1>
+  <p class="cmd"><span class="sigil">$</span>brew install helgesverre/tap/sourcefour</p>
+<script>
+  // One frame state per URL: ?aspect=square|wide|tall&state=0..5
+  // 0 Sourcetree · 1 blink-off · 2 Sourcetree++ · 3 blink-off(++) ·
+  // 4 Sourcefour · 5 Source4
+  const q = new URLSearchParams(location.search);
+  document.body.className = q.get("aspect") || "square";
+  const states = [
+    'tree',
+    '<span class="hid">tree</span>',
+    'tree<span class="acc">++</span>',
+    '<span class="hid">tree++</span>',
+    '<span class="acc">four</span>',
+    '<span class="acc">4</span>',
+  ];
+  document.getElementById("sfx").innerHTML = states[Number(q.get("state")) || 0];
+</script>
+</body>
+</html>
