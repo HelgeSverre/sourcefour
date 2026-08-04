@@ -109,6 +109,12 @@ pub(crate) struct SourcefourWindow {
     github_checks: Option<Cached<(sourcefour_model::Oid, GithubChecks)>>,
     /// Token for the newest check-run load, so stale results drop.
     github_checks_request: u64,
+    /// Rolled-up CI state per commit, for the history-row dots.
+    github_states: Option<
+        Cached<std::collections::HashMap<sourcefour_model::Oid, sourcefour_model::CheckStatus>>,
+    >,
+    /// Token for the newest rollup load, so stale results drop.
+    github_states_request: u64,
     /// Recent Actions workflow runs with their fetch time.
     github_runs: Option<Cached<Vec<sourcefour_model::WorkflowRun>>>,
     /// Token for the newest workflow-run load, so stale results drop.
@@ -316,6 +322,8 @@ impl SourcefourWindow {
             github_pulls_request: 0,
             github_checks: None,
             github_checks_request: 0,
+            github_states: None,
+            github_states_request: 0,
             github_runs: None,
             github_runs_request: 0,
             token_input: Self::masked_token_input(cx),
@@ -579,6 +587,8 @@ impl SourcefourWindow {
                 });
                 // The first batch selects the newest row; its files follow.
                 this.load_selected_files(cx);
+                // CI dots decorate loaded rows; the cache absorbs repeats.
+                this.load_commit_states(false, cx);
                 cx.notify();
             })
             .ok();

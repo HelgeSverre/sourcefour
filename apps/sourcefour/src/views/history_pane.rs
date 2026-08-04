@@ -241,6 +241,55 @@ impl SourcefourWindow {
         )
     }
 
+    /// The row's flexible middle: capped ref labels, the clipped subject,
+    /// and the CI dot when one is known.
+    fn commit_description_cell(&self, row: &sourcefour_model::CommitRow) -> Div {
+        div()
+            // flex-basis 0: a long subject must never widen this cell
+            // and push the fixed columns out of the header's alignment.
+            .flex_1()
+            .min_w(px(1.0))
+            .overflow_hidden()
+            .flex()
+            .items_center()
+            .gap(px(6.0))
+            .pl(px(10.0))
+            .pr(px(10.0))
+            // Ref labels for this commit, capped so a tag pile-up
+            // cannot push the subject out of the row (§6.6).
+            .children(
+                row.labels
+                    .iter()
+                    .take(3)
+                    .map(|label| self.label_chip(label)),
+            )
+            .children((row.labels.len() > 3).then(|| {
+                div()
+                    .flex_none()
+                    .text_size(px(9.5))
+                    .text_color(self.theme.text_faint)
+                    .child(format!("+{}", row.labels.len() - 3))
+            }))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(1.0))
+                    // Without clipping, a long subject runs straight
+                    // through the author column instead of stopping.
+                    .overflow_hidden()
+                    .text_ellipsis()
+                    .whitespace_nowrap()
+                    .text_size(px(12.5))
+                    .text_color(if row.flags.is_merge {
+                        self.theme.text_secondary
+                    } else {
+                        self.theme.text_primary
+                    })
+                    .child(row.summary.clone()),
+            )
+            .children(self.commit_state_dot(row.oid))
+    }
+
     /// One history row: graph cell, subject, author, date, hash.
     pub(super) fn commit_row(
         &self,
@@ -273,51 +322,7 @@ impl SourcefourWindow {
             .text_color(self.theme.text_primary)
             // The graph column is reserved per row but painted by the overlay.
             .child(div().w(px(self.panels.graph)).h_full().flex_none())
-            .child(
-                div()
-                    // flex-basis 0: a long subject must never widen this cell
-                    // and push the fixed columns out of the header's alignment.
-                    .flex_1()
-                    .min_w(px(1.0))
-                    .overflow_hidden()
-                    .flex()
-                    .items_center()
-                    .gap(px(6.0))
-                    .pl(px(10.0))
-                    .pr(px(10.0))
-                    // Ref labels for this commit, capped so a tag pile-up
-                    // cannot push the subject out of the row (§6.6).
-                    .children(
-                        row.labels
-                            .iter()
-                            .take(3)
-                            .map(|label| self.label_chip(label)),
-                    )
-                    .children((row.labels.len() > 3).then(|| {
-                        div()
-                            .flex_none()
-                            .text_size(px(9.5))
-                            .text_color(self.theme.text_faint)
-                            .child(format!("+{}", row.labels.len() - 3))
-                    }))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w(px(1.0))
-                            // Without clipping, a long subject runs straight
-                            // through the author column instead of stopping.
-                            .overflow_hidden()
-                            .text_ellipsis()
-                            .whitespace_nowrap()
-                            .text_size(px(12.5))
-                            .text_color(if row.flags.is_merge {
-                                self.theme.text_secondary
-                            } else {
-                                self.theme.text_primary
-                            })
-                            .child(row.summary.clone()),
-                    ),
-            )
+            .child(self.commit_description_cell(row))
             .when(columns.author, |this| {
                 this.child(
                     div()

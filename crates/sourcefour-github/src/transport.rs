@@ -3,7 +3,7 @@
 //! Failures are the words the interface shows; no caller branches on a
 //! failure kind today, so there is none to carry.
 
-/// One authenticated GET returning the raw response body.
+/// Authenticated requests returning the raw response body.
 pub trait GithubTransport {
     /// Fetches `url` with the standard GitHub headers.
     ///
@@ -12,6 +12,13 @@ pub trait GithubTransport {
     /// Returns the user-facing words for transport errors and non-2xx
     /// statuses.
     fn get(&self, url: &str, token: Option<&str>) -> Result<Vec<u8>, String>;
+
+    /// Posts a JSON `body` to `url` — the GraphQL endpoint's shape.
+    ///
+    /// # Errors
+    ///
+    /// See [`GithubTransport::get`].
+    fn post(&self, url: &str, token: Option<&str>, body: &str) -> Result<Vec<u8>, String>;
 }
 
 /// The shipping transport. Blocking by design: callers run it on the
@@ -20,29 +27,43 @@ pub struct UreqTransport;
 
 impl GithubTransport for UreqTransport {
     fn get(&self, url: &str, token: Option<&str>) -> Result<Vec<u8>, String> {
-        let mut request = ureq::get(url)
-            .set("User-Agent", "sourcefour")
-            .set("Accept", "application/vnd.github+json")
-            .set("X-GitHub-Api-Version", "2022-11-28")
-            .timeout(std::time::Duration::from_secs(15));
-        if let Some(token) = token {
-            request = request.set("Authorization", &format!("Bearer {token}"));
+        read_response(prepared(ureq::get(url), token).call())
+    }
+
+    fn post(&self, url: &str, token: Option<&str>, body: &str) -> Result<Vec<u8>, String> {
+        read_response(prepared(ureq::post(url), token).send_string(body))
+    }
+}
+
+/// The standard GitHub headers on any request.
+fn prepared(request: ureq::Request, token: Option<&str>) -> ureq::Request {
+    let mut request = request
+        .set("User-Agent", "sourcefour")
+        .set("Accept", "application/vnd.github+json")
+        .set("X-GitHub-Api-Version", "2022-11-28")
+        .timeout(std::time::Duration::from_secs(15));
+    if let Some(token) = token {
+        request = request.set("Authorization", &format!("Bearer {token}"));
+    }
+    request
+}
+
+/// Collects a response body, phrasing failures for the interface.
+fn read_response(result: Result<ureq::Response, ureq::Error>) -> Result<Vec<u8>, String> {
+    match result {
+        Ok(response) => {
+            let mut body = Vec::new();
+            response
+                .into_reader()
+                .read_to_end(&mut body)
+                .map_err(|error| error.to_string())?;
+            Ok(body)
         }
-        match request.call() {
-            Ok(response) => {
-                let mut body = Vec::new();
-                response
-                    .into_reader()
-                    .read_to_end(&mut body)
-                    .map_err(|error| error.to_string())?;
-                Ok(body)
-            }
-            Err(ureq::Error::Status(status, response)) => Err(classify_status(
-                status,
-                response.header("x-ratelimit-remaining"),
-            )),
-            Err(transport) => Err(transport.to_string()),
-        }
+        Err(ureq::Error::Status(status, response)) => Err(classify_status(
+            status,
+            response.header("x-ratelimit-remaining"),
+        )),
+        Err(transport) => Err(transport.to_string()),
     }
 }
 

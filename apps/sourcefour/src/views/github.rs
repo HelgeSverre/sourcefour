@@ -305,6 +305,7 @@ impl SourcefourWindow {
             self.github_pulls = None;
             self.github_checks = None;
             self.github_runs = None;
+            self.github_states = None;
             cx.notify();
             return;
         }
@@ -325,6 +326,57 @@ impl SourcefourWindow {
         self.load_pulls(false, cx);
         self.load_selected_checks(false, cx);
         self.load_runs(false, cx);
+        self.load_commit_states(false, cx);
+    }
+
+    /// Fetches the rolled-up CI state of the first loaded commits in one
+    /// GraphQL request, unless the cache is still fresh. Called again as
+    /// batches arrive; the cache keeps that cheap.
+    pub(super) fn load_commit_states(&mut self, force: bool, cx: &mut gpui::Context<Self>) {
+        let Some(remote) = self.github_remote.clone() else {
+            return;
+        };
+        if !force && self.github_states.as_ref().is_some_and(Cached::fresh) {
+            return;
+        }
+        let oids: Vec<sourcefour_model::Oid> = self
+            .history
+            .rows
+            .iter()
+            .take(100)
+            .map(|row| row.oid)
+            .collect();
+        if oids.is_empty() {
+            return;
+        }
+        self.fetch_github(
+            |this| &mut this.github_states_request,
+            move |token| {
+                sourcefour_github::commit_states(
+                    &sourcefour_github::UreqTransport,
+                    &remote,
+                    &token,
+                    &oids,
+                )
+            },
+            |this, outcome, cx| match outcome {
+                Ok(states) => {
+                    this.github_states = Some(Cached::now(states));
+                    cx.notify();
+                }
+                // Stale dots beat rows that flicker on every hiccup.
+                Err(message) => tracing::warn!(message, "commit states could not load"),
+            },
+            cx,
+        );
+    }
+
+    /// The small CI dot a history row wears once its rolled-up state is
+    /// known; commits without checks wear nothing.
+    pub(super) fn commit_state_dot(&self, oid: sourcefour_model::Oid) -> Option<Div> {
+        let status = *self.github_states.as_ref()?.value.get(&oid)?;
+        let (_, color) = check_glyph(&self.theme, status);
+        Some(div().flex_none().size(px(6.0)).rounded_full().bg(color))
     }
 
     /// Fetches recent Actions workflow runs unless the cache is still fresh.

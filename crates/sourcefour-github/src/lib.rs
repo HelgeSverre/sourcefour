@@ -10,7 +10,7 @@ mod credentials;
 mod remote;
 mod transport;
 
-pub use api::{check_runs, open_pulls, whoami, workflow_runs};
+pub use api::{check_runs, commit_states, open_pulls, whoami, workflow_runs};
 pub use credentials::{delete_token, gh_cli_token, load_token, store_token};
 pub use remote::GithubRemote;
 pub use transport::{GithubTransport, UreqTransport};

@@ -1,8 +1,10 @@
 //! Typed REST calls, each one URL and one serde shape.
 
 use serde::Deserialize;
+use std::collections::HashMap;
+
 use sourcefour_model::{
-    CheckConclusion, CheckRun, CheckStatus, GithubAccount, PrSummary, WorkflowRun,
+    CheckConclusion, CheckRun, CheckStatus, GithubAccount, Oid, PrSummary, WorkflowRun,
 };
 
 use crate::{remote::GithubRemote, transport::GithubTransport};
@@ -160,6 +162,90 @@ pub fn workflow_runs(
         .collect())
 }
 
+/// The rolled-up CI state of many commits in one GraphQL request
+/// (`statusCheckRollup`), far cheaper than per-commit check-run reads.
+/// Commits GitHub does not know, or that have no checks, are simply absent
+/// from the result.
+///
+/// # Errors
+///
+/// See [`whoami`].
+pub fn commit_states(
+    transport: &dyn GithubTransport,
+    remote: &GithubRemote,
+    token: &str,
+    oids: &[Oid],
+) -> Result<HashMap<Oid, CheckStatus>, String> {
+    use std::fmt::Write as _;
+
+    #[derive(Deserialize)]
+    struct Rollup {
+        state: String,
+    }
+    #[derive(Deserialize)]
+    struct Object {
+        #[serde(rename = "statusCheckRollup")]
+        rollup: Option<Rollup>,
+    }
+    #[derive(Deserialize)]
+    struct Data {
+        repository: Option<HashMap<String, Option<Object>>>,
+    }
+    #[derive(Deserialize)]
+    struct Response {
+        data: Option<Data>,
+    }
+
+    if oids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let mut query = format!(
+        "query {{ repository(owner: \"{}\", name: \"{}\") {{",
+        remote.owner, remote.repo
+    );
+    for (index, oid) in oids.iter().enumerate() {
+        let _ = write!(
+            query,
+            " c{index}: object(oid: \"{}\") {{ ... on Commit {{ statusCheckRollup {{ state }} }} }}",
+            oid.to_hex()
+        );
+    }
+    query.push_str(" } }");
+    let body = serde_json::json!({ "query": query }).to_string();
+
+    let raw = transport.post(&format!("{API_BASE}/graphql"), Some(token), &body)?;
+    let response: Response = parse(&raw)?;
+    let objects = response
+        .data
+        .and_then(|data| data.repository)
+        .unwrap_or_default();
+
+    let mut states = HashMap::new();
+    for (alias, object) in objects {
+        let Some(rollup) = object.and_then(|object| object.rollup) else {
+            continue;
+        };
+        let Some(index) = alias
+            .strip_prefix('c')
+            .and_then(|digits| digits.parse::<usize>().ok())
+        else {
+            continue;
+        };
+        let Some(oid) = oids.get(index) else {
+            continue;
+        };
+        let state = match rollup.state.as_str() {
+            "SUCCESS" => CheckStatus::Completed(CheckConclusion::Success),
+            "FAILURE" | "ERROR" => CheckStatus::Completed(CheckConclusion::Failure),
+            "PENDING" => CheckStatus::InProgress,
+            "EXPECTED" => CheckStatus::Queued,
+            _ => CheckStatus::Completed(CheckConclusion::Unknown),
+        };
+        states.insert(*oid, state);
+    }
+    Ok(states)
+}
+
 /// GitHub's two-field status/conclusion pair as one typed state.
 fn status(status: &str, conclusion: Option<&str>) -> CheckStatus {
     match status {
@@ -207,6 +293,13 @@ mod tests {
             self.seen
                 .borrow_mut()
                 .push((url.to_owned(), token.map(str::to_owned)));
+            Ok(self.body.as_bytes().to_vec())
+        }
+
+        fn post(&self, url: &str, token: Option<&str>, body: &str) -> Result<Vec<u8>, String> {
+            self.seen
+                .borrow_mut()
+                .push((format!("{url} {body}"), token.map(str::to_owned)));
             Ok(self.body.as_bytes().to_vec())
         }
     }
@@ -333,6 +426,41 @@ mod tests {
             CheckStatus::Completed(CheckConclusion::Failure)
         );
         assert!(fake.seen.borrow()[0].0.ends_with("per_page=25"));
+        Ok(())
+    }
+
+    #[test]
+    fn commit_states_batch_and_map_by_alias() -> Result<(), String> {
+        let fake = Fake::new(
+            r#"{"data": {"repository": {
+                "c0": {"statusCheckRollup": {"state": "SUCCESS"}},
+                "c1": {"statusCheckRollup": {"state": "PENDING"}},
+                "c2": {"statusCheckRollup": null},
+                "c3": null
+            }}}"#,
+        );
+        let oids = [
+            sourcefour_model::Oid::sha1([0x11; 20]),
+            sourcefour_model::Oid::sha1([0x22; 20]),
+            sourcefour_model::Oid::sha1([0x33; 20]),
+            sourcefour_model::Oid::sha1([0x44; 20]),
+        ];
+
+        let states = super::commit_states(&fake, &remote(), "ghp_token", &oids)?;
+
+        assert_eq!(
+            states.get(&oids[0]),
+            Some(&CheckStatus::Completed(CheckConclusion::Success))
+        );
+        assert_eq!(states.get(&oids[1]), Some(&CheckStatus::InProgress));
+        assert_eq!(states.get(&oids[2]), None, "no checks means no dot");
+        assert_eq!(states.get(&oids[3]), None, "unknown commits are absent");
+        let seen = fake.seen.borrow();
+        assert!(seen[0].0.starts_with("https://api.github.com/graphql"));
+        assert!(
+            seen[0].0.contains(&oids[3].to_hex()),
+            "every oid is asked for"
+        );
         Ok(())
     }
 
