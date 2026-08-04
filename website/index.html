@@ -32,12 +32,10 @@
 
 <header class="hero">
   <div class="wrap">
-    <h1>The half of a Git GUI you <em>actually</em> use</h1>
+    <h1><code>git log</code> deserved <em>better</em></h1>
     <p class="lede">
-      Sourcefour opens the repository you are standing in and shows you its history —
-      the commit graph, the worktrees, the refs, the diffs. It reads Git directly,
-      follows along with what you do in the terminal, and asks for nothing: no account,
-      no daemon, no configuration.
+      One command in any repository: the graph, the worktrees, the diffs — live,
+      native, and asking for nothing. No account, no daemon, no configuration.
     </p>
 
     <div class="install">
@@ -102,7 +100,7 @@
         <p>The scrollbar is a scrubber: grab it and fly through a ten-thousand-line diff
         without lifting your hand.</p>
       </div>
-      <div class="frame">
+      <div class="frame zoom focus-left">
         <img src="screenshots/diff.png" alt="The diff overlay showing a unified diff with added and removed lines and hunk headers.">
       </div>
     </div>
@@ -115,7 +113,7 @@
         open a diff. Additions and deletions are paired line for line, so a rewritten
         block reads as a rewrite instead of a wall of red followed by a wall of green.</p>
       </div>
-      <div class="frame">
+      <div class="frame zoom focus-mid">
         <img src="screenshots/split.png" alt="The same diff in the side-by-side layout, old lines on the left and new lines on the right.">
       </div>
     </div>
@@ -146,7 +144,7 @@
         parallel, and a run that is still going updates itself every few seconds.
         Pull requests get chips on their branches; commits get CI dots in the history.</p>
       </div>
-      <div class="frame">
+      <div class="frame zoom focus-left">
         <img src="screenshots/actions.png" alt="The Actions run overlay: jobs on the left, steps with duration bars on the right, the failing step's log open at the first error, and a timeline of job parallelism below.">
       </div>
     </div>

@@ -161,13 +161,19 @@ section {
 /* ── hero ────────────────────────────────────────────────────── */
 
 .hero {
-  padding: 92px 0 0;
+  padding: 76px 0 0;
   text-align: center;
 }
 .hero h1 {
-  font-size: var(--text-3xl);
+  font-size: calc(var(--text-3xl) * 1.16);
+  letter-spacing: -0.03em;
   max-width: 16ch;
-  margin: 0 auto 22px;
+  margin: 0 auto 18px;
+}
+.hero h1 code {
+  font-family: var(--font-mono);
+  font-size: 0.86em;
+  letter-spacing: -0.01em;
 }
 .hero h1 em {
   font-style: normal;
@@ -175,8 +181,8 @@ section {
 }
 .hero .lede {
   font-size: var(--text-md);
-  max-width: 60ch;
-  margin: 0 auto 34px;
+  max-width: 52ch;
+  margin: 0 auto 26px;
 }
 
 .install {
@@ -241,7 +247,7 @@ section {
 }
 
 .shot {
-  margin-top: 60px;
+  margin-top: 34px;
   border-radius: var(--r-lg) var(--r-lg) 0 0;
   overflow: hidden;
   box-shadow: var(--shadow);
@@ -250,6 +256,26 @@ section {
 }
 
 /* ── feature rows ────────────────────────────────────────────── */
+
+/* Full-window captures read as thumbnails at row size; the zoom frame
+   crops into the interesting region instead — filling the half-column
+   and offset so the content, not the window chrome, is what you see. */
+.frame.zoom {
+  aspect-ratio: 16 / 10.5;
+  overflow: hidden;
+}
+.frame.zoom img {
+  width: 172%;
+  max-width: none;
+  transform: translate(-24%, -6%);
+}
+.frame.zoom.focus-left img {
+  transform: translate(-4%, -6%);
+}
+.frame.zoom.focus-mid img {
+  transform: translate(-14%, -6%);
+}
+
 
 .row {
   display: grid;
