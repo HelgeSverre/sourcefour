@@ -23,10 +23,21 @@ for size in "${sizes[@]}"; do
   read -r width height <<<"$size"
   ./target/release/sourcefour --demo --width "$width" --height "$height" >/dev/null 2>&1 &
   pid=$!
-  sleep 2.5
-  window_id="$(swift scripts/window-id.swift)"
+  window_id=""
+  for _ in $(seq 1 20); do
+    sleep 0.5
+    window_id="$(swift scripts/window-id.swift "$pid")" && [ -n "$window_id" ] && break
+  done
+  if [ -z "$window_id" ]; then
+    echo "FAILED   demo ${width}x${height}: window never appeared"
+    kill "$pid" 2>/dev/null || true
+    failures=$((failures + 1))
+    continue
+  fi
   current="$work_dir/demo-${width}x${height}.png"
-  screencapture -x -l"$window_id" "$current"
+  # -o omits the window shadow, whose size depends on key-window state and
+  # would make capture dimensions nondeterministic.
+  screencapture -x -o -l"$window_id" "$current"
   kill "$pid" 2>/dev/null || true
   wait "$pid" 2>/dev/null || true
 

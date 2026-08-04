@@ -2203,6 +2203,24 @@ impl SourcefourWindow {
     }
 
     fn details(&self, cx: &mut gpui::Context<Self>) -> gpui::AnyElement {
+        let lines = self.detail_lines();
+        if self.details_collapsed {
+            return self.collapsed_details(&lines.hash, &lines.subject, cx);
+        }
+        div()
+            .h(px(self.panels.details))
+            .flex_none()
+            .flex()
+            .bg(self.theme.bg_panel)
+            .child(self.details_message_column(lines, cx))
+            .child(div().w(px(1.0)).flex_none().bg(self.theme.border))
+            .child(self.details_files_column(cx))
+            .into_any_element()
+    }
+
+    /// The left details column: hash row, subject, author line, and the
+    /// scrollable commit body.
+    fn details_message_column(&self, lines: DetailLines, cx: &mut gpui::Context<Self>) -> Div {
         let DetailLines {
             hash,
             subject,
@@ -2211,19 +2229,15 @@ impl SourcefourWindow {
             committer,
             parent_choices,
             body,
-        } = self.detail_lines();
-        if self.details_collapsed {
-            return self.collapsed_details(&hash, &subject, cx);
-        }
+        } = lines;
         div()
-            .h(px(self.panels.details))
-            .flex_none()
+            .flex_1()
+            .min_w(px(1.0))
             .flex()
             .flex_col()
             .gap(px(6.0))
             .px(px(14.0))
             .pt(px(10.0))
-            .bg(self.theme.bg_panel)
             .child(self.details_hash_row(&hash, &parent_choices, cx))
             .child(
                 div()
@@ -2261,26 +2275,37 @@ impl SourcefourWindow {
                             .text_size(px(11.5))
                             .text_color(self.theme.text_secondary)
                             .child(body)
-                    }))
-                    .child(
-                        div()
-                            .mt(px(8.0))
-                            .pt(px(8.0))
-                            .border_t_1()
-                            .border_color(self.theme.border)
-                            .text_size(px(10.0))
-                            .font_weight(FontWeight::BOLD)
-                            .text_color(self.theme.text_faint)
-                            .child(self.files.as_ref().map_or_else(
-                                || String::from("CHANGED FILES"),
-                                |files| {
-                                    format!(
-                                        "CHANGED FILES · {}",
-                                        counted(files.files.len(), "file")
-                                    )
-                                },
-                            )),
-                    )
+                    })),
+            )
+    }
+
+    /// The right details column: the changed-files header and scrollable list.
+    fn details_files_column(&self, cx: &mut gpui::Context<Self>) -> Div {
+        div()
+            .flex_1()
+            .min_w(px(1.0))
+            .flex()
+            .flex_col()
+            .px(px(14.0))
+            .pt(px(10.0))
+            .child(
+                div()
+                    .pb(px(6.0))
+                    .text_size(px(10.0))
+                    .font_weight(FontWeight::BOLD)
+                    .text_color(self.theme.text_faint)
+                    .child(self.files.as_ref().map_or_else(
+                        || String::from("CHANGED FILES"),
+                        |files| format!("CHANGED FILES · {}", counted(files.files.len(), "file")),
+                    )),
+            )
+            .child(
+                div()
+                    .id("details-files-scroll")
+                    .flex_grow()
+                    .min_h(px(0.0))
+                    .overflow_y_scroll()
+                    .pb(px(6.0))
                     .children(
                         self.files
                             .clone()
@@ -2290,7 +2315,6 @@ impl SourcefourWindow {
                             .map(|(index, file)| self.file_row(index, &file, cx)),
                     ),
             )
-            .into_any_element()
     }
 
     /// Switches the comparison parent and reloads files for the selection.
