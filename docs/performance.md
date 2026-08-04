@@ -27,27 +27,31 @@ Create one entry per machine, fixture, revision, and cache condition.
 
 | Field | Value |
 | --- | --- |
-| Date/time (UTC) | not yet measured |
-| Sourcefour revision | not yet measured |
-| Build profile and Rust toolchain | not yet measured |
-| Operating system/version | not yet measured |
-| Hardware model, CPU/GPU, RAM | not yet measured |
-| Storage/filesystem | not yet measured |
-| Power and thermal state | not yet measured |
-| Fixture name and manifest | not yet measured |
-| Fixture commit/branch/tag counts and commit-graph state | not yet measured |
-| Cache condition (cold/warm) | not yet measured |
-| Exact command | not yet measured |
-| Iteration count and sampling method | not yet measured |
-| Raw samples/results path or link | not yet measured |
-| Profiling trace path or link | not yet measured |
-| Notes, deviations, and failures | not yet measured |
+| Date/time (UTC) | 2026-08-04 |
+| Sourcefour revision | 2bb78bd |
+| Build profile and Rust toolchain | release, rustc 1.97.0 (2d8144b78 2026-07-07) |
+| Operating system/version | macOS 15.6 |
+| Hardware model, CPU/GPU, RAM | MacBook Pro (Mac14,6), Apple M2 Max, 32 GB |
+| Storage/filesystem | internal Apple SSD, APFS |
+| Power and thermal state | not controlled (interactive session) |
+| Fixture name and manifest | 18 real repositories; names and shapes in the raw file |
+| Fixture commit/branch/tag counts and commit-graph state | 176 – 1,464,430 commits per repository; no commit-graph files generated |
+| Cache condition (cold/warm) | warm |
+| Exact command | `cargo run --release -p sourcefour-git --example stress -- <repos>` |
+| Iteration count and sampling method | 1 iteration per repository (single sample, not a percentile) |
+| Raw samples/results path or link | `fixtures/stress/2026-08-04-warm.txt` |
+| Profiling trace path or link | none |
+| Notes, deviations, and failures | Headless harness, not the windowed app: covers discovery, metadata snapshot, history cursor, and §7.3 layout, not rendering. Real repositories replace the not-yet-built 50k reference fixture. git.git and linux.git exceed the §7.6 lane cap; overflow-lane degradations are counted in the raw file and confined to the parked lane. Cross-row graph continuity validated on every row: zero violations in 1,730,184 rows. |
 
 ## Result table
 
+Single-sample values from the run record above; p95 requires repeated runs and stays unmeasured.
+
 | Run record | Metric | Cache condition | p50 | p95 | Budget | Raw result link/path |
 | --- | --- | --- | --- | --- | --- | --- |
-| none | not yet measured | not yet measured | not yet measured | not yet measured | see measurement contract | not yet measured |
+| 2026-08-04 | Repository discovery + initial metadata | warm | 0–5 ms + 3–38 ms across 18 repositories | not yet measured | p50 < 30 ms; p95 < 80 ms | `fixtures/stress/2026-08-04-warm.txt` |
+| 2026-08-04 | First 256 history rows | warm | 2–55 ms for repositories up to 85k commits; 218 ms for linux (1.46M commits, 29× the reference fixture) | not yet measured | p50 < 50 ms; p95 < 150 ms | `fixtures/stress/2026-08-04-warm.txt` |
+| 2026-08-04 | Full history walk + layout throughput | warm | 41,000–260,000 rows/s per repository | not yet measured | no budget defined | `fixtures/stress/2026-08-04-warm.txt` |
 
 ## Commands to record verbatim
 
