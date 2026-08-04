@@ -6,9 +6,9 @@ use std::sync::{Arc, Mutex, atomic::AtomicBool};
 
 use sourcefour_git::{GixHistoryCursor, HistoryCursor as _, OperationSink};
 use sourcefour_model::{
-    AheadBehindUpdate, ChangeKind, ChangedFile, CommitFiles, DiffParent, FetchRequest, Generation,
-    HistoryBatch, HistoryQuery, HistoryScope, LoadState, OperationOutcome, OperationProgress,
-    RepoEnvelope, RepoFailure, RepoLocation, RepoSessionId, RepoSnapshot, RequestId,
+    AheadBehindUpdate, ChangeKind, CommitFiles, DiffParent, FetchRequest, Generation, HistoryBatch,
+    HistoryQuery, HistoryScope, LoadState, OperationOutcome, OperationProgress, RepoEnvelope,
+    RepoFailure, RepoLocation, RepoSessionId, RepoSnapshot, RequestId,
 };
 
 use crate::{
@@ -18,12 +18,13 @@ use crate::{
     history::{HistoryState, refreshed_scope, relative_date},
     panels::{PanelSizes, Splitter},
     theme::{
-        HEADER_HEIGHT, HISTORY_ROW_HEIGHT, MONO_FONT, SPLITTER_WIDTH, STATUS_HEIGHT,
-        TITLEBAR_HEIGHT, TOOLBAR_HEIGHT, Theme,
+        HEADER_HEIGHT, HISTORY_ROW_HEIGHT, SPLITTER_WIDTH, STATUS_HEIGHT, TITLEBAR_HEIGHT,
+        TOOLBAR_HEIGHT, Theme,
     },
 };
 
 mod branch_dialog;
+mod details;
 mod diff;
 mod github;
 mod sidebar;
@@ -155,18 +156,6 @@ impl OperationSink for LatestSink {
             *latest = Some(progress);
         }
     }
-}
-
-/// Assembled text for the details header (§6.10).
-struct DetailLines {
-    hash: String,
-    subject: String,
-    author: String,
-    date: Option<String>,
-    committer: Option<String>,
-    /// Abbreviated hash and comparison choice per parent, commit order.
-    parent_choices: Vec<(String, DiffParent)>,
-    body: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1451,315 +1440,6 @@ impl SourcefourWindow {
             .child(label.name.clone())
     }
 
-    /// The details header text, from the exact metadata when it has arrived
-    /// and from the already-loaded row until then (§6.10).
-    fn detail_lines(&self) -> DetailLines {
-        let now = self.now_seconds();
-        let row = self
-            .history
-            .selected_index()
-            .and_then(|index| self.history.rows.get(index));
-        let detail = self.detail.as_ref();
-        DetailLines {
-            hash: row.map_or_else(String::new, |row| row.oid.abbreviated(9)),
-            subject: detail.map_or_else(
-                || {
-                    row.map_or_else(
-                        || String::from("No commit selected"),
-                        |row| row.summary.clone(),
-                    )
-                },
-                |detail| detail.subject.clone(),
-            ),
-            author: detail.map_or_else(
-                || row.map_or_else(String::new, |row| row.author_name.clone()),
-                |detail| format!("{} <{}>", detail.author.name, detail.author.email),
-            ),
-            date: detail
-                .map(|detail| detail.author.time)
-                .or_else(|| row.map(|row| row.commit_time))
-                .map(|time| relative_date(now, time)),
-            committer: detail
-                .filter(|detail| {
-                    detail.committer.name != detail.author.name
-                        || detail.committer.email != detail.author.email
-                })
-                .map(|detail| {
-                    format!(
-                        "committed by {} {}",
-                        detail.committer.name,
-                        relative_date(now, detail.committer.time)
-                    )
-                }),
-            parent_choices: detail.map_or_else(Vec::new, |detail| {
-                detail
-                    .parents
-                    .iter()
-                    .enumerate()
-                    .map(|(index, parent)| {
-                        let choice = if index == 0 {
-                            DiffParent::FirstParent
-                        } else {
-                            DiffParent::Parent(*parent)
-                        };
-                        (parent.abbreviated(7), choice)
-                    })
-                    .collect()
-            }),
-            body: detail
-                .map(|detail| detail.body.clone())
-                .filter(|body| !body.is_empty()),
-        }
-    }
-
-    /// The details pane's first row: hash, and parent hashes — clickable
-    /// comparison choices when the commit is a merge (§6.10).
-    fn details_hash_row(
-        &self,
-        hash: &str,
-        parent_choices: &[(String, DiffParent)],
-        cx: &mut gpui::Context<Self>,
-    ) -> Div {
-        let comparing = self.compare_parent;
-        let hash = hash.to_owned();
-
-        div()
-            .flex()
-            .items_center()
-            .gap(px(10.0))
-            .text_size(px(12.0))
-            .font_family(MONO_FONT)
-            .text_color(self.theme.accent)
-            .child(hash)
-            .children((parent_choices.len() == 1).then(|| {
-                div()
-                    .text_size(px(10.5))
-                    .text_color(self.theme.text_faint)
-                    .child(format!("Parent  {}", parent_choices[0].0))
-            }))
-            .children((parent_choices.len() > 1).then(|| {
-                // A merge: pick which parent to compare against.
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(4.0))
-                    .text_size(px(10.5))
-                    .text_color(self.theme.text_faint)
-                    .child("vs")
-                    .children(
-                        parent_choices
-                            .iter()
-                            .enumerate()
-                            .map(|(index, (hash, choice))| {
-                                let choice = *choice;
-                                let selected = comparing == choice;
-                                div()
-                                    .id(("parent-choice", index))
-                                    .px(px(6.0))
-                                    .rounded(px(4.0))
-                                    .border_1()
-                                    .cursor_pointer()
-                                    .border_color(if selected {
-                                        self.theme.accent
-                                    } else {
-                                        self.theme.border_strong
-                                    })
-                                    .text_color(if selected {
-                                        self.theme.accent
-                                    } else {
-                                        self.theme.text_secondary
-                                    })
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.set_compare_parent(choice, cx);
-                                    }))
-                                    .child(hash.clone())
-                            }),
-                    )
-            }))
-    }
-
-    /// §4.6: the collapsed details strip; Space or a click expands it.
-    fn collapsed_details(
-        &self,
-        hash: &str,
-        subject: &str,
-        cx: &mut gpui::Context<Self>,
-    ) -> gpui::AnyElement {
-        let hash = hash.to_owned();
-        let subject = subject.to_owned();
-        div()
-            .id("details-collapsed")
-            .h(px(30.0))
-            .flex_none()
-            .flex()
-            .items_center()
-            .gap(px(10.0))
-            .px(px(14.0))
-            .border_t_1()
-            .border_color(self.theme.border)
-            .bg(self.theme.bg_panel)
-            .cursor_pointer()
-            .on_click(cx.listener(|this, _, _, cx| {
-                this.details_collapsed = false;
-                this.persist_ui_state(cx);
-                cx.notify();
-            }))
-            .child(
-                div()
-                    .flex_none()
-                    .font_family(MONO_FONT)
-                    .text_size(px(11.0))
-                    .text_color(self.theme.accent)
-                    .child(hash),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .min_w(px(1.0))
-                    .overflow_hidden()
-                    .text_ellipsis()
-                    .whitespace_nowrap()
-                    .text_size(px(11.5))
-                    .text_color(self.theme.text_secondary)
-                    .child(subject),
-            )
-            .child(
-                div()
-                    .flex_none()
-                    .text_size(px(10.0))
-                    .text_color(self.theme.text_faint)
-                    .child("Space to expand"),
-            )
-            .into_any_element()
-    }
-
-    fn details(&self, cx: &mut gpui::Context<Self>) -> gpui::AnyElement {
-        let lines = self.detail_lines();
-        if self.details_collapsed {
-            return self.collapsed_details(&lines.hash, &lines.subject, cx);
-        }
-        div()
-            .h(px(self.panels.details))
-            .flex_none()
-            .flex()
-            .bg(self.theme.bg_panel)
-            .child(self.details_message_column(lines, cx))
-            .child(div().w(px(1.0)).flex_none().bg(self.theme.border))
-            .child(self.details_files_column(cx))
-            .into_any_element()
-    }
-
-    /// The left details column: hash row, subject, author line, and the
-    /// scrollable commit body.
-    fn details_message_column(&self, lines: DetailLines, cx: &mut gpui::Context<Self>) -> Div {
-        let DetailLines {
-            hash,
-            subject,
-            author,
-            date,
-            committer,
-            parent_choices,
-            body,
-        } = lines;
-        div()
-            .flex_1()
-            .min_w(px(1.0))
-            .flex()
-            .flex_col()
-            .gap(px(6.0))
-            .px(px(14.0))
-            .pt(px(10.0))
-            .child(self.details_hash_row(&hash, &parent_choices, cx))
-            .child(
-                div()
-                    .text_size(px(13.0))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(self.theme.text_primary)
-                    .child(subject),
-            )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(8.0))
-                    .text_size(px(11.5))
-                    .text_color(self.theme.text_secondary)
-                    .child(author)
-                    .children(date.map(|date| div().text_color(self.theme.text_faint).child(date)))
-                    .children(
-                        committer.map(|committer| {
-                            div().text_color(self.theme.text_faint).child(committer)
-                        }),
-                    ),
-            )
-            .child(
-                div()
-                    .id("details-scroll")
-                    .track_focus(&self.details_focus)
-                    .flex_grow()
-                    .min_h(px(0.0))
-                    .overflow_y_scroll()
-                    .children(body.map(|body| {
-                        div()
-                            .pt(px(4.0))
-                            .pb(px(4.0))
-                            .text_size(px(11.5))
-                            .text_color(self.theme.text_secondary)
-                            .child(body)
-                    }))
-                    .children(self.checks_block(cx)),
-            )
-    }
-
-    /// The right details column: the changed-files header and scrollable list.
-    fn details_files_column(&self, cx: &mut gpui::Context<Self>) -> Div {
-        div()
-            .flex_1()
-            .min_w(px(1.0))
-            .flex()
-            .flex_col()
-            .px(px(14.0))
-            .pt(px(10.0))
-            .child(
-                div()
-                    .pb(px(6.0))
-                    .text_size(px(10.0))
-                    .font_weight(FontWeight::BOLD)
-                    .text_color(self.theme.text_faint)
-                    .child(self.files.as_ref().map_or_else(
-                        || String::from("CHANGED FILES"),
-                        |files| format!("CHANGED FILES · {}", counted(files.files.len(), "file")),
-                    )),
-            )
-            .child(
-                div()
-                    .id("details-files-scroll")
-                    .flex_grow()
-                    .min_h(px(0.0))
-                    .overflow_y_scroll()
-                    .pb(px(6.0))
-                    .children(
-                        self.files
-                            .clone()
-                            .iter()
-                            .flat_map(|files| files.files.clone())
-                            .enumerate()
-                            .map(|(index, file)| self.file_row(index, &file, cx)),
-                    ),
-            )
-    }
-
-    /// Switches the comparison parent and reloads files for the selection.
-    fn set_compare_parent(&mut self, parent: DiffParent, cx: &mut gpui::Context<Self>) {
-        if self.compare_parent == parent {
-            return;
-        }
-        self.compare_parent = parent;
-        self.files_for = None;
-        self.load_selected_files(cx);
-        cx.notify();
-    }
-
     /// Opens the overlay a capture scene asks for, with its content already
     /// loaded (§12.4). Demo mode has no repository to read a diff from, so the
     /// content comes from the fixture — through the shipping formatter.
@@ -1854,63 +1534,6 @@ impl SourcefourWindow {
             &self.settings_focus,
             cx,
         ))
-    }
-
-    /// One changed file: status letter, path, and line counts when known.
-    fn file_row(
-        &self,
-        index: usize,
-        file: &ChangedFile,
-        cx: &mut gpui::Context<Self>,
-    ) -> gpui::Stateful<Div> {
-        let color = change_color(&self.theme, file.status);
-        let path = file
-            .new_path
-            .as_ref()
-            .or(file.old_path.as_ref())
-            .map_or_else(String::new, sourcefour_model::RepoPath::display_lossy);
-        let clicked = file.clone();
-        div()
-            .id(("changed-file", index))
-            .h(px(22.0))
-            .flex_none()
-            .flex()
-            .items_center()
-            .gap(px(8.0))
-            .text_size(px(11.0))
-            .cursor_pointer()
-            .hover(|style| style.bg(self.theme.bg_hover))
-            .on_click(cx.listener(move |this, _, window, cx| {
-                this.open_diff(&clicked, window, cx);
-            }))
-            .child(
-                div()
-                    .w(px(12.0))
-                    .flex_none()
-                    .font_weight(FontWeight::BOLD)
-                    .text_color(color)
-                    .child(change_letter(file.status)),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .min_w(px(1.0))
-                    .overflow_hidden()
-                    .text_ellipsis()
-                    .whitespace_nowrap()
-                    .text_color(self.theme.text_secondary)
-                    .child(path),
-            )
-            .children(file.additions.map(|added| {
-                div()
-                    .text_color(self.theme.green)
-                    .child(format!("+{added}"))
-            }))
-            .children(file.deletions.map(|removed| {
-                div()
-                    .text_color(self.theme.red)
-                    .child(format!("-{removed}"))
-            }))
     }
 
     fn status(&self) -> impl IntoElement {

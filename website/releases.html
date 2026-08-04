@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Release notes — Sourcefour</title>
+<meta name="description" content="What changed in each release of Sourcefour, the native Git history browser.">
+<link rel="icon" type="image/svg+xml" href="logo.svg">
+<link rel="stylesheet" href="brand.css">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<nav class="nav">
+  <div class="wrap nav-inner">
+    <a class="brand" href="index.html">
+      <img src="logo.svg" alt="" width="22" height="22">
+      Sourcefour
+    </a>
+    <span class="pill">pre-release</span>
+    <div class="nav-links">
+      <a class="hide-sm" href="index.html#features">Features</a>
+      <a href="releases.html">Releases</a>
+      <a class="hide-sm" href="https://github.com/HelgeSverre/sourcefour">GitHub</a>
+      <a class="btn" href="index.html#download">Download</a>
+    </div>
+  </div>
+</nav>
+
+<header class="page-head">
+  <div class="wrap">
+    <p class="eyebrow">Release notes</p>
+    <h1>What changed, and when</h1>
+    <p>Every tagged release is built by CI, published on
+    <a href="https://github.com/HelgeSverre/sourcefour/releases">GitHub Releases</a>, and
+    written up here. Nothing has been tagged yet: what follows is what already works on
+    <code>main</code>.</p>
+  </div>
+</header>
+
+<section style="padding-top: 0;">
+  <div class="wrap">
+
+    <article class="release">
+      <div>
+        <div class="v">0.1.0</div>
+        <div class="when">unreleased</div>
+      </div>
+      <div>
+        <h3>Repository and history</h3>
+        <ul>
+          <li>Opens the repository containing your working directory, from anywhere
+          inside it — worktree, subdirectory, or bare clone.</li>
+          <li>Sidebar of linked worktrees, local branches with ahead/behind counts, and
+          remotes with their tracking branches. Sections reorder by dragging and stay
+          where you put them.</li>
+          <li>Commit graph painted from an incremental lane algorithm: merge curves, a
+          stable colour per line of development, and a halo on the checked-out commit.</li>
+          <li>History streams in on a worker thread and renders through a virtualized
+          list, so repositories of any size open immediately.</li>
+          <li>Branch, remote-branch, tag and <code>HEAD</code> chips on the rows they
+          point at, ordered the way Git orders them.</li>
+          <li>Click a branch to scope history to it; click again to widen back out.</li>
+          <li>Metadata refreshes by itself when refs or worktrees change outside the app,
+          without losing your selection, your scope, or your scroll position.</li>
+          <li><kbd>Cmd+F</kbd> filters loaded history; arrows, Page Up/Down, Home and End
+          drive the list.</li>
+        </ul>
+
+        <h3>Commit details and diffs</h3>
+        <ul>
+          <li>Two-column details pane: full commit message on the left, changed files on
+          the right, with per-file line counts.</li>
+          <li>Merge commits compare against either parent, switched from the details
+          header.</li>
+          <li>Click a changed file to open its diff in a full-window overlay, unified or
+          side by side — the layout you chose is remembered.</li>
+          <li>The overlay's scrollbar is draggable, so long diffs scrub instead of
+          scroll.</li>
+          <li>Image diffs render as pictures: a juxtapose slider you drag between before
+          and after, or both side by side.</li>
+          <li>No diff is too large to open; content is virtualized rather than
+          truncated.</li>
+        </ul>
+
+        <h3>Operations</h3>
+        <ul>
+          <li>Fetch, run through your own <code>git</code> so SSH keys, credential
+          helpers and hooks work exactly as they do in the terminal — with live progress
+          and a cancel button.</li>
+          <li>Create a branch from any commit, optionally checking it out.</li>
+        </ul>
+
+        <h3>Under the hood</h3>
+        <ul>
+          <li>Native GPU-rendered interface built on GPUI; repositories are read with
+          gitoxide rather than by scraping command output.</li>
+          <li>A deterministic demo fixture (<code>sourcefour --demo</code>) that renders
+          through the real window, backing both the visual-regression suite and every
+          screenshot on this site.</li>
+          <li>Panel sizes, section order, collapse state and diff layout persist between
+          launches in one tolerant JSON file.</li>
+        </ul>
+      </div>
+    </article>
+
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <div class="foot-grid">
+      <div>
+        <a class="brand" href="index.html">
+          <img src="logo.svg" alt="" width="22" height="22">
+          Sourcefour
+        </a>
+        <p class="foot-blurb">A Git history browser from
+          <a href="https://lisethsolutions.no/">Liseth Solutions AS</a>,
+          built for people who keep a terminal open.</p>
+      </div>
+      <div class="foot-links">
+        <h4>Resources</h4>
+        <a href="releases.html">Release notes</a>
+        <a href="https://github.com/HelgeSverre/sourcefour#readme">Documentation</a>
+        <a href="https://github.com/HelgeSverre/sourcefour/issues/new?template=bug_report.yml">Report an issue</a>
+        <a href="https://github.com/HelgeSverre/sourcefour">Source on GitHub</a>
+      </div>
+    </div>
+    <div class="foot-legal">
+      <span>© 2026 <a href="https://lisethsolutions.no/">Liseth Solutions AS</a>. MIT or Apache-2.0, at your option.</span>
+      <span>Reads repositories with gitoxide, draws them with GPU-rendered native UI. No Electron, no telemetry, no account.</span>
+    </div>
+  </div>
+</footer>
+
+</body>
+</html>

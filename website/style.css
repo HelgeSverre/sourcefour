@@ -1,0 +1,533 @@
+/* Layout and components. Every colour comes from brand.css. */
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  background: var(--page);
+  color: var(--ink-2);
+  font-family: var(--font-ui);
+  font-size: var(--text-base);
+  line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+}
+
+a {
+  color: var(--accent);
+  text-decoration: none;
+}
+a:hover {
+  color: var(--accent-ink);
+}
+
+h1,
+h2,
+h3,
+h4 {
+  color: var(--ink);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+}
+
+/* height: auto is load-bearing — the shots carry width/height attributes, and
+ * without it a scaled-down image keeps its full intrinsic height and squishes. */
+img {
+  max-width: 100%;
+  height: auto;
+  display: block;
+}
+
+code,
+kbd {
+  font-family: var(--font-mono);
+}
+
+.wrap {
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: 0 24px;
+}
+
+section {
+  padding: 96px 0;
+}
+
+.rule {
+  border-top: 1px solid var(--border);
+}
+
+.eyebrow {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  margin-bottom: 14px;
+}
+
+/* ── nav ─────────────────────────────────────────────────────── */
+
+.nav {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  background: rgba(11, 12, 15, 0.85);
+  backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--border);
+}
+.nav-inner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 60px;
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--ink);
+  font-size: var(--text-md);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+.brand:hover {
+  color: var(--ink);
+}
+.brand svg {
+  width: 22px;
+  height: 22px;
+}
+.pill {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-3);
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  padding: 2px 9px;
+}
+.nav-links {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 22px;
+  font-size: var(--text-sm);
+}
+.nav-links a {
+  color: var(--ink-2);
+}
+.nav-links a:hover {
+  color: var(--ink);
+}
+
+/* ── buttons ─────────────────────────────────────────────────── */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--text-sm);
+  font-weight: 550;
+  padding: 9px 16px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--border-strong);
+  background: var(--panel);
+  color: var(--ink);
+  transition: border-color 0.15s var(--ease), background 0.15s var(--ease);
+}
+.btn:hover {
+  background: var(--hover);
+  border-color: var(--ink-3);
+  color: var(--ink);
+}
+.btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #08101f;
+}
+.btn.primary:hover {
+  background: var(--accent-ink);
+  border-color: var(--accent-ink);
+  color: #08101f;
+}
+.btn.big {
+  font-size: var(--text-base);
+  padding: 12px 22px;
+}
+
+/* ── hero ────────────────────────────────────────────────────── */
+
+.hero {
+  padding: 92px 0 0;
+  text-align: center;
+}
+.hero h1 {
+  font-size: var(--text-3xl);
+  max-width: 16ch;
+  margin: 0 auto 22px;
+}
+.hero h1 em {
+  font-style: normal;
+  color: var(--accent);
+}
+.hero .lede {
+  font-size: var(--text-md);
+  max-width: 60ch;
+  margin: 0 auto 34px;
+}
+
+.install {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  background: var(--panel);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-md);
+  padding: 10px 12px 10px 16px;
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  color: var(--ink);
+  text-align: left;
+}
+.install .sigil {
+  color: var(--ink-3);
+  user-select: none;
+}
+.copy {
+  border: 0;
+  background: transparent;
+  color: var(--ink-3);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  cursor: pointer;
+  padding: 3px 7px;
+  border-radius: var(--r-sm);
+}
+.copy:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+.copy[data-copied="true"] {
+  color: var(--green);
+}
+
+.hero-ctas {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-top: 22px;
+}
+.fine {
+  font-size: var(--text-sm);
+  color: var(--ink-3);
+  margin-top: 16px;
+}
+
+.shot {
+  margin-top: 60px;
+  border-radius: var(--r-lg) var(--r-lg) 0 0;
+  overflow: hidden;
+  box-shadow: var(--shadow);
+  width: min(1040px, 100%);
+  margin-inline: auto;
+}
+
+/* ── feature rows ────────────────────────────────────────────── */
+
+.row {
+  display: grid;
+  grid-template-columns: 0.85fr 1.15fr;
+  gap: 56px;
+  align-items: center;
+}
+.row + .row {
+  margin-top: 104px;
+}
+.row h2 {
+  font-size: var(--text-xl);
+  margin-bottom: 14px;
+}
+.row p + p {
+  margin-top: 12px;
+}
+.row .frame {
+  border-radius: var(--r-lg);
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+  background: var(--panel);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.45);
+}
+.row.flip .frame {
+  order: -1;
+}
+/* A tall, narrow crop gets a frame that hugs it instead of a wide empty card. */
+.row .frame.tall {
+  width: fit-content;
+  margin-inline: auto;
+}
+.row .frame.tall img {
+  max-height: 460px;
+  width: auto;
+}
+
+.note {
+  margin-top: 16px;
+  font-size: var(--text-sm);
+  color: var(--ink-3);
+  border-left: 2px solid var(--border-strong);
+  padding-left: 12px;
+}
+
+/* ── quote band ──────────────────────────────────────────────── */
+
+.band {
+  background: var(--chrome);
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  text-align: center;
+}
+.band h2 {
+  font-size: var(--text-2xl);
+  max-width: 20ch;
+  margin: 0 auto 16px;
+}
+.band p {
+  max-width: 62ch;
+  margin: 0 auto;
+  font-size: var(--text-md);
+}
+.band .hl {
+  color: var(--accent);
+}
+
+/* ── feature grid ────────────────────────────────────────────── */
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1px;
+  background: var(--border);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  overflow: hidden;
+  margin-top: 48px;
+}
+.card {
+  background: var(--page);
+  padding: 26px 24px 28px;
+}
+.card .n {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--accent);
+  display: block;
+  margin-bottom: 12px;
+}
+.card h3 {
+  font-size: var(--text-base);
+  margin-bottom: 8px;
+}
+.card p {
+  font-size: var(--text-sm);
+}
+
+/* ── download ────────────────────────────────────────────────── */
+
+.downloads {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+  margin: 40px auto 0;
+  max-width: 840px;
+}
+.dl {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 26px 18px 22px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-lg);
+  background: var(--panel);
+  color: var(--ink);
+  transition: border-color 0.15s var(--ease), background 0.15s var(--ease);
+}
+.dl:hover {
+  background: var(--hover);
+  border-color: var(--accent);
+  color: var(--ink);
+}
+.dl svg {
+  width: 34px;
+  height: 34px;
+  fill: var(--ink);
+}
+.dl .os {
+  font-size: var(--text-md);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+.dl .meta {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--ink-3);
+}
+/* ── releases ────────────────────────────────────────────────── */
+
+.page-head {
+  padding: 72px 0 40px;
+}
+.page-head h1 {
+  font-size: var(--text-2xl);
+  margin-bottom: 12px;
+}
+.page-head p {
+  max-width: 62ch;
+}
+
+.release {
+  display: grid;
+  grid-template-columns: 200px 1fr;
+  gap: 40px;
+  padding: 40px 0;
+  border-top: 1px solid var(--border);
+}
+.release .v {
+  font-family: var(--font-mono);
+  font-size: var(--text-md);
+  color: var(--ink);
+}
+.release .when {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--ink-3);
+  margin-top: 4px;
+}
+.release h3 {
+  font-size: var(--text-base);
+  margin: 22px 0 10px;
+}
+.release h3:first-child {
+  margin-top: 0;
+}
+.release ul {
+  list-style: none;
+  font-size: var(--text-sm);
+}
+.release li {
+  padding-left: 18px;
+  position: relative;
+  margin-bottom: 6px;
+}
+.release li::before {
+  content: "—";
+  position: absolute;
+  left: 0;
+  color: var(--ink-3);
+}
+.release li code {
+  color: var(--ink);
+  font-size: 0.92em;
+}
+
+/* ── footer ──────────────────────────────────────────────────── */
+
+footer {
+  border-top: 1px solid var(--border);
+  padding: 56px 0 44px;
+  font-size: var(--text-sm);
+}
+.foot-grid {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: 48px;
+  margin-bottom: 40px;
+}
+.foot-grid h4 {
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--ink-3);
+  margin-bottom: 14px;
+  font-weight: 600;
+}
+/* Only the link column stacks; the brand mark and the blurb's links stay inline. */
+.foot-links a {
+  display: block;
+  color: var(--ink-2);
+  margin-bottom: 9px;
+}
+.foot-links a:hover {
+  color: var(--ink);
+}
+.foot-blurb {
+  max-width: 44ch;
+  margin-top: 14px;
+  color: var(--ink-3);
+}
+.foot-legal {
+  border-top: 1px solid var(--border);
+  padding-top: 22px;
+  display: flex;
+  justify-content: space-between;
+  gap: 18px;
+  flex-wrap: wrap;
+  font-size: var(--text-xs);
+  color: var(--ink-3);
+}
+.foot-legal a {
+  color: var(--ink-3);
+  text-decoration: underline;
+}
+
+/* ── narrow ──────────────────────────────────────────────────── */
+
+@media (max-width: 900px) {
+  section {
+    padding: 64px 0;
+  }
+  .row,
+  .grid,
+  .downloads,
+  .foot-grid,
+  .release {
+    grid-template-columns: 1fr;
+  }
+  .row {
+    gap: 28px;
+  }
+  .row + .row {
+    margin-top: 64px;
+  }
+  .row.flip .frame {
+    order: 0;
+  }
+  .release {
+    gap: 16px;
+  }
+  .nav-links a.hide-sm {
+    display: none;
+  }
+  .hero {
+    padding-top: 56px;
+  }
+  /* The install command is 35 monospace characters; it has to give somewhere. */
+  .install {
+    max-width: 100%;
+    flex-wrap: wrap;
+    font-size: var(--text-xs);
+    padding-left: 12px;
+  }
+  .install code {
+    min-width: 0;
+  }
+  .install code,
+  .fine code {
+    overflow-wrap: anywhere;
+  }
+}

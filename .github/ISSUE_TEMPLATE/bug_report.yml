@@ -1,0 +1,59 @@
+name: Bug report
+description: Something in the app behaves differently than it should.
+title: "bug: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file this. The more precisely the repository
+        state is described, the faster it gets fixed.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what you got instead.
+      placeholder: |
+        1. Opened a repository with two linked worktrees
+        2. Clicked the second worktree
+        3. The history stayed on the first worktree's branch
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: From `sourcefour --version`, or the commit you built.
+      placeholder: "0.1.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - macOS (Apple Silicon)
+        - macOS (Intel)
+        - Linux
+        - Windows
+    validations:
+      required: true
+  - type: textarea
+    id: repository
+    attributes:
+      label: The repository
+      description: >
+        Anything unusual about it — size, linked worktrees, submodules, a bare
+        clone, a detached HEAD, an unborn branch, a remote that needs SSH.
+    validations:
+      required: false
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: >
+        Output of `RUST_LOG=debug sourcefour <path>` around the failure. Pasted
+        text is rendered as a shell block, no backticks needed.
+      render: shell
+    validations:
+      required: false

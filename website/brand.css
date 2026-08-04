@@ -1,0 +1,58 @@
+/* Design tokens.
+ *
+ * The palette is the application's own: every value here is lifted from
+ * apps/sourcefour/src/theme.rs, so the site and the window it sells cannot
+ * drift apart. Change one, change the other. */
+
+:root {
+  color-scheme: dark;
+
+  /* Surfaces, darkest to lightest — theme.rs bg_* */
+  --page: #0b0c0f;
+  --chrome: #15171c;
+  --panel: #191c22;
+  --list: #1d2129;
+  --hover: #222734;
+  --selected: #263042;
+
+  --border: #262a33;
+  --border-strong: #2f3542;
+
+  /* Ink — theme.rs text_* */
+  --ink: #dfe3ec;
+  --ink-2: #9aa2b3;
+  --ink-3: #5f677a;
+
+  /* Accents — theme.rs, also the graph lane colours */
+  --accent: #5b9dff;
+  --accent-ink: #93bdff;
+  --accent-fade: rgba(91, 157, 255, 0.12);
+  --green: #7ec96f;
+  --orange: #e0a458;
+  --purple: #b392f0;
+  --red: #e5655e;
+  --cyan: #64c7d6;
+
+  /* Type: the platform's own faces, the way the app uses them. No web fonts —
+   * a native app should not need a megabyte of typography to describe itself. */
+  --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI",
+    system-ui, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, "JetBrains Mono", monospace;
+
+  --text-xs: 0.75rem;
+  --text-sm: 0.8125rem;
+  --text-base: 0.9375rem;
+  --text-md: 1.0625rem;
+  --text-lg: 1.375rem;
+  --text-xl: 1.75rem;
+  --text-2xl: 2.25rem;
+  --text-3xl: clamp(2.25rem, 5vw, 3.5rem);
+
+  --r-sm: 4px;
+  --r-md: 6px;
+  --r-lg: 10px;
+  --r-xl: 16px;
+
+  --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+  --shadow: 0 24px 60px rgba(0, 0, 0, 0.55), 0 0 0 1px var(--border-strong);
+}

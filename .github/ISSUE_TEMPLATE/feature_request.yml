@@ -1,0 +1,31 @@
+name: Feature request
+description: Something the app should do and does not.
+title: "feat: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What you were trying to do when the app got in the way.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would help
+      description: >
+        The behaviour you want. If another Git client already does it well, say
+        which one and what it gets right.
+    validations:
+      required: true
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Scope
+      description: >
+        Sourcefour is a history browser: it reads repositories and runs the few
+        write operations it ships with.
+      options:
+        - label: I have read the README and this is not something the app already does.
+          required: true
