@@ -107,6 +107,23 @@ impl<T> LoadState<T> {
         }
     }
 
+    /// Returns the current or stale value mutably, for in-place enrichment.
+    ///
+    /// Later-arriving detail such as ahead/behind counts is merged into the
+    /// loaded snapshot rather than replacing it.
+    #[must_use]
+    pub fn value_mut(&mut self) -> Option<&mut T> {
+        match self {
+            Self::Ready(value)
+            | Self::Refreshing { current: value, .. }
+            | Self::Failed {
+                previous: Some(value),
+                ..
+            } => Some(value),
+            Self::Idle | Self::Loading { .. } | Self::Failed { previous: None, .. } => None,
+        }
+    }
+
     /// Reports whether a request is in flight.
     #[must_use]
     pub const fn is_loading(&self) -> bool {

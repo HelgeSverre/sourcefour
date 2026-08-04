@@ -4,6 +4,7 @@
 //! backend lifetimes and gix types inside this crate while exposing only owned
 //! `sourcefour-model` values.
 
+mod ahead_behind;
 mod discover;
 mod refs;
 mod session;
@@ -12,6 +13,7 @@ mod worktrees;
 use std::sync::atomic::AtomicBool;
 
 pub use crate::{
+    ahead_behind::{AheadBehindCache, apply as apply_ahead_behind},
     discover::{discover, display_name},
     refs::{References, references},
     session::snapshot,

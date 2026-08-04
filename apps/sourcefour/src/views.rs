@@ -3,8 +3,8 @@ use gpui::{
     point, prelude::*, px, svg,
 };
 use sourcefour_model::{
-    AheadBehindState, Generation, HeadSnapshot, LoadState, RepoEnvelope, RepoFailure,
-    RepoSessionId, RepoSnapshot, RequestId, WorktreeAccessibility,
+    AheadBehindState, AheadBehindUpdate, Generation, HeadSnapshot, LoadState, RepoEnvelope,
+    RepoFailure, RepoLocation, RepoSessionId, RepoSnapshot, RequestId, WorktreeAccessibility,
 };
 
 use crate::{
@@ -329,27 +329,78 @@ impl SourcefourWindow {
             window.repo = LoadState::Loading {
                 started_at: std::time::Instant::now(),
             };
-            // Reading refs and worktrees touches the filesystem, so it never
-            // runs on the render thread (§15.8). The window is already drawable.
-            cx.spawn(async move |this, cx| {
-                let payload = cx
-                    .background_executor()
-                    .spawn(async move { sourcefour_git::snapshot(&location) })
-                    .await;
-                this.update(cx, |this, cx| {
-                    this.apply_snapshot(&RepoEnvelope {
+            window.load_metadata(location, cx);
+        }
+        window
+    }
+
+    /// Loads metadata, then divergence counts, without blocking either render.
+    ///
+    /// Reading refs and worktrees touches the filesystem, so it never runs on
+    /// the render thread (§15.8). Ahead/behind follows as a second pass so the
+    /// sidebar appears before any history is walked (§6.7).
+    fn load_metadata(&mut self, location: RepoLocation, cx: &mut gpui::Context<Self>) {
+        let session = self.session;
+        let generation = self.generation;
+        cx.spawn(async move |this, cx| {
+            let payload = cx
+                .background_executor()
+                .spawn({
+                    let location = location.clone();
+                    async move { sourcefour_git::snapshot(&location) }
+                })
+                .await;
+            let branches = payload
+                .as_ref()
+                .map(|snapshot| snapshot.local_branches.clone())
+                .unwrap_or_default();
+            let applied = this
+                .update(cx, |this, cx| {
+                    let applied = this.apply_snapshot(&RepoEnvelope {
                         session,
                         generation,
                         request: RequestId(0),
                         payload,
                     });
                     cx.notify();
+                    applied
                 })
-                .ok();
+                .unwrap_or(false);
+            if !applied || branches.is_empty() {
+                return;
+            }
+
+            let updates = cx
+                .background_executor()
+                .spawn(async move {
+                    let mut cache = sourcefour_git::AheadBehindCache::default();
+                    cache.update(&location, &branches)
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                this.apply_ahead_behind(&RepoEnvelope {
+                    session,
+                    generation,
+                    request: RequestId(1),
+                    payload: updates,
+                });
+                cx.notify();
             })
-            .detach();
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Merges divergence counts into the loaded snapshot.
+    fn apply_ahead_behind(&mut self, envelope: &RepoEnvelope<Vec<AheadBehindUpdate>>) -> bool {
+        if !belongs_to(self.session, self.generation, envelope) {
+            return false;
         }
-        window
+        let Some(snapshot) = self.repo.value_mut() else {
+            return false;
+        };
+        sourcefour_git::apply_ahead_behind(&mut snapshot.local_branches, &envelope.payload);
+        true
     }
 
     /// Applies a metadata result, ignoring one belonging to a past generation.
