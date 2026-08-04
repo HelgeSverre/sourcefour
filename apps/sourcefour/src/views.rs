@@ -4,9 +4,10 @@ use gpui::{
 };
 use sourcefour_git::{GixHistoryCursor, HistoryCursor as _};
 use sourcefour_model::{
-    AheadBehindState, AheadBehindUpdate, ChangeKind, ChangedFile, CommitFiles, Generation,
-    HeadSnapshot, HistoryBatch, HistoryQuery, HistoryScope, LoadState, RepoEnvelope, RepoFailure,
-    RepoLocation, RepoSessionId, RepoSnapshot, RequestId, WorktreeAccessibility,
+    AheadBehindState, AheadBehindUpdate, ChangeKind, ChangedFile, CommitFiles, DiffContent,
+    DiffLine, DiffLineKind, DiffParent, FileDiffRequest, Generation, HeadSnapshot, HistoryBatch,
+    HistoryQuery, HistoryScope, LoadState, RepoEnvelope, RepoFailure, RepoLocation, RepoSessionId,
+    RepoSnapshot, RequestId, WorktreeAccessibility,
 };
 
 use crate::{
@@ -47,6 +48,14 @@ pub(crate) struct SourcefourWindow {
     files: Option<CommitFiles>,
     /// The commit the current detail/files load belongs to, requested or done.
     files_for: Option<sourcefour_model::Oid>,
+    /// Token for the newest detail/files request; stale completions bail out.
+    files_request: u64,
+    /// The open diff overlay, if any (§6.11).
+    diff_view: Option<DiffView>,
+    /// Token for the newest diff request.
+    diff_request: u64,
+    /// Focus target while the diff overlay is open, so Escape closes it.
+    diff_focus: FocusHandle,
     list_scroll: UniformListScrollHandle,
     focus: FocusHandle,
     /// The §4.7 filter field.
@@ -65,6 +74,7 @@ actions!(
         FocusFilter,
         FilterEscape,
         FilterEnter,
+        CloseDiff,
     ]
 );
 
@@ -131,6 +141,14 @@ impl Render for SectionDragPreview {
             .text_color(self.theme.text_primary)
             .child(self.title)
     }
+}
+
+/// One open file diff: header info plus content once loaded (§6.11).
+struct DiffView {
+    title: String,
+    status: ChangeKind,
+    /// `None` while the read is in flight.
+    content: Option<DiffContent>,
 }
 
 /// Assembled text for the details header (§6.10).
@@ -536,6 +554,10 @@ impl SourcefourWindow {
             detail: None,
             files: None,
             files_for: None,
+            files_request: 0,
+            diff_view: None,
+            diff_request: 0,
+            diff_focus: cx.focus_handle(),
             list_scroll: UniformListScrollHandle::new(),
             focus: cx.focus_handle(),
             filter_input: cx
@@ -816,6 +838,7 @@ impl SourcefourWindow {
             self.detail = None;
             self.files = None;
             self.files_for = None;
+            self.files_request += 1;
             return;
         };
         if self.files_for == Some(oid) {
@@ -824,16 +847,15 @@ impl SourcefourWindow {
         self.files_for = Some(oid);
         self.detail = None;
         self.files = None;
+        self.files_request += 1;
+        let token = self.files_request;
         let Some(location) = self.location.clone() else {
             return;
         };
-        let generation = self.generation;
         cx.spawn(async move |this, cx| {
             cx.background_executor().timer(FILES_DEBOUNCE).await;
             let wanted = this
-                .update(cx, |this, _| {
-                    this.generation == generation && this.files_for == Some(oid)
-                })
+                .update(cx, |this, _| this.files_request == token)
                 .unwrap_or(false);
             if !wanted {
                 return;
@@ -848,16 +870,25 @@ impl SourcefourWindow {
                 })
                 .await;
             this.update(cx, |this, cx| {
-                if this.generation != generation || this.files_for != Some(oid) {
+                // Only the newest request may apply; anything older is stale.
+                if this.files_request != token {
                     return;
                 }
                 match detail {
                     Ok(detail) => this.detail = Some(detail),
-                    Err(failure) => tracing::error!(%failure, "commit detail could not load"),
+                    Err(failure) => {
+                        // Release the claim so selecting this commit again
+                        // retries instead of silently showing nothing.
+                        this.files_for = None;
+                        tracing::error!(%failure, "commit detail could not load");
+                    }
                 }
                 match files {
                     Ok(files) => this.files = Some(files),
-                    Err(failure) => tracing::error!(%failure, "changed files could not load"),
+                    Err(failure) => {
+                        this.files_for = None;
+                        tracing::error!(%failure, "changed files could not load");
+                    }
                 }
                 cx.notify();
             })
@@ -1685,7 +1716,7 @@ impl SourcefourWindow {
         }
     }
 
-    fn details(&self) -> impl IntoElement {
+    fn details(&self, cx: &mut gpui::Context<Self>) -> impl IntoElement {
         let DetailLines {
             hash,
             subject,
@@ -1776,15 +1807,74 @@ impl SourcefourWindow {
                     )
                     .children(
                         self.files
+                            .clone()
                             .iter()
-                            .flat_map(|files| &files.files)
-                            .map(|file| self.file_row(file)),
+                            .flat_map(|files| files.files.clone())
+                            .enumerate()
+                            .map(|(index, file)| self.file_row(index, &file, cx)),
                     ),
             )
     }
 
+    /// Opens the diff overlay for one changed file of the selection (§6.11).
+    fn open_diff(&mut self, file: &ChangedFile, window: &mut Window, cx: &mut gpui::Context<Self>) {
+        let Some(oid) = self.history.selected else {
+            return;
+        };
+        let Some(location) = self.location.clone() else {
+            return;
+        };
+        let path = file
+            .new_path
+            .as_ref()
+            .or(file.old_path.as_ref())
+            .cloned()
+            .unwrap_or_else(|| sourcefour_model::RepoPath(Vec::new()));
+        let request = FileDiffRequest {
+            oid,
+            parent: DiffParent::FirstParent,
+            path,
+        };
+        self.diff_view = Some(DiffView {
+            title: request.path.display_lossy(),
+            status: file.status,
+            content: None,
+        });
+        self.diff_request += 1;
+        let token = self.diff_request;
+        self.diff_focus.focus(window);
+        cx.spawn(async move |this, cx| {
+            let diff = cx
+                .background_executor()
+                .spawn(async move { sourcefour_git::file_diff(&location, &request) })
+                .await;
+            this.update(cx, |this, cx| {
+                if this.diff_request != token {
+                    return;
+                }
+                if let Some(view) = &mut this.diff_view {
+                    view.content = Some(match diff {
+                        Ok(diff) => diff.content,
+                        Err(failure) => DiffContent::Unavailable {
+                            message: failure.user.message,
+                        },
+                    });
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+        cx.notify();
+    }
+
     /// One changed file: status letter, path, and line counts when known.
-    fn file_row(&self, file: &ChangedFile) -> Div {
+    fn file_row(
+        &self,
+        index: usize,
+        file: &ChangedFile,
+        cx: &mut gpui::Context<Self>,
+    ) -> gpui::Stateful<Div> {
         let color = match file.status {
             ChangeKind::Added => self.theme.green,
             ChangeKind::Deleted => self.theme.red,
@@ -1797,13 +1887,20 @@ impl SourcefourWindow {
             .as_ref()
             .or(file.old_path.as_ref())
             .map_or_else(String::new, sourcefour_model::RepoPath::display_lossy);
+        let clicked = file.clone();
         div()
+            .id(("changed-file", index))
             .h(px(22.0))
             .flex_none()
             .flex()
             .items_center()
             .gap(px(8.0))
             .text_size(px(11.0))
+            .cursor_pointer()
+            .hover(|style| style.bg(self.theme.bg_hover))
+            .on_click(cx.listener(move |this, _, window, cx| {
+                this.open_diff(&clicked, window, cx);
+            }))
             .child(
                 div()
                     .w(px(12.0))
@@ -1834,6 +1931,221 @@ impl SourcefourWindow {
             }))
     }
 
+    /// The full-window diff overlay (§6.11), closed by Escape, ✕, or a click
+    /// outside the panel.
+    fn diff_overlay(&self, cx: &mut gpui::Context<Self>) -> Option<impl IntoElement + use<>> {
+        let view = self.diff_view.as_ref()?;
+        let line_count = match &view.content {
+            Some(DiffContent::Text { lines }) => lines.len(),
+            _ => 0,
+        };
+        let body: gpui::AnyElement = match &view.content {
+            None => self.diff_notice("Computing diff…").into_any_element(),
+            Some(DiffContent::Text { lines }) if lines.is_empty() => {
+                self.diff_notice("No textual changes.").into_any_element()
+            }
+            Some(DiffContent::Text { .. }) => uniform_list(
+                cx.entity(),
+                "diff-lines",
+                line_count,
+                move |this, range, _window, _cx| {
+                    let Some(DiffContent::Text { lines }) = this
+                        .diff_view
+                        .as_ref()
+                        .and_then(|view| view.content.as_ref())
+                    else {
+                        return Vec::new();
+                    };
+                    range
+                        .filter_map(|index| lines.get(index).cloned())
+                        .map(|line| this.diff_line_row(&line))
+                        .collect()
+                },
+            )
+            .size_full()
+            .into_any_element(),
+            Some(DiffContent::Binary { message } | DiffContent::Unavailable { message }) => {
+                self.diff_notice(message.clone()).into_any_element()
+            }
+            Some(DiffContent::TooLarge { lines, bytes, .. }) => self
+                .diff_notice(format!(
+                    "Diff too large to render safely ({lines} lines, {bytes} bytes) — \
+                     open it with an external tool."
+                ))
+                .into_any_element(),
+        };
+        Some(
+            div()
+                .id("diff-overlay")
+                .key_context("Diff")
+                .track_focus(&self.diff_focus)
+                .absolute()
+                .inset_0()
+                .flex()
+                .p(px(26.0))
+                .bg(gpui::black().opacity(0.55))
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.diff_view = None;
+                    this.focus.focus(window);
+                    cx.notify();
+                }))
+                .child(
+                    div()
+                        .id("diff-panel")
+                        .flex_1()
+                        .flex()
+                        .flex_col()
+                        .rounded(px(10.0))
+                        .border_1()
+                        .border_color(self.theme.border_strong)
+                        .bg(self.theme.bg_panel)
+                        .shadow_lg()
+                        .overflow_hidden()
+                        // Clicks inside the panel must not fall through to the
+                        // backdrop's close handler.
+                        .on_click(|_, _, cx| cx.stop_propagation())
+                        .child(self.diff_header(view, line_count, cx))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_h(px(1.0))
+                                .bg(self.theme.bg_list)
+                                .child(body),
+                        ),
+                ),
+        )
+    }
+
+    /// The diff overlay's title bar: status, path, counts, and close.
+    fn diff_header(&self, view: &DiffView, line_count: usize, cx: &mut gpui::Context<Self>) -> Div {
+        let status_color = match view.status {
+            ChangeKind::Added => self.theme.green,
+            ChangeKind::Deleted => self.theme.red,
+            ChangeKind::Modified => self.theme.orange,
+            ChangeKind::Renamed | ChangeKind::Copied => self.theme.purple,
+            ChangeKind::Unknown => self.theme.text_faint,
+        };
+        div()
+            .h(px(40.0))
+            .flex_none()
+            .flex()
+            .items_center()
+            .gap(px(10.0))
+            .px(px(14.0))
+            .border_b_1()
+            .border_color(self.theme.border)
+            .bg(self.theme.bg_chrome)
+            .child(
+                div()
+                    .flex_none()
+                    .font_weight(FontWeight::BOLD)
+                    .text_size(px(12.0))
+                    .text_color(status_color)
+                    .child(change_letter(view.status)),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(1.0))
+                    .overflow_hidden()
+                    .text_ellipsis()
+                    .whitespace_nowrap()
+                    .text_size(px(12.5))
+                    .text_color(self.theme.text_primary)
+                    .child(view.title.clone()),
+            )
+            .children((line_count > 0).then(|| {
+                div()
+                    .flex_none()
+                    .text_size(px(11.0))
+                    .text_color(self.theme.text_faint)
+                    .child(counted(line_count, "line"))
+            }))
+            .child(
+                div()
+                    .flex_none()
+                    .text_size(px(11.0))
+                    .text_color(self.theme.text_faint)
+                    .child("Esc"),
+            )
+            .child(
+                div()
+                    .id("diff-close")
+                    .flex_none()
+                    .px(px(8.0))
+                    .rounded(px(4.0))
+                    .cursor_pointer()
+                    .text_size(px(13.0))
+                    .text_color(self.theme.text_secondary)
+                    .hover(|style| style.bg(self.theme.bg_hover))
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.diff_view = None;
+                        this.focus.focus(window);
+                        cx.notify();
+                    }))
+                    .child("✕"),
+            )
+    }
+
+    /// A centered message replacing diff lines when there are none to show.
+    fn diff_notice(&self, message: impl Into<gpui::SharedString>) -> Div {
+        div()
+            .size_full()
+            .flex()
+            .items_center()
+            .justify_center()
+            .px(px(30.0))
+            .text_size(px(12.0))
+            .text_color(self.theme.text_faint)
+            .child(message.into())
+    }
+
+    /// One rendered diff line: numbers, marker, and tinted content.
+    fn diff_line_row(&self, line: &DiffLine) -> Div {
+        let (marker, text_color, background) = match line.kind {
+            DiffLineKind::Addition => ("+", self.theme.green, Some(self.theme.green.opacity(0.08))),
+            DiffLineKind::Deletion => ("-", self.theme.red, Some(self.theme.red.opacity(0.08))),
+            DiffLineKind::Hunk => ("", self.theme.accent, Some(self.theme.bg_hover)),
+            DiffLineKind::Meta | DiffLineKind::Marker => ("", self.theme.text_faint, None),
+            DiffLineKind::Context => (" ", self.theme.text_secondary, None),
+        };
+        let number = |value: Option<u32>| {
+            div()
+                .w(px(44.0))
+                .flex_none()
+                .pr(px(6.0))
+                .text_size(px(10.5))
+                .text_color(self.theme.text_faint)
+                .child(value.map_or_else(String::new, |value| value.to_string()))
+        };
+        div()
+            .h(px(20.0))
+            .w_full()
+            .flex()
+            .items_center()
+            .when_some(background, gpui::Styled::bg)
+            .child(number(line.old_line))
+            .child(number(line.new_line))
+            .child(
+                div()
+                    .w(px(14.0))
+                    .flex_none()
+                    .text_size(px(11.5))
+                    .text_color(text_color)
+                    .child(marker),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(1.0))
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .text_size(px(11.5))
+                    .text_color(text_color)
+                    .child(line.text.clone()),
+            )
+    }
+
     fn status(&self) -> impl IntoElement {
         let path = self.path.clone();
         div()
@@ -1857,80 +2169,92 @@ impl SourcefourWindow {
     }
 }
 
+impl SourcefourWindow {
+    /// Registers every window-level action and drag handler on the root.
+    fn root_actions(root: Div, cx: &mut gpui::Context<Self>) -> Div {
+        root.on_action(cx.listener(|this, _: &SelectNextCommit, _, cx| {
+            this.move_selection(1, cx);
+        }))
+        .on_action(cx.listener(|this, _: &SelectPreviousCommit, _, cx| {
+            this.move_selection(-1, cx);
+        }))
+        .on_action(cx.listener(|this, _: &PageDown, _, cx| {
+            this.move_selection(PAGE_ROWS, cx);
+        }))
+        .on_action(cx.listener(|this, _: &PageUp, _, cx| {
+            this.move_selection(-PAGE_ROWS, cx);
+        }))
+        .on_action(cx.listener(|this, _: &SelectFirstCommit, _, cx| {
+            this.select_row(0, cx);
+        }))
+        .on_action(cx.listener(|this, _: &SelectLastLoadedCommit, _, cx| {
+            let last = this.history.visible_len().saturating_sub(1);
+            this.select_row(last, cx);
+        }))
+        .on_action(cx.listener(|this, _: &FocusFilter, window, cx| {
+            this.filter_input
+                .read(cx)
+                .focus_handle
+                .clone()
+                .focus(window);
+            cx.notify();
+        }))
+        .on_action(cx.listener(|this, _: &FilterEscape, window, cx| {
+            // First Escape clears the query; a second returns to history.
+            if this.history.filter.is_empty() {
+                this.focus.focus(window);
+            } else {
+                this.filter_input
+                    .update(cx, |input, cx| input.set_text("", cx));
+            }
+            cx.notify();
+        }))
+        .on_action(cx.listener(|this, _: &FilterEnter, window, cx| {
+            this.focus.focus(window);
+            cx.notify();
+        }))
+        .on_action(cx.listener(|this, _: &CloseDiff, window, cx| {
+            this.diff_view = None;
+            this.focus.focus(window);
+            cx.notify();
+        }))
+        // Splitter handles arm `dragging`; the window-wide handlers below do
+        // the moving, so a fast drag cannot escape a 3px handle.
+        .on_mouse_move(
+            cx.listener(|this, event: &gpui::MouseMoveEvent, window, cx| {
+                if let Some(splitter) = this.dragging {
+                    this.panels.drag(
+                        splitter,
+                        event.position.x.0,
+                        event.position.y.0,
+                        window.viewport_size().height.0,
+                    );
+                    cx.notify();
+                }
+            }),
+        )
+        .on_mouse_up(
+            gpui::MouseButton::Left,
+            cx.listener(|this, _, _, cx| {
+                if this.dragging.take().is_some() {
+                    this.persist_ui_state(cx);
+                    cx.notify();
+                }
+            }),
+        )
+    }
+}
+
 impl Render for SourcefourWindow {
     fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
         let columns = ColumnVisibility::for_available_width(
             window.viewport_size().width.0 - self.panels.sidebar,
         );
-        div()
-            .key_context("History")
+        let root = div().key_context("History");
+        Self::root_actions(root, cx)
             .track_focus(&self.focus)
-            .on_action(cx.listener(|this, _: &SelectNextCommit, _, cx| {
-                this.move_selection(1, cx);
-            }))
-            .on_action(cx.listener(|this, _: &SelectPreviousCommit, _, cx| {
-                this.move_selection(-1, cx);
-            }))
-            .on_action(cx.listener(|this, _: &PageDown, _, cx| {
-                this.move_selection(PAGE_ROWS, cx);
-            }))
-            .on_action(cx.listener(|this, _: &PageUp, _, cx| {
-                this.move_selection(-PAGE_ROWS, cx);
-            }))
-            .on_action(cx.listener(|this, _: &SelectFirstCommit, _, cx| {
-                this.select_row(0, cx);
-            }))
-            .on_action(cx.listener(|this, _: &SelectLastLoadedCommit, _, cx| {
-                let last = this.history.visible_len().saturating_sub(1);
-                this.select_row(last, cx);
-            }))
-            .on_action(cx.listener(|this, _: &FocusFilter, window, cx| {
-                this.filter_input
-                    .read(cx)
-                    .focus_handle
-                    .clone()
-                    .focus(window);
-                cx.notify();
-            }))
-            .on_action(cx.listener(|this, _: &FilterEscape, window, cx| {
-                // First Escape clears the query; a second returns to history.
-                if this.history.filter.is_empty() {
-                    this.focus.focus(window);
-                } else {
-                    this.filter_input
-                        .update(cx, |input, cx| input.set_text("", cx));
-                }
-                cx.notify();
-            }))
-            .on_action(cx.listener(|this, _: &FilterEnter, window, cx| {
-                this.focus.focus(window);
-                cx.notify();
-            }))
-            // Splitter handles arm `dragging`; the window-wide handlers below
-            // do the moving, so a fast drag cannot escape a 3px handle.
-            .on_mouse_move(
-                cx.listener(|this, event: &gpui::MouseMoveEvent, window, cx| {
-                    if let Some(splitter) = this.dragging {
-                        this.panels.drag(
-                            splitter,
-                            event.position.x.0,
-                            event.position.y.0,
-                            window.viewport_size().height.0,
-                        );
-                        cx.notify();
-                    }
-                }),
-            )
-            .on_mouse_up(
-                gpui::MouseButton::Left,
-                cx.listener(|this, _, _, cx| {
-                    if this.dragging.take().is_some() {
-                        this.persist_ui_state(cx);
-                        cx.notify();
-                    }
-                }),
-            )
             .size_full()
+            .relative()
             .flex()
             .flex_col()
             .bg(self.theme.bg_page)
@@ -1954,10 +2278,11 @@ impl Render for SourcefourWindow {
                             .child(self.header(columns))
                             .child(self.history(columns, cx))
                             .child(self.splitter(Splitter::Details, cx))
-                            .child(self.details()),
+                            .child(self.details(cx)),
                     ),
             )
             .child(self.status())
+            .children(self.diff_overlay(cx))
     }
 }
 

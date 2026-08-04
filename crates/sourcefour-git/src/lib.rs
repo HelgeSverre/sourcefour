@@ -6,6 +6,7 @@
 
 mod ahead_behind;
 mod detail;
+mod diff;
 mod discover;
 mod files;
 mod history;
@@ -19,6 +20,7 @@ use std::sync::atomic::AtomicBool;
 pub use crate::{
     ahead_behind::{AheadBehindCache, apply as apply_ahead_behind},
     detail::commit_detail,
+    diff::{DiffLimits, file_diff, file_diff_with_limits},
     discover::{discover, display_name},
     files::commit_files,
     history::{FIRST_BATCH_ROWS, GixHistoryCursor, NEXT_BATCH_ROWS},
