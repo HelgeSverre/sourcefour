@@ -4,6 +4,7 @@ mod app;
 mod demo;
 mod graph_paint;
 mod history;
+mod panels;
 mod theme;
 mod views;
 

@@ -14,9 +14,10 @@ use crate::{
     demo,
     graph_paint::{HALO_OPACITY, HALO_RADIUS, NODE_RADIUS, STROKE_WIDTH, Shape, row_shapes},
     history::{HistoryState, is_scoped_to, refreshed_scope, relative_date, toggled_scope},
+    panels::{PanelSizes, Splitter},
     theme::{
-        DETAILS_HEIGHT, GRAPH_WIDTH, HEADER_HEIGHT, HISTORY_ROW_HEIGHT, SIDEBAR_WIDTH,
-        STATUS_HEIGHT, TITLEBAR_HEIGHT, TOOLBAR_HEIGHT, Theme,
+        HEADER_HEIGHT, HISTORY_ROW_HEIGHT, SPLITTER_WIDTH, STATUS_HEIGHT, TITLEBAR_HEIGHT,
+        TOOLBAR_HEIGHT, Theme,
     },
 };
 
@@ -37,6 +38,9 @@ pub(crate) struct SourcefourWindow {
     cursor: Option<GixHistoryCursor>,
     theme: Theme,
     sections: SidebarSections,
+    panels: PanelSizes,
+    /// The splitter a mouse drag is currently moving.
+    dragging: Option<Splitter>,
     list_scroll: UniformListScrollHandle,
     focus: FocusHandle,
 }
@@ -193,54 +197,6 @@ fn counted(count: usize, noun: &str) -> String {
     }
 }
 
-fn toolbar_icon(theme: &Theme, index: u8) -> Div {
-    let color = if index == 0 || index == 4 {
-        theme.accent
-    } else {
-        theme.text_faint
-    };
-    match index {
-        0..=2 => div()
-            .size(px(16.0))
-            .flex()
-            .flex_col()
-            .items_center()
-            .justify_center()
-            .child(div().w(px(1.0)).h(px(6.0)).bg(color))
-            .child(div().w(px(7.0)).h(px(1.0)).bg(color))
-            .child(div().w(px(3.0)).h(px(1.0)).bg(color)),
-        3 => div()
-            .size(px(12.0))
-            .rounded_full()
-            .border_1()
-            .border_color(color)
-            .flex()
-            .items_center()
-            .justify_center()
-            .child(div().size(px(3.0)).rounded_full().bg(color)),
-        4 => branch_marker(theme),
-        5 => div()
-            .size(px(16.0))
-            .flex()
-            .flex_col()
-            .items_center()
-            .justify_center()
-            .gap(px(2.0))
-            .child(div().w(px(12.0)).h(px(1.0)).bg(color))
-            .child(div().w(px(7.0)).h(px(1.0)).bg(color)),
-        _ => div()
-            .size(px(16.0))
-            .flex()
-            .flex_col()
-            .items_center()
-            .justify_center()
-            .gap(px(2.0))
-            .child(div().w(px(12.0)).h(px(1.0)).bg(color))
-            .child(div().w(px(9.0)).h(px(1.0)).bg(color))
-            .child(div().w(px(6.0)).h(px(1.0)).bg(color)),
-    }
-}
-
 fn disclosure(theme: &Theme, expanded: bool) -> Div {
     let path = if expanded {
         "icons/chevron-down.svg"
@@ -255,46 +211,25 @@ fn disclosure(theme: &Theme, expanded: bool) -> Div {
         .child(svg().path(path).size(px(10.0)).text_color(theme.text_faint))
 }
 
-fn filter_icon(theme: &Theme) -> Div {
-    div()
-        .w(px(13.0))
-        .h(px(13.0))
-        .flex()
-        .items_end()
-        .justify_end()
-        .child(
-            div()
-                .size(px(9.0))
-                .rounded_full()
-                .border_1()
-                .border_color(theme.text_faint),
-        )
-        .child(div().w(px(5.0)).h(px(1.0)).bg(theme.text_faint))
+fn filter_icon(theme: &Theme) -> gpui::Svg {
+    svg()
+        .path("icons/search.svg")
+        .size(px(13.0))
+        .text_color(theme.text_faint)
 }
 
-fn branch_marker(theme: &Theme) -> Div {
-    div()
-        .w(px(13.0))
-        .h(px(13.0))
-        .flex()
-        .items_center()
-        .gap(px(2.0))
-        .child(
-            div()
-                .size(px(4.0))
-                .rounded_full()
-                .border_1()
-                .border_color(theme.text_faint),
-        )
-        .child(div().w(px(6.0)).h(px(1.0)).bg(theme.text_faint))
-}
-
-fn remote_marker(theme: &Theme) -> Div {
-    div()
+fn branch_marker(theme: &Theme) -> gpui::Svg {
+    svg()
+        .path("icons/git-branch.svg")
         .size(px(12.0))
-        .rounded_full()
-        .border_1()
-        .border_color(theme.orange)
+        .text_color(theme.text_faint)
+}
+
+fn remote_marker(theme: &Theme) -> gpui::Svg {
+    svg()
+        .path("icons/globe.svg")
+        .size(px(12.0))
+        .text_color(theme.orange)
 }
 
 /// Color of a graph line, wrapping when lanes exceed the palette.
@@ -440,6 +375,8 @@ impl SourcefourWindow {
             cursor: None,
             theme: Theme::dark(),
             sections: SidebarSections::default(),
+            panels: PanelSizes::default(),
+            dragging: None,
             list_scroll: UniformListScrollHandle::new(),
             focus: cx.focus_handle(),
         };
@@ -743,13 +680,14 @@ impl SourcefourWindow {
     }
 
     fn toolbar(&self) -> impl IntoElement {
-        let action = |index: u8, name: &'static str, planned: bool| {
+        let action = |name: &'static str, icon: &'static str, planned: bool| {
             div()
                 .h_full()
                 .flex()
                 .flex_col()
                 .justify_center()
                 .items_center()
+                .gap(px(3.0))
                 .w(px(58.0))
                 .text_size(px(10.0))
                 .text_color(if planned {
@@ -758,7 +696,11 @@ impl SourcefourWindow {
                     self.theme.text_secondary
                 })
                 .hover(|this| this.bg(self.theme.bg_hover))
-                .child(toolbar_icon(&self.theme, index))
+                .child(svg().path(icon).size(px(15.0)).text_color(if planned {
+                    self.theme.text_faint
+                } else {
+                    self.theme.accent
+                }))
                 .child(name)
         };
         div()
@@ -771,13 +713,13 @@ impl SourcefourWindow {
             .border_b_1()
             .border_color(self.theme.border)
             .bg(self.theme.bg_chrome)
-            .child(action(0, "Fetch", false))
-            .child(action(1, "Pull", true))
-            .child(action(2, "Push", true))
-            .child(action(3, "Commit", true))
-            .child(action(4, "Branch", false))
-            .child(action(5, "Merge", true))
-            .child(action(6, "Stash", true))
+            .child(action("Fetch", "icons/cloud-download.svg", false))
+            .child(action("Pull", "icons/arrow-down-to-line.svg", true))
+            .child(action("Push", "icons/arrow-up-from-line.svg", true))
+            .child(action("Commit", "icons/git-commit-horizontal.svg", true))
+            .child(action("Branch", "icons/git-branch.svg", false))
+            .child(action("Merge", "icons/git-merge.svg", true))
+            .child(action("Stash", "icons/archive.svg", true))
             .child(div().flex_grow())
             .child(
                 div()
@@ -817,6 +759,11 @@ impl SourcefourWindow {
             .justify_between()
             .px(px(14.0))
             .pb(px(4.0))
+            // A subtle divider between the sidebar's sections; the first sits
+            // under the toolbar's own border and needs none.
+            .when(section != SidebarSection::Worktrees, |this| {
+                this.border_t_1().border_color(self.theme.border)
+            })
             .text_size(px(10.0))
             .font_weight(FontWeight::BOLD)
             .text_color(self.theme.text_faint)
@@ -846,13 +793,12 @@ impl SourcefourWindow {
     /// The sidebar built from real repository metadata.
     fn repository_sidebar(&self, snapshot: &RepoSnapshot, cx: &mut gpui::Context<Self>) -> Div {
         div()
-            .w(px(SIDEBAR_WIDTH))
+            .w(px(self.panels.sidebar))
             .flex_none()
             .flex()
             .flex_col()
+            .overflow_hidden()
             .bg(self.theme.bg_panel)
-            .border_r_1()
-            .border_color(self.theme.border)
             .child(self.section(
                 "WORKTREES",
                 snapshot.worktrees.len().to_string(),
@@ -1046,13 +992,12 @@ impl SourcefourWindow {
                 .child("Loading repository metadata...")
         };
         div()
-            .w(px(SIDEBAR_WIDTH))
+            .w(px(self.panels.sidebar))
             .flex_none()
             .flex()
             .flex_col()
+            .overflow_hidden()
             .bg(self.theme.bg_panel)
-            .border_r_1()
-            .border_color(self.theme.border)
             .child(self.section("WORKTREES", "", SidebarSection::Worktrees, cx))
             .when(self.sections.worktrees, |this| this.child(loading()))
             .child(self.section("BRANCHES", "", SidebarSection::Branches, cx))
@@ -1073,14 +1018,20 @@ impl SourcefourWindow {
             .text_size(px(10.0))
             .font_weight(FontWeight::BOLD)
             .text_color(self.theme.text_faint)
-            .child(div().w(px(GRAPH_WIDTH)))
-            .child(div().flex_grow().pl(px(10.0)).child("DESCRIPTION"))
+            .child(div().w(px(self.panels.graph)).flex_none())
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(1.0))
+                    .pl(px(10.0))
+                    .child("DESCRIPTION"),
+            )
             .when(columns.author, |this| {
-                this.child(div().w(px(148.0)).child("AUTHOR"))
+                this.child(div().w(px(148.0)).flex_none().child("AUTHOR"))
             })
-            .child(div().w(px(96.0)).child("DATE"))
+            .child(div().w(px(96.0)).flex_none().child("DATE"))
             .when(columns.hash, |this| {
-                this.child(div().w(px(74.0)).child("HASH"))
+                this.child(div().w(px(74.0)).flex_none().child("HASH"))
             })
     }
 
@@ -1091,6 +1042,47 @@ impl SourcefourWindow {
             .min_h(px(1.0))
             .child(self.history_list(columns, cx))
             .children(self.graph_overlay(cx))
+            // The graph divider floats over the list so it costs no layout.
+            .child(
+                self.splitter(Splitter::Graph, cx)
+                    .absolute()
+                    .top_0()
+                    .left(px(self.panels.graph - SPLITTER_WIDTH)),
+            )
+    }
+
+    /// A draggable divider; the window's mouse handlers do the actual moving.
+    fn splitter(&self, splitter: Splitter, cx: &mut gpui::Context<Self>) -> Div {
+        let vertical = matches!(splitter, Splitter::Sidebar | Splitter::Graph);
+        let dragging = self.dragging == Some(splitter);
+        let base = div()
+            .flex_none()
+            // The graph divider floats over content, so it only shows itself
+            // when interacted with; the panel dividers read as borders.
+            .bg(if dragging {
+                self.theme.accent
+            } else if matches!(splitter, Splitter::Graph) {
+                gpui::transparent_black()
+            } else {
+                self.theme.border
+            })
+            .hover(|style| style.bg(self.theme.accent))
+            .on_mouse_down(
+                gpui::MouseButton::Left,
+                cx.listener(move |this, _, _, cx| {
+                    this.dragging = Some(splitter);
+                    cx.notify();
+                }),
+            );
+        if vertical {
+            base.w(px(SPLITTER_WIDTH))
+                .h_full()
+                .cursor(gpui::CursorStyle::ResizeLeftRight)
+        } else {
+            base.h(px(SPLITTER_WIDTH))
+                .w_full()
+                .cursor(gpui::CursorStyle::ResizeUpDown)
+        }
     }
 
     /// The single absolute canvas painting all visible graph rows (§8.4).
@@ -1113,7 +1105,7 @@ impl SourcefourWindow {
             .absolute()
             .top_0()
             .left_0()
-            .w(px(GRAPH_WIDTH))
+            .w(px(self.panels.graph))
             .h_full(),
         )
     }
@@ -1197,10 +1189,12 @@ impl SourcefourWindow {
             .hover(|style| style.bg(self.theme.bg_hover))
             .text_color(self.theme.text_primary)
             // The graph column is reserved per row but painted by the overlay.
-            .child(div().w(px(GRAPH_WIDTH)).h_full().flex_none())
+            .child(div().w(px(self.panels.graph)).h_full().flex_none())
             .child(
                 div()
-                    .flex_grow()
+                    // flex-basis 0: a long subject must never widen this cell
+                    // and push the fixed columns out of the header's alignment.
+                    .flex_1()
                     .min_w(px(1.0))
                     // Without clipping, a long subject runs straight through the
                     // author column instead of stopping at it.
@@ -1233,6 +1227,7 @@ impl SourcefourWindow {
             .child(
                 div()
                     .w(px(96.0))
+                    .flex_none()
                     .text_size(px(11.5))
                     .text_color(self.theme.text_secondary)
                     .child(relative_date(now, row.commit_time)),
@@ -1241,6 +1236,7 @@ impl SourcefourWindow {
                 this.child(
                     div()
                         .w(px(74.0))
+                        .flex_none()
                         .text_size(px(11.0))
                         .text_color(if selected {
                             self.theme.accent
@@ -1280,15 +1276,13 @@ impl SourcefourWindow {
             },
         );
         div()
-            .h(px(DETAILS_HEIGHT))
+            .h(px(self.panels.details))
             .flex_none()
             .flex()
             .flex_col()
             .gap(px(6.0))
             .px(px(14.0))
             .pt(px(10.0))
-            .border_t_1()
-            .border_color(self.theme.border)
             .bg(self.theme.bg_panel)
             .child(
                 div()
@@ -1359,6 +1353,29 @@ impl Render for SourcefourWindow {
                 let last = this.history.len().saturating_sub(1);
                 this.select_row(last, cx);
             }))
+            // Splitter handles arm `dragging`; the window-wide handlers below
+            // do the moving, so a fast drag cannot escape a 3px handle.
+            .on_mouse_move(
+                cx.listener(|this, event: &gpui::MouseMoveEvent, window, cx| {
+                    if let Some(splitter) = this.dragging {
+                        this.panels.drag(
+                            splitter,
+                            event.position.x.0,
+                            event.position.y.0,
+                            window.viewport_size().height.0,
+                        );
+                        cx.notify();
+                    }
+                }),
+            )
+            .on_mouse_up(
+                gpui::MouseButton::Left,
+                cx.listener(|this, _, _, cx| {
+                    if this.dragging.take().is_some() {
+                        cx.notify();
+                    }
+                }),
+            )
             .size_full()
             .flex()
             .flex_col()
@@ -1372,6 +1389,7 @@ impl Render for SourcefourWindow {
                     .flex()
                     .min_h(px(1.0))
                     .child(self.sidebar(cx))
+                    .child(self.splitter(Splitter::Sidebar, cx))
                     .child(
                         div()
                             .flex_grow()
@@ -1381,6 +1399,7 @@ impl Render for SourcefourWindow {
                             .bg(self.theme.bg_list)
                             .child(self.header(columns))
                             .child(self.history(columns, cx))
+                            .child(self.splitter(Splitter::Details, cx))
                             .child(self.details()),
                     ),
             )
