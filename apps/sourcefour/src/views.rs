@@ -60,6 +60,10 @@ pub(crate) struct SourcefourWindow {
     preferred_diff_mode: DiffMode,
     /// Which parent the selection's files and diffs compare against (§6.10).
     compare_parent: DiffParent,
+    /// §4.6: Space toggles the details pane collapsed.
+    details_collapsed: bool,
+    /// Focus target of the details pane (§4.6: Enter focuses it).
+    details_focus: FocusHandle,
     list_scroll: UniformListScrollHandle,
     focus: FocusHandle,
     /// The §4.7 filter field.
@@ -79,6 +83,8 @@ actions!(
         FilterEscape,
         FilterEnter,
         CloseDiff,
+        ToggleDetails,
+        FocusDetails,
     ]
 );
 
@@ -330,6 +336,9 @@ const HISTORY_REQUEST: RequestId = RequestId(2);
 
 /// §6.10 selection debounce before changed files are decoded.
 const FILES_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(50);
+
+/// §4.6: relative dates refresh once per minute, never per frame.
+const MINUTE_TICK: u16 = 60;
 
 /// Whether a background result still belongs to the window that asked for it.
 ///
@@ -603,6 +612,8 @@ impl SourcefourWindow {
             diff_focus: cx.focus_handle(),
             preferred_diff_mode: DiffMode::Unified,
             compare_parent: DiffParent::FirstParent,
+            details_collapsed: false,
+            details_focus: cx.focus_handle(),
             list_scroll: UniformListScrollHandle::new(),
             focus: cx.focus_handle(),
             filter_input: cx
@@ -621,6 +632,19 @@ impl SourcefourWindow {
         window.sections.apply(&state);
         window.panels.apply(&state);
         window.preferred_diff_mode = DiffMode::from_name(state.diff_mode.as_deref());
+        window.details_collapsed = state.details_collapsed;
+        // §4.6: relative dates refresh once a minute, never per frame.
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_secs(u64::from(MINUTE_TICK)))
+                    .await;
+                if this.update(cx, |_, cx| cx.notify()).is_err() {
+                    return;
+                }
+            }
+        })
+        .detach();
         if launch.demo {
             // The fixture is seeded as if a traversal had already completed, so
             // every capture goes through the real rendering path (§12.4).
@@ -1464,6 +1488,7 @@ impl SourcefourWindow {
             ),
             collapsed_sections: self.sections.collapsed_names(),
             diff_mode: Some(self.preferred_diff_mode.name().to_owned()),
+            details_collapsed: self.details_collapsed,
         };
         cx.background_executor()
             .spawn(async move { state.save() })
@@ -1839,7 +1864,62 @@ impl SourcefourWindow {
             }))
     }
 
-    fn details(&self, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+    /// §4.6: the collapsed details strip; Space or a click expands it.
+    fn collapsed_details(
+        &self,
+        hash: &str,
+        subject: &str,
+        cx: &mut gpui::Context<Self>,
+    ) -> gpui::AnyElement {
+        let hash = hash.to_owned();
+        let subject = subject.to_owned();
+        div()
+            .id("details-collapsed")
+            .h(px(30.0))
+            .flex_none()
+            .flex()
+            .items_center()
+            .gap(px(10.0))
+            .px(px(14.0))
+            .border_t_1()
+            .border_color(self.theme.border)
+            .bg(self.theme.bg_panel)
+            .cursor_pointer()
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.details_collapsed = false;
+                this.persist_ui_state(cx);
+                cx.notify();
+            }))
+            .child(
+                div()
+                    .flex_none()
+                    .font_family(MONO_FONT)
+                    .text_size(px(11.0))
+                    .text_color(self.theme.accent)
+                    .child(hash),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(1.0))
+                    .overflow_hidden()
+                    .text_ellipsis()
+                    .whitespace_nowrap()
+                    .text_size(px(11.5))
+                    .text_color(self.theme.text_secondary)
+                    .child(subject),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .text_size(px(10.0))
+                    .text_color(self.theme.text_faint)
+                    .child("Space to expand"),
+            )
+            .into_any_element()
+    }
+
+    fn details(&self, cx: &mut gpui::Context<Self>) -> gpui::AnyElement {
         let DetailLines {
             hash,
             subject,
@@ -1849,6 +1929,9 @@ impl SourcefourWindow {
             parent_choices,
             body,
         } = self.detail_lines();
+        if self.details_collapsed {
+            return self.collapsed_details(&hash, &subject, cx);
+        }
         div()
             .h(px(self.panels.details))
             .flex_none()
@@ -1884,6 +1967,7 @@ impl SourcefourWindow {
             .child(
                 div()
                     .id("details-scroll")
+                    .track_focus(&self.details_focus)
                     .flex_grow()
                     .min_h(px(0.0))
                     .overflow_y_scroll()
@@ -1923,6 +2007,7 @@ impl SourcefourWindow {
                             .map(|(index, file)| self.file_row(index, &file, cx)),
                     ),
             )
+            .into_any_element()
     }
 
     /// Switches the comparison parent and reloads files for the selection.
@@ -2419,6 +2504,13 @@ impl SourcefourWindow {
             .text_size(px(10.0))
             .text_color(self.theme.text_faint)
             .child(path)
+            .children(self.history.is_filtering().then(|| {
+                div().text_color(self.theme.accent).child(format!(
+                    "Searching loaded history — {} of {} match",
+                    self.history.visible_len(),
+                    self.history.rows.len()
+                ))
+            }))
             .child(div().flex_grow())
             .child(self.snapshot().map_or_else(
                 || String::from("Loading repository metadata..."),
@@ -2474,6 +2566,19 @@ impl SourcefourWindow {
         .on_action(cx.listener(|this, _: &CloseDiff, window, cx| {
             this.diff_view = None;
             this.focus.focus(window);
+            cx.notify();
+        }))
+        .on_action(cx.listener(|this, _: &ToggleDetails, _, cx| {
+            this.details_collapsed = !this.details_collapsed;
+            this.persist_ui_state(cx);
+            cx.notify();
+        }))
+        .on_action(cx.listener(|this, _: &FocusDetails, window, cx| {
+            if this.details_collapsed {
+                this.details_collapsed = false;
+                this.persist_ui_state(cx);
+            }
+            this.details_focus.focus(window);
             cx.notify();
         }))
         // Splitter handles arm `dragging`; the window-wide handlers below do
@@ -2535,7 +2640,10 @@ impl Render for SourcefourWindow {
                             .bg(self.theme.bg_list)
                             .child(self.header(columns))
                             .child(self.history(columns, cx))
-                            .child(self.splitter(Splitter::Details, cx))
+                            .children(
+                                (!self.details_collapsed)
+                                    .then(|| self.splitter(Splitter::Details, cx)),
+                            )
                             .child(self.details(cx)),
                     ),
             )

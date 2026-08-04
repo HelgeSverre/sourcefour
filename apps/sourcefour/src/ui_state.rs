@@ -19,6 +19,7 @@ pub(crate) struct UiState {
     pub(crate) collapsed_sections: Vec<String>,
     /// "unified" or "split".
     pub(crate) diff_mode: Option<String>,
+    pub(crate) details_collapsed: bool,
 }
 
 impl UiState {
@@ -92,6 +93,7 @@ mod tests {
             ]),
             collapsed_sections: vec![String::from("branches")],
             diff_mode: Some(String::from("split")),
+            details_collapsed: true,
         };
 
         state.save_to(&path)?;
