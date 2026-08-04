@@ -215,9 +215,20 @@ fn temporary_directory() -> TempDir {
     TempDir::new().expect("could not create a temporary directory")
 }
 
+/// Canonicalizes without the `\\?\` prefix Windows adds.
+///
+/// Fixtures hand these paths to the `git` executable, and Git rejects verbatim
+/// paths outright: `could not create leading directories ... Invalid argument`.
 fn canonical(path: &Path) -> PathBuf {
-    std::fs::canonicalize(path)
-        .unwrap_or_else(|error| panic!("could not canonicalize `{}`: {error}", path.display()))
+    let canonical = std::fs::canonicalize(path)
+        .unwrap_or_else(|error| panic!("could not canonicalize `{}`: {error}", path.display()));
+    let Some(stripped) = canonical
+        .to_str()
+        .and_then(|path| path.strip_prefix(r"\\?\"))
+    else {
+        return canonical;
+    };
+    PathBuf::from(stripped)
 }
 
 fn run_git(directory: &Path, arguments: &[&str]) -> String {
