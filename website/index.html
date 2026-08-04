@@ -32,7 +32,7 @@
 
 <header class="hero">
   <div class="wrap">
-    <h1><code>git log</code> deserved <em>better</em></h1>
+    <h1 aria-label="Sourcefour">Source<span class="sfx" id="sfx" aria-hidden="true"><em>four</em></span></h1>
     <p class="lede">
       One command in any repository: the graph, the worktrees, the diffs — live,
       native, and asking for nothing. No account, no daemon, no configuration.
@@ -277,6 +277,24 @@
 </footer>
 
 <script>
+  // The name is the joke: Sourcetree, incremented. tree++ == four.
+  // Crawlers, no-JS and reduced-motion visitors keep the static markup.
+  const sfx = document.getElementById("sfx");
+  if (!matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    sfx.textContent = "tree";
+    setTimeout(() => sfx.classList.add("blink"), 900);
+    setTimeout(() => (sfx.innerHTML = "tree<em>++</em>"), 1700);
+    setTimeout(() => {
+      sfx.classList.remove("blink");
+      sfx.innerHTML = "<em>four</em>";
+      let four = true;
+      setInterval(() => {
+        four = !four;
+        sfx.innerHTML = four ? "<em>four</em>" : "<em>4</em>";
+      }, 1100);
+    }, 3000);
+  }
+
   // Click-to-copy on every command block.
   for (const button of document.querySelectorAll(".copy")) {
     button.addEventListener("click", async () => {

@@ -181,6 +181,21 @@ section {
   font-style: normal;
   color: var(--accent);
 }
+/* The suffix slot is as wide as "four", so the mark stays put while the
+   ending swaps; the intro states are wider and recenter on their hits. */
+.hero h1 .sfx {
+  display: inline-block;
+  text-align: left;
+  min-width: 2.15em;
+}
+.hero h1 .sfx.blink {
+  animation: blink-hard 0.14s steps(2, start) infinite;
+}
+@keyframes blink-hard {
+  to {
+    visibility: hidden;
+  }
+}
 .hero .lede {
   font-size: 1.25rem;
   max-width: 44ch;
