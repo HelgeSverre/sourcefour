@@ -197,7 +197,7 @@ fn demo_run() -> WorkflowRun {
         sha: String::from("b61a08d2f4c"),
         status: CheckStatus::Completed(CheckConclusion::Failure),
         started_at: Some(DEMO_BASE),
-        completed_at: Some(DEMO_BASE + 222),
+        completed_at: Some(DEMO_BASE + 125),
         html_url: String::new(),
     }
 }
@@ -1303,52 +1303,78 @@ impl SourcefourWindow {
                         fmt_duration(duration_of(run_start, run_end)).to_uppercase()
                     )),
             )
-            .children(jobs.iter().map(|job| {
-                let offset = duration_of(run_start, job.started_at).unwrap_or(0);
-                let length = elapsed_of(job.started_at, job.completed_at, now).unwrap_or(0);
-                #[expect(clippy::cast_precision_loss, reason = "display fractions")]
-                let (left, width) = (
-                    (offset as f32 / wall as f32).clamp(0.0, 0.98),
-                    (length as f32 / wall as f32).clamp(0.005, 1.0),
-                );
+            .child(
                 div()
-                    .h(px(16.0))
                     .flex()
-                    .items_center()
                     .gap(px(8.0))
-                    .child(
-                        div()
-                            .w(px(150.0))
-                            .flex_none()
-                            .overflow_hidden()
-                            .text_ellipsis()
-                            .whitespace_nowrap()
-                            .text_size(px(10.0))
-                            .text_color(self.theme.text_secondary)
-                            .child(job.name.clone()),
-                    )
-                    .child(
-                        div().flex_1().relative().h(px(8.0)).child(
+                    .child(div().w(px(150.0)).flex_none().flex().flex_col().children(
+                        jobs.iter().map(|job| {
                             div()
-                                .absolute()
-                                .top(px(1.0))
-                                .left(gpui::relative(left))
-                                .w(gpui::relative(width))
-                                .h(px(6.0))
-                                .rounded(px(3.0))
-                                .bg(match job.status {
-                                    CheckStatus::Completed(CheckConclusion::Failure) => {
-                                        self.theme.red.opacity(0.7)
-                                    }
-                                    CheckStatus::Completed(CheckConclusion::Success) => {
-                                        self.theme.green.opacity(0.6)
-                                    }
-                                    CheckStatus::InProgress => self.theme.orange.opacity(0.7),
-                                    _ => self.theme.border_strong,
-                                }),
-                        ),
-                    )
-            }))
+                                .h(px(16.0))
+                                .flex()
+                                .items_center()
+                                .overflow_hidden()
+                                .text_ellipsis()
+                                .whitespace_nowrap()
+                                .text_size(px(10.0))
+                                .text_color(self.theme.text_secondary)
+                                .child(job.name.clone())
+                        }),
+                    ))
+                    .child(
+                        // The plot itself: a slightly darker ruled surface,
+                        // so the time axis reads as its own area.
+                        div()
+                            .flex_1()
+                            .relative()
+                            .border_1()
+                            .border_color(self.theme.border)
+                            .bg(gpui::black().opacity(0.18))
+                            .children([0.25_f32, 0.5, 0.75].map(|fraction| {
+                                div()
+                                    .absolute()
+                                    .top_0()
+                                    .bottom_0()
+                                    .left(gpui::relative(fraction))
+                                    .w(px(1.0))
+                                    .bg(self.theme.border)
+                            }))
+                            .child(
+                                div().flex().flex_col().py(px(2.0)).children(
+                                    jobs.iter()
+                                        .map(|job| self.waterfall_bar(job, run_start, wall, now)),
+                                ),
+                            ),
+                    ),
+            )
+    }
+
+    /// One job's bar on the shared wall-clock axis.
+    fn waterfall_bar(&self, job: &WorkflowJob, run_start: Option<i64>, wall: i64, now: i64) -> Div {
+        let offset = duration_of(run_start, job.started_at).unwrap_or(0);
+        let length = elapsed_of(job.started_at, job.completed_at, now).unwrap_or(0);
+        #[expect(clippy::cast_precision_loss, reason = "display fractions")]
+        let (left, width) = (
+            (offset as f32 / wall as f32).clamp(0.0, 0.98),
+            (length as f32 / wall as f32).clamp(0.005, 1.0),
+        );
+        div().h(px(16.0)).relative().child(
+            div()
+                .absolute()
+                .top(px(5.0))
+                .left(gpui::relative(left))
+                .w(gpui::relative(width))
+                .h(px(6.0))
+                .rounded(px(3.0))
+                .bg(match job.status {
+                    CheckStatus::Completed(CheckConclusion::Failure) => self.theme.red.opacity(0.7),
+                    CheckStatus::Completed(CheckConclusion::Success) => {
+                        self.theme.green.opacity(0.6)
+                    }
+                    CheckStatus::InProgress => self.theme.orange.opacity(0.7),
+                    _ => self.theme.border_strong,
+                }),
+        )
     }
 }
 
