@@ -199,7 +199,15 @@ fn launch_exit_code(opened: bool, failed: bool) -> ExitCode {
 }
 
 /// Renders a path the way a shell prompt would, shortening the home directory.
+///
+/// Windows hands back `\\?\C:\…` verbatim paths from canonicalization, which no
+/// user would recognise and which also defeats the home-directory match, so
+/// that prefix goes before anything else looks at the path.
 pub(crate) fn display_path(path: &Path) -> String {
+    let path = path
+        .to_str()
+        .and_then(|text| text.strip_prefix(r"\\?\"))
+        .map_or(path, Path::new);
     let home = crate::ui_state::home_directory();
     match home
         .as_deref()
@@ -391,5 +399,11 @@ mod tests {
         );
         assert_eq!(display_path(&home), "~");
         assert_eq!(display_path(Path::new("/opt/elsewhere")), "/opt/elsewhere");
+
+        // Windows canonicalization yields these; they must never reach the eye.
+        assert_eq!(
+            display_path(Path::new(r"\\?\C:\code\sourcefour")),
+            r"C:\code\sourcefour"
+        );
     }
 }
