@@ -8,6 +8,7 @@ mod ahead_behind;
 mod detail;
 mod diff;
 mod discover;
+mod fetch;
 mod files;
 mod history;
 mod refs;
@@ -22,6 +23,7 @@ pub use crate::{
     detail::commit_detail,
     diff::{DiffLimits, file_diff, file_diff_with_limits},
     discover::{discover, display_name},
+    fetch::fetch,
     files::commit_files,
     history::{FIRST_BATCH_ROWS, GixHistoryCursor, NEXT_BATCH_ROWS},
     refs::{References, references},

@@ -138,3 +138,23 @@ git checkout -q main
 
 echo "Playground ready at $root"
 git log --oneline --graph --all | head -20
+
+# ── a local origin so Fetch has something to pull ──────────────────────
+origin_root="$(dirname "$root")/playground-origin.git"
+rm -rf "$origin_root"
+git clone -q --bare "$root" "$origin_root"
+git -C "$origin_root" symbolic-ref HEAD refs/heads/main
+git remote add origin "$origin_root"
+git fetch -q origin
+git branch -q --set-upstream-to=origin/main main
+tmp="$(mktemp -d)"
+git clone -q "$origin_root" "$tmp/seed"
+(
+  cd "$tmp/seed"
+  echo "upstream news" > news.txt
+  git add -A
+  git commit -q -m "feat: upstream work waiting to be fetched"
+  git push -q origin main
+)
+rm -rf "$tmp"
+echo "Origin ready at $origin_root (one commit ahead — try Fetch)"

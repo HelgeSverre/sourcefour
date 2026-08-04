@@ -2,12 +2,15 @@ use gpui::{
     Div, FocusHandle, FontWeight, IntoElement, Render, StatefulInteractiveElement,
     UniformListScrollHandle, Window, actions, div, prelude::*, px, svg, uniform_list,
 };
-use sourcefour_git::{GixHistoryCursor, HistoryCursor as _};
+use std::sync::{Arc, Mutex, atomic::AtomicBool};
+
+use sourcefour_git::{GixHistoryCursor, HistoryCursor as _, OperationSink};
 use sourcefour_model::{
     AheadBehindState, AheadBehindUpdate, ChangeKind, ChangedFile, CommitFiles, DiffContent,
-    DiffLine, DiffLineKind, DiffParent, FileDiffRequest, Generation, HeadSnapshot, HistoryBatch,
-    HistoryQuery, HistoryScope, LoadState, RepoEnvelope, RepoFailure, RepoLocation, RepoSessionId,
-    RepoSnapshot, RequestId, WorktreeAccessibility,
+    DiffLine, DiffLineKind, DiffParent, FetchRequest, FileDiffRequest, Generation, HeadSnapshot,
+    HistoryBatch, HistoryQuery, HistoryScope, LoadState, OperationOutcome, OperationProgress,
+    RepoEnvelope, RepoFailure, RepoLocation, RepoSessionId, RepoSnapshot, RequestId,
+    WorktreeAccessibility,
 };
 
 use crate::{
@@ -62,6 +65,12 @@ pub(crate) struct SourcefourWindow {
     compare_parent: DiffParent,
     /// §4.6: Space toggles the details pane collapsed.
     details_collapsed: bool,
+    /// Latest fetch progress while one runs; `None` when idle (§6.12).
+    fetching: Option<Arc<Mutex<Option<OperationProgress>>>>,
+    /// Cooperative cancellation flag of the running fetch.
+    fetch_cancel: Option<Arc<AtomicBool>>,
+    /// The last fetch outcome: success flag and message.
+    fetch_status: Option<(bool, String)>,
     /// Focus target of the details pane (§4.6: Enter focuses it).
     details_focus: FocusHandle,
     list_scroll: UniformListScrollHandle,
@@ -150,6 +159,17 @@ impl Render for SectionDragPreview {
             .font_weight(FontWeight::BOLD)
             .text_color(self.theme.text_primary)
             .child(self.title)
+    }
+}
+
+/// Forwards the newest fetch progress into shared state; latest wins.
+struct LatestSink(Arc<Mutex<Option<OperationProgress>>>);
+
+impl OperationSink for LatestSink {
+    fn report(&self, progress: OperationProgress) {
+        if let Ok(mut latest) = self.0.lock() {
+            *latest = Some(progress);
+        }
     }
 }
 
@@ -614,6 +634,9 @@ impl SourcefourWindow {
             compare_parent: DiffParent::FirstParent,
             details_collapsed: false,
             details_focus: cx.focus_handle(),
+            fetching: None,
+            fetch_cancel: None,
+            fetch_status: None,
             list_scroll: UniformListScrollHandle::new(),
             focus: cx.focus_handle(),
             filter_input: cx
@@ -1076,7 +1099,7 @@ impl SourcefourWindow {
             .border_b_1()
             .border_color(self.theme.border)
             .bg(self.theme.bg_chrome)
-            .child(action("Fetch", "icons/cloud-download.svg", false))
+            .child(self.fetch_button(cx))
             .child(action("Pull", "icons/arrow-down-to-line.svg", true))
             .child(action("Push", "icons/arrow-up-from-line.svg", true))
             .child(action("Commit", "icons/git-commit-horizontal.svg", true))
@@ -1085,6 +1108,44 @@ impl SourcefourWindow {
             .child(action("Stash", "icons/archive.svg", true))
             .child(div().flex_grow())
             .child(self.filter_box(window, cx))
+    }
+
+    /// The toolbar's Fetch action: live, and disabled while one runs (§6.12).
+    fn fetch_button(&self, cx: &mut gpui::Context<Self>) -> gpui::Stateful<Div> {
+        let running = self.fetching.is_some();
+        div()
+            .id("fetch")
+            .h_full()
+            .flex()
+            .flex_col()
+            .justify_center()
+            .items_center()
+            .gap(px(3.0))
+            .w(px(58.0))
+            .text_size(px(10.0))
+            .text_color(if running {
+                self.theme.text_faint
+            } else {
+                self.theme.text_secondary
+            })
+            .when(!running, |this| {
+                this.cursor_pointer()
+                    .hover(|style| style.bg(self.theme.bg_hover))
+            })
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.start_fetch(cx);
+            }))
+            .child(
+                svg()
+                    .path("icons/cloud-download.svg")
+                    .size(px(15.0))
+                    .text_color(if running {
+                        self.theme.text_faint
+                    } else {
+                        self.theme.accent
+                    }),
+            )
+            .child(if running { "Fetching" } else { "Fetch" })
     }
 
     /// The §4.7 filter field, wrapping the real text input.
@@ -1471,6 +1532,96 @@ impl SourcefourWindow {
                     .top_0()
                     .left(px(self.panels.graph - SPLITTER_WIDTH)),
             )
+    }
+
+    /// Starts a fetch of every remote through the user's own Git (§6.12).
+    ///
+    /// A second fetch while one runs is a no-op: the button disables, and
+    /// this guard holds even if a keybinding races the render.
+    fn start_fetch(&mut self, cx: &mut gpui::Context<Self>) {
+        if self.fetching.is_some() {
+            return;
+        }
+        let Some(location) = self.location.clone() else {
+            return;
+        };
+        let request = FetchRequest {
+            worktree: self
+                .snapshot()
+                .and_then(|snapshot| snapshot.active_worktree.clone())
+                .unwrap_or_else(|| sourcefour_model::WorktreeId(String::from("active"))),
+            remote: None,
+            prune: false,
+        };
+        let latest = Arc::new(Mutex::new(None));
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.fetching = Some(Arc::clone(&latest));
+        self.fetch_cancel = Some(Arc::clone(&cancel));
+        self.fetch_status = None;
+        cx.spawn(async move |this, cx| {
+            let outcome = cx
+                .background_executor()
+                .spawn(async move {
+                    sourcefour_git::fetch(&location, &request, &LatestSink(latest), &cancel)
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                this.fetching = None;
+                this.fetch_cancel = None;
+                match outcome {
+                    Ok(OperationOutcome::Succeeded { summary, .. }) => {
+                        this.fetch_status = Some((true, summary));
+                        // Refresh immediately rather than waiting for the
+                        // watcher's next poll (§6.12).
+                        this.generation = Generation(this.generation.0 + 1);
+                        if let Some(current) = this.repo.value().cloned() {
+                            this.repo = LoadState::Refreshing {
+                                current,
+                                started_at: std::time::Instant::now(),
+                            };
+                        }
+                        if let Some(location) = this.location.clone() {
+                            this.load_metadata(location, cx);
+                        }
+                    }
+                    Ok(OperationOutcome::Cancelled { .. }) => {
+                        this.fetch_status = Some((true, String::from("Fetch cancelled")));
+                    }
+                    Ok(OperationOutcome::Failed { error, .. }) => {
+                        this.fetch_status = Some((false, error.user.message));
+                    }
+                    Err(failure) => {
+                        this.fetch_status = Some((false, failure.user.message));
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+        // Repaint on a short tick while the fetch runs so progress shows.
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(100))
+                    .await;
+                let done = this
+                    .update(cx, |this, cx| {
+                        if this.fetching.is_none() {
+                            true
+                        } else {
+                            cx.notify();
+                            false
+                        }
+                    })
+                    .unwrap_or(true);
+                if done {
+                    return;
+                }
+            }
+        })
+        .detach();
+        cx.notify();
     }
 
     /// Saves panel sizes, section order, and collapse state off-thread.
@@ -2504,6 +2655,19 @@ impl SourcefourWindow {
             .text_size(px(10.0))
             .text_color(self.theme.text_faint)
             .child(path)
+            .children(self.fetching.as_ref().map(|latest| {
+                let message = latest
+                    .lock()
+                    .ok()
+                    .and_then(|progress| progress.clone())
+                    .map_or_else(|| String::from("Fetching…"), |progress| progress.message);
+                div().text_color(self.theme.accent).child(message)
+            }))
+            .children(self.fetch_status.clone().map(|(ok, message)| {
+                div()
+                    .text_color(if ok { self.theme.green } else { self.theme.red })
+                    .child(message)
+            }))
             .children(self.history.is_filtering().then(|| {
                 div().text_color(self.theme.accent).child(format!(
                     "Searching loaded history — {} of {} match",
