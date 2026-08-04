@@ -4,238 +4,226 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Sourcefour | Free Git history browser for Mac</title>
-<meta name="description" content="Sourcefour simplifies how you see your Git repositories so you can focus on coding. Visualize and follow your repositories through Sourcefour's beautiful native interface.">
+<meta name="description" content="Sourcefour simplifies how you interact with your Git repositories so you can focus on coding. Visualize and follow your repositories through Sourcefour's simple Git GUI.">
 <style>
   :root {
-    color-scheme: only dark;
-    --bg: #0b0c0f;
-    --bg-band: #14161b;
-    --bg-card: #171a20;
-    --bg-deep: #07080a;
-    --border: #262a33;
-    --border-strong: #2f3542;
-    --text: #dfe3ec;
-    --text2: #9aa2b3;
-    --text3: #5f677a;
-    --accent: #5b9dff;
-    --accent-deep: #3d7fe8;
-    --green: #7ec96f;
-    --orange: #e0a458;
-    --purple: #b392f0;
-    --red: #e5655e;
-    --cyan: #64c7d6;
+    --page: #ffffff;
+    --band: #f4f6f9;
+    --line: #dfe3ea;
+    --ink: #17233b;
+    --ink2: #43526b;
+    --ink3: #7a869a;
+    --accent: #3d7fe8;
+    --accent-dark: #2f6fd6;
+    --navy: #10151d;
+    --navy2: #171e29;
+    --on-dark: #eef2f8;
+    --on-dark2: #9aa7bd;
     --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
-    --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
   }
 
   * { margin: 0; padding: 0; box-sizing: border-box; }
 
   body {
-    background: var(--bg);
-    color: var(--text);
+    background: var(--page);
+    color: var(--ink2);
     font-family: var(--font-ui);
     -webkit-font-smoothing: antialiased;
     line-height: 1.6;
+    font-size: 16px;
   }
 
   a { color: var(--accent); text-decoration: none; }
   a:hover { text-decoration: underline; }
 
-  .wrap { max-width: 1040px; margin: 0 auto; padding: 0 24px; }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 28px; }
+  .narrow { max-width: 780px; margin: 0 auto; }
   .center { text-align: center; }
 
+  h1, h2, h3, h4 { color: var(--ink); font-weight: 600; letter-spacing: -0.01em; }
+
   /* ── header ──────────────────────────────────────────── */
-  .topbar {
-    position: sticky; top: 0; z-index: 20;
-    background: rgba(11, 12, 15, 0.85);
-    backdrop-filter: blur(14px);
-    border-bottom: 1px solid var(--border);
+  .topbar { background: var(--page); border-bottom: 1px solid var(--line); }
+  .topbar-inner { display: flex; align-items: center; height: 72px; }
+  .logo { display: flex; align-items: center; gap: 11px; font-size: 21px; font-weight: 600; color: var(--ink); letter-spacing: -0.01em; }
+  .btn {
+    display: inline-block;
+    font-size: 15px; font-weight: 500;
+    padding: 10px 22px; border-radius: 4px;
+    background: var(--accent); color: #fff;
   }
-  .topbar-inner { display: flex; align-items: center; height: 60px; }
-  .logo {
-    display: flex; align-items: center; gap: 10px;
-    font-size: 19px; font-weight: 700; letter-spacing: -0.02em; color: var(--text);
-  }
-  .logo-mark {
-    width: 26px; height: 26px; border-radius: 7px;
-    background: linear-gradient(135deg, var(--accent), var(--purple));
-    display: flex; align-items: center; justify-content: center;
-    color: #0b0c0f; font-size: 14px; font-weight: 800;
-  }
-  .logo b { color: var(--accent); }
-  .topbar .dl {
-    margin-left: auto;
-    background: var(--accent); color: #0b0c0f;
-    font-size: 14px; font-weight: 600;
-    padding: 8px 18px; border-radius: 6px;
-  }
-  .topbar .dl:hover { text-decoration: none; filter: brightness(1.08); }
+  .btn:hover { background: var(--accent-dark); text-decoration: none; }
+  .btn.big { font-size: 16px; padding: 13px 28px; }
+  .btn.white { background: #fff; color: var(--accent); }
+  .btn.white:hover { background: #f0f4fb; }
+  .topbar .btn { margin-left: auto; }
 
   /* ── hero ────────────────────────────────────────────── */
-  .hero { padding: 76px 0 0; text-align: center; }
-  h1 {
-    font-size: clamp(34px, 5.4vw, 54px);
-    font-weight: 750; letter-spacing: -0.025em; line-height: 1.12;
-    max-width: 760px; margin: 0 auto 30px;
+  .hero { padding: 78px 0 0; text-align: center; }
+  .hero h1 {
+    font-size: clamp(36px, 5.2vw, 56px);
+    line-height: 1.12;
+    max-width: 780px; margin: 0 auto 34px;
   }
-  .hero-ctas { display: flex; gap: 14px; justify-content: center; align-items: center; margin-bottom: 10px; }
-  .btn {
-    display: inline-flex; align-items: center; gap: 9px;
-    font-size: 15px; font-weight: 600;
-    padding: 13px 26px; border-radius: 8px;
-  }
-  .btn-primary { background: var(--accent); color: #0b0c0f; }
-  .btn-primary:hover { text-decoration: none; filter: brightness(1.08); }
-  .btn-quiet { color: var(--text2); font-size: 13.5px; font-weight: 500; }
-  .fine { font-size: 12.5px; color: var(--text3); }
-  .fine a { color: var(--text3); text-decoration: underline; }
+  .hero-ctas { display: flex; gap: 12px; justify-content: center; align-items: center; flex-wrap: wrap; margin-bottom: 14px; }
+  .alt-dl { font-size: 15px; color: var(--ink2); }
+  .alt-dl a { font-weight: 500; }
+  .fine { font-size: 13px; color: var(--ink3); margin-top: 6px; }
+  .fine a { color: var(--ink3); text-decoration: underline; }
 
-  .hero-shot { margin: 52px auto -2px; max-width: 1040px; padding: 0 24px; }
-  .shot-frame {
-    border: 1px solid var(--border-strong);
-    border-bottom: 0;
-    border-radius: 12px 12px 0 0;
-    overflow: hidden;
-    background: var(--bg-deep);
-    box-shadow: 0 -1px 0 rgba(91,157,255,.25), 0 30px 80px rgba(0,0,0,.55);
+  .hero-shot { margin-top: 54px; }
+  .hero-shot img {
+    display: block;
+    width: min(1000px, calc(100% - 56px));
+    margin: 0 auto -4px;
+    border-radius: 8px 8px 0 0;
+    box-shadow: 0 12px 40px rgba(9, 30, 66, 0.35), 0 0 1px rgba(9, 30, 66, 0.4);
   }
-  .shot-frame img { display: block; width: 100%; height: auto; margin-bottom: -6%; }
 
   /* ── bands ───────────────────────────────────────────── */
-  .band { border-top: 1px solid var(--border); padding: 82px 0; }
-  .band.tint { background: var(--bg-band); }
-  .lead { font-size: clamp(24px, 3vw, 32px); font-weight: 700; letter-spacing: -0.02em; line-height: 1.2; margin-bottom: 14px; }
-  .lead-sub { font-size: 16px; color: var(--text2); max-width: 640px; margin: 0 auto; }
+  section { padding: 88px 0; }
+  section.band { background: var(--band); }
+  h2 { font-size: clamp(28px, 3.4vw, 38px); line-height: 1.2; margin-bottom: 16px; }
+  .intro-copy { font-size: 17.5px; max-width: 700px; margin: 0 auto; }
 
-  /* split rows: text beside a cropped app view */
-  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 56px; align-items: center; }
-  .row + .row { margin-top: 86px; }
-  .row h3 { font-size: 24px; font-weight: 700; letter-spacing: -0.02em; margin-bottom: 12px; }
-  .row p { font-size: 15px; color: var(--text2); }
+  /* two blurb columns (Simple for beginners / Powerful for experts) */
+  .blurbs { display: grid; grid-template-columns: 1fr 1fr; gap: 48px; margin-top: 56px; text-align: left; }
+  .blurbs h3 { font-size: 20px; margin-bottom: 10px; }
+  .blurbs p { font-size: 15.5px; }
+
+  /* ── alternating feature rows ────────────────────────── */
+  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 64px; align-items: center; }
+  .row + .row { margin-top: 96px; }
+  .row h2 { font-size: 30px; }
+  .row p { font-size: 15.5px; }
   .row p + p { margin-top: 12px; }
 
   .crop {
-    border: 1px solid var(--border-strong);
-    border-radius: 11px;
+    border-radius: 8px;
     overflow: hidden;
-    background: var(--bg-deep);
-    box-shadow: 0 18px 50px rgba(0,0,0,.45);
     position: relative;
-    height: 320px;
+    height: 330px;
+    background: #0b0c0f;
+    box-shadow: 0 10px 34px rgba(9, 30, 66, 0.3), 0 0 1px rgba(9, 30, 66, 0.4);
   }
   .crop img { position: absolute; max-width: none; }
-  /* sidebar view: worktrees/branches/remotes */
-  .crop.side img { width: 1527px; top: -63px; left: -28px; }
-  /* graph view: lanes + curves */
+  .crop.side  img { width: 1527px; top: -63px;  left: -28px; }
   .crop.graph img { width: 1793px; top: -155px; left: -408px; }
-  /* files view: details + changed files */
   .crop.files img { width: 1527px; top: -636px; left: -298px; }
 
-  /* ── two-up copy columns ─────────────────────────────── */
-  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 40px; margin-top: 46px; text-align: left; }
-  .cols h3 { font-size: 18px; font-weight: 700; margin-bottom: 8px; }
-  .cols p { font-size: 14.5px; color: var(--text2); }
+  /* ── dark band ───────────────────────────────────────── */
+  .dark-band {
+    background: var(--navy);
+    color: var(--on-dark2);
+    padding: 96px 0;
+    text-align: center;
+  }
+  .dark-band h2 { color: var(--on-dark); max-width: 720px; margin: 0 auto 18px; }
+  .dark-band p { font-size: 16.5px; max-width: 640px; margin: 0 auto; }
+  .dark-band .hl { color: #5b9dff; }
 
-  /* ── icon feature grid ───────────────────────────────── */
-  .features { display: grid; grid-template-columns: repeat(3, 1fr); gap: 40px 36px; margin-top: 54px; text-align: left; }
+  /* ── icon features ───────────────────────────────────── */
+  .features { display: grid; grid-template-columns: repeat(3, 1fr); gap: 52px 44px; margin-top: 62px; text-align: center; }
   .feature .ic {
-    width: 40px; height: 40px; border-radius: 10px;
+    width: 58px; height: 58px; margin: 0 auto 18px;
+    border-radius: 50%;
+    background: rgba(61, 127, 232, 0.1);
+    color: var(--accent);
     display: flex; align-items: center; justify-content: center;
-    font-size: 18px; margin-bottom: 14px;
+    font-size: 23px;
   }
-  .feature h3 { font-size: 16.5px; font-weight: 700; margin-bottom: 6px; }
-  .feature p { font-size: 14px; color: var(--text2); }
-  .t-blue   { background: rgba(91,157,255,.12);  color: var(--accent); }
-  .t-green  { background: rgba(126,201,111,.12); color: var(--green); }
-  .t-orange { background: rgba(224,164,88,.12);  color: var(--orange); }
-  .t-purple { background: rgba(179,146,240,.12); color: var(--purple); }
-  .t-red    { background: rgba(229,101,94,.12);  color: var(--red); }
-  .t-cyan   { background: rgba(100,199,214,.12); color: var(--cyan); }
+  .feature h3 { font-size: 17px; margin-bottom: 8px; }
+  .feature p { font-size: 14.5px; }
 
-  /* ── dark quote band ─────────────────────────────────── */
-  .quote-band {
-    background:
-      radial-gradient(ellipse 70% 90% at 50% -20%, rgba(91,157,255,.16), transparent 65%),
-      var(--bg-deep);
-    border-top: 1px solid var(--border);
-    padding: 92px 0;
-    text-align: center;
+  /* ── testimonial ─────────────────────────────────────── */
+  .testimonial { text-align: center; }
+  .testimonial .avatar {
+    width: 72px; height: 72px; border-radius: 50%;
+    margin: 0 auto 26px;
+    background: var(--band);
+    border: 1px solid var(--line);
+    display: flex; align-items: center; justify-content: center;
+    color: var(--accent); font-size: 30px; font-weight: 700;
   }
-  .quote {
-    font-size: clamp(20px, 2.8vw, 27px);
-    font-weight: 600; letter-spacing: -0.015em; line-height: 1.4;
-    max-width: 760px; margin: 0 auto 18px;
+  .testimonial blockquote {
+    font-size: clamp(20px, 2.6vw, 26px);
+    line-height: 1.45;
+    color: var(--ink);
+    font-weight: 500;
+    max-width: 780px; margin: 0 auto 22px;
   }
-  .quote .hl { color: var(--accent); }
-  .attrib { font-size: 13.5px; color: var(--text3); }
+  .testimonial .who { font-size: 14.5px; color: var(--ink3); }
+  .testimonial .who b { color: var(--ink2); font-weight: 600; }
 
-  /* ── CTA band ────────────────────────────────────────── */
+  /* ── blue CTA band ───────────────────────────────────── */
   .cta-band {
-    background: linear-gradient(180deg, var(--bg-band), var(--bg));
-    border-top: 1px solid var(--border);
-    padding: 88px 0;
+    background: var(--accent);
+    color: #fff;
+    padding: 84px 0;
     text-align: center;
   }
+  .cta-band h2 { color: #fff; margin-bottom: 8px; }
+  .cta-band p { font-size: 16px; opacity: 0.9; margin-bottom: 30px; }
+  .cta-band .fine { color: rgba(255,255,255,0.75); margin-top: 16px; }
 
   /* ── footer ──────────────────────────────────────────── */
-  footer {
-    background: var(--bg-deep);
-    border-top: 1px solid var(--border);
-    padding: 48px 0 40px;
-    font-size: 13px; color: var(--text3);
-  }
-  .foot-grid { display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 40px; margin-bottom: 36px; }
-  .foot-grid h4 { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--text2); margin-bottom: 12px; }
-  .foot-grid a { display: block; color: var(--text3); margin-bottom: 8px; }
-  .foot-grid a:hover { color: var(--text); text-decoration: none; }
+  footer { background: var(--navy); color: var(--on-dark2); padding: 56px 0 42px; font-size: 14px; }
+  .foot-grid { display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 48px; margin-bottom: 42px; }
+  .foot-grid h4 { color: var(--on-dark); font-size: 12.5px; text-transform: uppercase; letter-spacing: .08em; margin-bottom: 14px; font-weight: 600; }
+  .foot-grid a { display: block; color: var(--on-dark2); margin-bottom: 9px; }
+  .foot-grid a:hover { color: var(--on-dark); text-decoration: none; }
+  .foot-logo { display: flex; align-items: center; gap: 10px; font-size: 18px; font-weight: 600; color: var(--on-dark); }
   .foot-legal {
-    border-top: 1px solid var(--border);
-    padding-top: 22px;
-    display: flex; justify-content: space-between; gap: 20px; flex-wrap: wrap;
+    border-top: 1px solid var(--navy2);
+    padding-top: 24px;
+    display: flex; justify-content: space-between; gap: 18px; flex-wrap: wrap;
+    font-size: 12.5px;
   }
+  .foot-legal a { color: var(--on-dark2); text-decoration: underline; }
 
-  @media (max-width: 860px) {
-    .row, .cols, .foot-grid { grid-template-columns: 1fr; }
+  @media (max-width: 880px) {
+    .row, .blurbs, .foot-grid { grid-template-columns: 1fr; }
     .features { grid-template-columns: 1fr 1fr; }
-    .row + .row { margin-top: 60px; }
-    .crop { height: 260px; }
+    .row + .row { margin-top: 64px; }
+    .row.flip .crop { order: -1; }
   }
 </style>
 </head>
 <body>
 
+<!-- ── header ───────────────────────────────────────────── -->
 <div class="topbar">
   <div class="wrap topbar-inner">
-    <span class="logo"><span class="logo-mark">4</span>source<b>four</b></span>
-    <a class="dl" href="#download">Download free</a>
+    <span class="logo">Sourcefour</span>
+    <a class="btn" href="#download">Download free</a>
   </div>
 </div>
 
 <!-- ── hero ─────────────────────────────────────────────── -->
-<section class="hero">
+<div class="hero">
   <div class="wrap">
-    <h1>Simplicity and speed in a beautiful Git&nbsp;GUI</h1>
+    <h1>Simplicity and speed in a beautiful Git GUI</h1>
     <div class="hero-ctas">
-      <a class="btn btn-primary" href="#download">Download for macOS</a>
-      <a class="btn btn-quiet" href="#download">Windows &amp; Linux planned&nbsp;&rarr;</a>
+      <a class="btn big" href="#download">Download for macOS</a>
+      <span class="alt-dl">Windows &amp; Linux <a href="#download">planned</a></span>
     </div>
     <p class="fine">Free for everyone · <a href="#">Release notes</a></p>
   </div>
   <div class="hero-shot">
-    <div class="shot-frame"><img src="assets/app@2x.png" alt="The Sourcefour window: sidebar with worktrees, branches, and remotes; commit graph and history; changed files for the selected commit"></div>
+    <img src="assets/app@2x.png" alt="The Sourcefour window: sidebar with worktrees, branches, and remotes; commit graph and history; changed files for the selected commit">
   </div>
-</section>
+</div>
 
-<!-- ── intro ────────────────────────────────────────────── -->
-<section class="band tint center">
+<!-- ── intro band ───────────────────────────────────────── -->
+<section class="band center">
   <div class="wrap">
-    <p class="lead">A free Git history browser for&nbsp;Mac</p>
-    <p class="lead-sub">
+    <h2>A free Git history browser for Mac</h2>
+    <p class="intro-copy">
       Sourcefour simplifies how you see your repositories so you can focus on coding.
-      Explore every branch, worktree, and commit through a beautiful native window
+      Explore every branch, worktree, and commit through a simple, beautiful window
       that's always up to date with what's really on disk.
     </p>
-    <div class="cols">
+    <div class="blurbs">
       <div>
         <h3>Simple for beginners</h3>
         <p>New to Git? Open a folder and Sourcefour shows you what's there: your branches,
@@ -245,20 +233,19 @@
       <div>
         <h3>Powerful for experts</h3>
         <p>Living in five worktrees across two remotes? Perfect. Sourcefour treats linked
-        worktrees as first-class citizens, follows detached HEADs and unborn branches,
-        and keeps up with repositories of any size — from weekend projects to the
-        Linux kernel.</p>
+        worktrees as first-class citizens, follows detached HEADs and unborn branches, and
+        keeps up with repositories of any size — from weekend projects to the Linux kernel.</p>
       </div>
     </div>
   </div>
 </section>
 
-<!-- ── visualize ────────────────────────────────────────── -->
-<section class="band">
+<!-- ── feature rows ─────────────────────────────────────── -->
+<section>
   <div class="wrap">
     <div class="row">
       <div>
-        <h3>Visualize your history</h3>
+        <h2>Visualize your history</h2>
         <p>The commit graph is drawn the way it deserves to be: smooth curves for merges
         and branches, a distinct color for every line of development, and a halo on the
         commit you have checked out.</p>
@@ -268,10 +255,10 @@
       <div class="crop graph"><img src="assets/app@2x.png" alt="The commit graph with colored lanes and merge curves"></div>
     </div>
 
-    <div class="row">
+    <div class="row flip">
       <div class="crop side"><img src="assets/app@2x.png" alt="The sidebar listing worktrees, branches, and remotes"></div>
       <div>
-        <h3>Your whole repository, one sidebar</h3>
+        <h2>Your whole repository, one sidebar</h2>
         <p>Worktrees, branches, and remotes live side by side — each branch with its
         ahead/behind counts, each worktree with its checked-out branch and health,
         each remote with its tracking branches.</p>
@@ -282,7 +269,7 @@
 
     <div class="row">
       <div>
-        <h3>Browse with confidence</h3>
+        <h2>Browse with confidence</h2>
         <p>Select any commit and its changed files appear instantly, marked with the
         status letters you already know from Git itself. Fly through history with the
         arrow keys — Sourcefour is smart about only inspecting the commits you actually
@@ -295,53 +282,53 @@
   </div>
 </section>
 
-<!-- ── quote band ───────────────────────────────────────── -->
-<section class="quote-band">
+<!-- ── dark band ────────────────────────────────────────── -->
+<div class="dark-band">
   <div class="wrap">
-    <p class="quote">"Keep your terminal. Sourcefour <span class="hl">watches your repository live</span> —
-    commit, branch, and tag from the command line and the window follows along by itself."</p>
-    <p class="attrib">No refresh button. There isn't one. It isn't needed.</p>
+    <h2>Keep the command line</h2>
+    <p>Sourcefour <span class="hl">watches your repository live</span>. Commit, branch, and tag
+    from your terminal — the window follows along by itself, without losing your place.
+    There's no refresh button, because there doesn't need to be one.</p>
   </div>
-</section>
+</div>
 
-<!-- ── feature grid ─────────────────────────────────────── -->
-<section class="band center">
+<!-- ── icon features ────────────────────────────────────── -->
+<section class="center">
   <div class="wrap">
-    <p class="lead">History at your fingertips</p>
-    <p class="lead-sub">A fully-featured history browser, out of the box.</p>
+    <h2>A fully-featured history browser, out of the box</h2>
     <div class="features">
       <div class="feature">
-        <div class="ic t-blue">⎇</div>
+        <div class="ic">⎇</div>
         <h3>Worktrees out of the box</h3>
         <p>Every linked worktree appears automatically with its branch, its path, and its
         state — locked, detached, or missing its checkout.</p>
       </div>
       <div class="feature">
-        <div class="ic t-green">◉</div>
+        <div class="ic">◉</div>
         <h3>Always live</h3>
         <p>Branches created, tags pushed, commits made outside the app appear on their
-        own, in a blink, without losing your place.</p>
+        own, in a blink.</p>
       </div>
       <div class="feature">
-        <div class="ic t-orange">∞</div>
+        <div class="ic">∞</div>
         <h3>Any size of history</h3>
         <p>History loads progressively as you scroll, so a million-commit repository
         opens as quickly as a ten-commit one.</p>
       </div>
       <div class="feature">
-        <div class="ic t-purple">λ</div>
+        <div class="ic">λ</div>
         <h3>Branch focus</h3>
         <p>Scope the view to a single branch in one click and see just that line of
         work — then widen back out just as fast.</p>
       </div>
       <div class="feature">
-        <div class="ic t-cyan">⇲</div>
+        <div class="ic">⇲</div>
         <h3>Make it yours</h3>
         <p>Drag to resize the sidebar, the graph, and the details panel. Wide merge
         histories can open up to dozens of visible lanes.</p>
       </div>
       <div class="feature">
-        <div class="ic t-red">⌨</div>
+        <div class="ic">⌨</div>
         <h3>Keyboard-first</h3>
         <p>Arrows, Page Up/Down, Home and End drive the whole list. Selection follows
         the commit — not the row number.</p>
@@ -350,57 +337,57 @@
   </div>
 </section>
 
-<!-- ── native band ──────────────────────────────────────── -->
-<section class="band tint">
+<!-- ── native row band ──────────────────────────────────── -->
+<section class="band">
   <div class="wrap">
-    <div class="row">
+    <div class="blurbs" style="margin-top: 0;">
       <div>
         <h3>Truly native, truly yours</h3>
         <p>Sourcefour is a real Mac app — GPU-rendered, resource-friendly, and instant to
-        open. It reads your repositories directly instead of scraping command output,
-        and when it's time to fetch, it uses <em>your</em> Git — so your SSH keys,
-        credential helpers, and hooks just work.</p>
-        <p>No web view. No background daemon. No account.</p>
+        open. It reads your repositories directly instead of scraping command output, and
+        when it's time to fetch, it uses <em>your</em> Git — so your SSH keys, credential
+        helpers, and hooks just work. No web view. No background daemon. No account.</p>
       </div>
       <div>
         <h3>Get history right</h3>
-        <p>Merges show both parents. Octopus merges show all of them. Branch tips,
-        tags, and HEAD are labelled where they point, ordered the way Git orders
-        them. When something is unusual — a bare repository, an unborn branch, a
-        worktree on an unplugged drive — Sourcefour says so instead of guessing.</p>
+        <p>Merges show both parents. Octopus merges show all of them. Branch tips, tags,
+        and HEAD are labelled where they point, ordered the way Git orders them. When
+        something is unusual — a bare repository, an unborn branch, a worktree on an
+        unplugged drive — Sourcefour says so instead of guessing.</p>
       </div>
     </div>
   </div>
 </section>
 
 <!-- ── testimonial ──────────────────────────────────────── -->
-<section class="band center">
+<section class="testimonial">
   <div class="wrap">
-    <p class="quote" style="font-style: italic;">"Sourcefour is magic. I clicked a branch and it just&hellip;
-    showed me the branch."</p>
-    <p class="attrib">— A developer who kept their terminal open the whole time</p>
+    <div class="avatar">”</div>
+    <blockquote>“Sourcefour is magic. Using it beside the command line makes it really easy
+    for me to jump between branches and stay on top of what is happening with the codebase.
+    I clicked a branch and it just… showed me the branch.”</blockquote>
+    <p class="who"><b>A. Developer</b> — Head of Keeping the Terminal Open, Somewhere Nice</p>
   </div>
 </section>
 
-<!-- ── download CTA ─────────────────────────────────────── -->
-<section class="cta-band" id="download">
+<!-- ── blue CTA band ────────────────────────────────────── -->
+<div class="cta-band" id="download">
   <div class="wrap">
-    <p class="lead">Download Sourcefour for free</p>
-    <p class="lead-sub" style="margin-bottom: 28px;">In development. macOS first, Apple Silicon native.</p>
-    <div class="hero-ctas">
-      <a class="btn btn-primary" href="#">Coming soon for macOS</a>
-    </div>
+    <h2>Download Sourcefour for free</h2>
+    <p>In development. macOS first, Apple Silicon native.</p>
+    <a class="btn big white" href="#">Coming soon for macOS</a>
     <p class="fine">Follow the build to be first in line.</p>
   </div>
-</section>
+</div>
 
+<!-- ── footer ───────────────────────────────────────────── -->
 <footer>
   <div class="wrap">
     <div class="foot-grid">
       <div>
-        <span class="logo" style="font-size: 16px;"><span class="logo-mark" style="width: 22px; height: 22px; font-size: 12px;">4</span>source<b>four</b></span>
-        <p style="margin-top: 12px; max-width: 300px;">A Git history browser from
-        <a href="https://lisethsolutions.no/">Liseth Solutions AS</a>.
+        <span class="foot-logo">Sourcefour</span>
+        <p style="margin-top: 14px; max-width: 320px;">A Git history browser from
+        <a href="https://lisethsolutions.no/" style="display:inline;">Liseth Solutions AS</a>.
         Built for people who love their repositories.</p>
       </div>
       <div>
