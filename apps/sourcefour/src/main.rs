@@ -17,10 +17,12 @@ use tracing_subscriber::EnvFilter;
 
 use crate::app::run;
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct LaunchRequest {
     pub(crate) path: PathBuf,
     pub(crate) demo: bool,
+    /// Window size override, used by the visual-regression captures (§12.4).
+    pub(crate) window: Option<(f32, f32)>,
 }
 
 fn main() -> ExitCode {
@@ -52,9 +54,23 @@ pub(crate) fn parse_args(
 ) -> Result<LaunchRequest, ArgumentError> {
     let mut demo = false;
     let mut path = None;
-    for argument in arguments {
+    let mut width = None;
+    let mut height = None;
+    let mut arguments = arguments.into_iter();
+    while let Some(argument) = arguments.next() {
         if argument == "--demo" {
             demo = true;
+        } else if argument == "--width" || argument == "--height" {
+            let value = arguments
+                .next()
+                .and_then(|value| value.to_string_lossy().parse::<f32>().ok())
+                .filter(|value| *value >= 320.0)
+                .ok_or_else(|| ArgumentError::Unknown(argument.clone()))?;
+            if argument == "--width" {
+                width = Some(value);
+            } else {
+                height = Some(value);
+            }
         } else if argument == "--help" || argument == "-h" {
             return Err(ArgumentError::HelpRequested);
         } else if argument.to_string_lossy().starts_with('-') {
@@ -67,7 +83,11 @@ pub(crate) fn parse_args(
         Some(path) => path,
         None => env::current_dir().map_err(ArgumentError::CurrentDirectory)?,
     };
-    Ok(LaunchRequest { path, demo })
+    Ok(LaunchRequest {
+        path,
+        demo,
+        window: width.zip(height),
+    })
 }
 
 #[derive(Debug)]
@@ -109,8 +129,27 @@ mod tests {
             request,
             LaunchRequest {
                 path: PathBuf::from("repository"),
-                demo: true
+                demo: true,
+                window: None,
             }
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn parses_a_window_size_for_visual_captures() -> Result<(), ArgumentError> {
+        let request = parse_args(
+            ["repo", "--demo", "--width", "1000", "--height", "700"].map(OsString::from),
+        )?;
+        assert_eq!(request.window, Some((1000.0, 700.0)));
+
+        assert!(
+            parse_args(["--width", "abc"].map(OsString::from)).is_err(),
+            "a malformed size is rejected"
+        );
+        assert!(
+            parse_args(["--width", "10", "--height", "10"].map(OsString::from)).is_err(),
+            "absurdly small windows are rejected"
         );
         Ok(())
     }

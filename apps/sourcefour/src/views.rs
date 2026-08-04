@@ -3157,6 +3157,9 @@ impl SourcefourWindow {
                         window.viewport_size().height.0,
                     );
                     cx.notify();
+                } else if this.diff_scrubbing {
+                    this.scrub_diff(event.position.y.0);
+                    cx.notify();
                 }
             }),
         )
@@ -3165,6 +3168,10 @@ impl SourcefourWindow {
             cx.listener(|this, _, _, cx| {
                 if this.dragging.take().is_some() {
                     this.persist_ui_state(cx);
+                    cx.notify();
+                }
+                if this.diff_scrubbing {
+                    this.diff_scrubbing = false;
                     cx.notify();
                 }
             }),

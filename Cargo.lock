@@ -2023,9 +2023,9 @@ dependencies = [
 
 [[package]]
 name = "gix-command"
-version = "0.9.1"
+version = "0.9.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "00706d4fef135ef4b01680d5218c6ee40cda8baf697b864296cbc887d19118f6"
+checksum = "cf4363accdf6ef7ba861871d2d521ab7418a04aaaed919fadb022af71d379b12"
 dependencies = [
  "bstr",
  "gix-path",
@@ -2431,9 +2431,9 @@ dependencies = [
 
 [[package]]
 name = "gix-path"
-version = "0.12.3"
+version = "0.12.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1ed3e8d7a82e886e17a72e03d4ba0c13db6f2219b6cd4e2900b4cae426ec20c9"
+checksum = "751d6bd162106f8c1e7e9aaccb5bbdd605267e91a930a17a4560c46e33a9100c"
 dependencies = [
  "bstr",
  "gix-trace",
@@ -2782,9 +2782,9 @@ checksum = "e4eba85ea1d0a966a983acd07deee566e67395d2d96b6fb39e62b5a833f1eb0b"
 
 [[package]]
 name = "globset"
-version = "0.4.19"
+version = "0.4.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e47d37d2ae4464254884b60ab7071be2b876a9c35b696bd018ddcc76847309cd"
+checksum = "07c34a9410465b45bd9787443bc7370f37735bad04b0f0cd57ff1a3186c98988"
 dependencies = [
  "aho-corasick",
  "bstr",
@@ -4811,9 +4811,9 @@ dependencies = [
 
 [[package]]
 name = "regex-automata"
-version = "0.4.16"
+version = "0.4.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8fcfdb36bda0c880c5931cdc7a2bcdc8ba4556847b9d912bca70bc94708711ad"
+checksum = "ad8553b9b26413251cbf30e620595c7a41b3887f03da04579c0e6b0d6a06b4b2"
 dependencies = [
  "aho-corasick",
  "memchr",
@@ -5458,15 +5458,15 @@ dependencies = [
 
 [[package]]
 name = "sval"
-version = "2.21.0"
+version = "2.21.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ba3a370f3cd0422964fd9a19b6516f048527738e6ec50b1b0ff79b460b468390"
+checksum = "ec4a2a7d92fa86fcc6222e4c3845f8486cff899d9db32480b26c91a5dbf2e22d"
 
 [[package]]
 name = "sval_buffer"
-version = "2.21.0"
+version = "2.21.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "111e6e2dab25782acb41b281263f5f60d6f56a2ba0b3b076187ad23a1552544d"
+checksum = "f4324db9ac500c609d659b752edf9c8abbf2233f8afd61a503fd6f88ed625032"
 dependencies = [
  "sval",
  "sval_ref",
@@ -5475,18 +5475,18 @@ dependencies = [
 
 [[package]]
 name = "sval_dynamic"
-version = "2.21.0"
+version = "2.21.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "590ac4ebd299740eac453162302a494e6d5b3be243feab8bf07d0d4331b6b2b3"
+checksum = "4046add0eecf55e680b9e207edf5fc7737b18a1d950db363d97e7f1b2d7c629c"
 dependencies = [
  "sval",
 ]
 
 [[package]]
 name = "sval_fmt"
-version = "2.21.0"
+version = "2.21.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4b964d6d917267355d7f343c515b908586e5b4aeeada328738f703452f9412d6"
+checksum = "911a3486b5984a0a4f25edefcf2c2dba23654c29f63e75493b671d338bf24243"
 dependencies = [
  "itoa",
  "ryu",
@@ -5495,9 +5495,9 @@ dependencies = [
 
 [[package]]
 name = "sval_json"
-version = "2.21.0"
+version = "2.21.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dea35e4d6b997acc7dc4786ab782f6a6c5000efe4ae93a2db89cf350775fe5fe"
+checksum = "da53aae7c737b5b5f1be4bcb0ff20e057bf6b2ee4e9d025560075c5830d09f95"
 dependencies = [
  "itoa",
  "ryu",
@@ -5506,9 +5506,9 @@ dependencies = [
 
 [[package]]
 name = "sval_nested"
-version = "2.21.0"
+version = "2.21.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a73195ebd4b3e5866db2e1b75f3f383657ad5abc600c646d69b4f064fee89154"
+checksum = "df24df43cbdc4bb8c9f5ed19d0d57dc8f60a1a4259cdce52d597fe774ad3a71f"
 dependencies = [
  "sval",
  "sval_buffer",
@@ -5517,18 +5517,18 @@ dependencies = [
 
 [[package]]
 name = "sval_ref"
-version = "2.21.0"
+version = "2.21.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c0ef28df9d586bfd15115286651337cb5645f8c203160d22d2d1a20cf13c428c"
+checksum = "2bebc17f0f1fad060e57b778728d41ef87627e9111a6365d7463472cb58fc1b3"
 dependencies = [
  "sval",
 ]
 
 [[package]]
 name = "sval_serde"
-version = "2.21.0"
+version = "2.21.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d72fbe6537e88878f10237bde71ae4a1b65b2bf54bdf274abc566fc696334c92"
+checksum = "9f26fe3f6a68b40e6c8d654ea48c00e4316272fddf68c80493714c1b034ae70b"
 dependencies = [
  "serde_core",
  "sval",
@@ -7068,9 +7068,9 @@ dependencies = [
 
 [[package]]
 name = "zlib-rs"
-version = "0.6.6"
+version = "0.6.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b142a20ec14a91d5bc708c1dc21b080c550113d8aa77afa29635673a65dd02c5"
+checksum = "34b31d188d9d685a4f9c7b46d6e36631b07058d2cfe190267adce54dc230bf12"
 
 [[package]]
 name = "zmij"

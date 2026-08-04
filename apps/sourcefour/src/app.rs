@@ -83,6 +83,7 @@ impl Launch {
 }
 
 pub(crate) fn run(request: &LaunchRequest) -> ExitCode {
+    let size_override = request.window;
     let launch = Launch::resolve(request);
     let failed = matches!(launch, Launch::Failed(_));
     let opened = Arc::new(AtomicBool::new(false));
@@ -109,12 +110,9 @@ pub(crate) fn run(request: &LaunchRequest) -> ExitCode {
             }]);
             let result = match launch {
                 Launch::Window(window) => {
-                    let options = window_options(
-                        INITIAL_WIDTH,
-                        INITIAL_HEIGHT,
-                        Some((MINIMUM_WIDTH, MINIMUM_HEIGHT)),
-                        cx,
-                    );
+                    let (width, height) = size_override.unwrap_or((INITIAL_WIDTH, INITIAL_HEIGHT));
+                    let options =
+                        window_options(width, height, Some((MINIMUM_WIDTH, MINIMUM_HEIGHT)), cx);
                     cx.open_window(options, move |_window, cx| {
                         cx.new(|cx| SourcefourWindow::new(window, cx))
                     })
@@ -276,6 +274,7 @@ mod tests {
         LaunchRequest {
             path: path.into(),
             demo,
+            window: None,
         }
     }
 
