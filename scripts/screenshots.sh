@@ -20,7 +20,7 @@ mkdir -p "$shots"
 
 cargo build --release --locked >/dev/null 2>&1
 
-for scene in overview diff split image; do
+for scene in overview diff split image actions; do
   scripts/capture.sh "$scene" "$width" "$height" "$shots/$scene.png"
   echo "captured $shots/$scene.png"
 done

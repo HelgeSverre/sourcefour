@@ -227,6 +227,18 @@ section {
   color: var(--ink-3);
   margin-top: 16px;
 }
+/* The note under the download cards needs air, and the brew command must
+   not wrap mid-word on wide screens. */
+.downloads + .fine {
+  margin-top: 32px;
+  max-width: 62ch;
+  margin-inline: auto;
+}
+@media (min-width: 720px) {
+  .fine code {
+    white-space: nowrap;
+  }
+}
 
 .shot {
   margin-top: 60px;
