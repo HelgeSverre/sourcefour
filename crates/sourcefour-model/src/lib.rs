@@ -803,6 +803,10 @@ pub enum GraphSegment {
 }
 
 /// Row properties that affect painting but are not edges.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "a set of independent row flags is exactly what §7.2 defines"
+)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct GraphFlags {
     /// The commit has more than one parent.
@@ -811,6 +815,12 @@ pub struct GraphFlags {
     pub is_root: bool,
     /// Traversal stopped here because the repository is shallow.
     pub is_shallow_boundary: bool,
+    /// The node's line was already drawn in the row above.
+    ///
+    /// False for branch tips and disconnected roots, whose lines start at the
+    /// node itself; a painter drawing rows in isolation (§7.4) cannot infer
+    /// this from segments alone.
+    pub continues_above: bool,
 }
 
 /// Incremental output from a persistent history cursor.

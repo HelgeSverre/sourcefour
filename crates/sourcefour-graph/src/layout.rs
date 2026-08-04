@@ -18,6 +18,7 @@ impl GraphState {
     pub fn push(&mut self, oid: Oid, parents: &[Oid]) -> GraphRow {
         let mut segments = SmallVec::new();
         let expecting = self.lanes_expecting(oid);
+        let continues_above = !expecting.is_empty();
         let node_lane = match expecting.first() {
             Some(index) => *index,
             None => self.claim_free_lane(),
@@ -94,6 +95,7 @@ impl GraphState {
                 is_merge: parents.len() > 1,
                 is_root: parents.is_empty(),
                 is_shallow_boundary: false,
+                continues_above,
             },
         }
     }
@@ -235,6 +237,37 @@ mod tests {
             rows[2].node_color, lane_one_color,
             "the line carries its color even after lanes shift (§7.3)"
         );
+    }
+
+    #[test]
+    fn a_line_continues_above_only_when_a_lane_was_awaiting_the_commit() {
+        let rows = layout(&[(3, &[2, 1]), (2, &[0]), (1, &[0]), (0, &[])]);
+
+        assert!(
+            !rows[0].flags.continues_above,
+            "the newest commit's line starts at its node"
+        );
+        assert!(
+            rows[1].flags.continues_above,
+            "the merge's first parent was awaited from the row above"
+        );
+        assert!(
+            rows[2].flags.continues_above,
+            "the merge's second parent was awaited from the row above"
+        );
+        assert!(
+            rows[3].flags.continues_above,
+            "the root ends a line that was awaited, so it still connects upward"
+        );
+    }
+
+    #[test]
+    fn an_unawaited_root_has_no_line_above_it() {
+        // Disconnected roots and mid-list branch tips claim fresh lanes; a
+        // painter drawing a stub above them would draw toward nothing.
+        let rows = layout(&[(1, &[]), (2, &[]), (3, &[])]);
+
+        assert!(rows.iter().all(|row| !row.flags.continues_above));
     }
 
     #[test]

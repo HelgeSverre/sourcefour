@@ -235,6 +235,7 @@ pub(crate) fn history() -> (Vec<CommitRow>, Vec<GraphRow>) {
                 is_merge: merge,
                 is_root: index == COMMITS.len() - 1,
                 is_shallow_boundary: false,
+                continues_above: index != 0,
             },
         })
         .collect();
