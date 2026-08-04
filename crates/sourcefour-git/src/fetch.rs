@@ -4,22 +4,14 @@
 //! configuration, URL rewriting, and hooks — none of which a gix fetch would
 //! see. Progress arrives on stderr, machine-readable ref updates on stdout.
 
-use std::{
-    io::Read,
-    process::{Command, Stdio},
-    sync::atomic::{AtomicBool, Ordering},
-    time::{Duration, Instant},
+use std::sync::atomic::AtomicBool;
+
+use sourcefour_model::{FetchRequest, OperationKind, OperationOutcome, RepoFailure, RepoLocation};
+
+use crate::{
+    OperationSink,
+    operation::{GitOperation, classify_stderr, run},
 };
-
-use sourcefour_model::{
-    FetchRequest, OperationKind, OperationOutcome, OperationProgress, RepoFailure, RepoFailureKind,
-    RepoLocation,
-};
-
-use crate::OperationSink;
-
-/// Progress is forwarded at most this often (§6.12: rate-limited).
-const PROGRESS_INTERVAL: Duration = Duration::from_millis(50);
 
 /// The exact fetch argv (§12.5 pins it): progress on stderr, porcelain ref
 /// updates on stdout, remote last when one is named.
@@ -36,20 +28,6 @@ fn fetch_argv(request: &FetchRequest) -> Vec<String> {
         argv.push(remote.clone());
     }
     argv
-}
-
-/// Maps Git's stderr onto the failure taxonomy (§6.12).
-fn classify_stderr(stderr: &str) -> RepoFailureKind {
-    let lowered = stderr.to_lowercase();
-    if lowered.contains("authentication failed")
-        || lowered.contains("permission denied")
-        || lowered.contains("could not read username")
-        || lowered.contains("could not read password")
-    {
-        RepoFailureKind::Authentication
-    } else {
-        RepoFailureKind::Network
-    }
 }
 
 /// One line per updated ref in porcelain output; empty means up to date.
@@ -79,145 +57,18 @@ pub fn fetch(
     sink: &dyn OperationSink,
     cancelled: &AtomicBool,
 ) -> Result<OperationOutcome, RepoFailure> {
-    if cancelled.load(Ordering::Acquire) {
-        return Ok(OperationOutcome::Cancelled {
+    run(
+        &GitOperation {
             kind: OperationKind::Fetch,
-        });
-    }
-    let workdir = location
-        .active_worktree_path
-        .as_deref()
-        .unwrap_or(&location.common_dir);
-    let mut child = Command::new("git")
-        .args(fetch_argv(request))
-        .current_dir(workdir)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|error| {
-            RepoFailure::new(
-                RepoFailureKind::Internal,
-                "Git could not be started",
-                "The installed git executable could not be run.",
-            )
-            .with_details(error.to_string())
-        })?;
-
-    let (stderr_text, was_cancelled) = pump_stderr(&mut child, sink, cancelled);
-
-    let output = child.wait_with_output().map_err(|error| {
-        RepoFailure::new(
-            RepoFailureKind::Internal,
-            "Git did not finish",
-            "The fetch process could not be reaped.",
-        )
-        .with_details(error.to_string())
-    })?;
-
-    if was_cancelled {
-        return Ok(OperationOutcome::Cancelled {
-            kind: OperationKind::Fetch,
-        });
-    }
-    if output.status.success() {
-        Ok(OperationOutcome::Succeeded {
-            kind: OperationKind::Fetch,
-            summary: summarize_porcelain(&String::from_utf8_lossy(&output.stdout)),
-        })
-    } else {
-        let tail: String = stderr_text
-            .lines()
-            .rev()
-            .take(4)
-            .collect::<Vec<_>>()
-            .into_iter()
-            .rev()
-            .collect::<Vec<_>>()
-            .join("\n");
-        Ok(OperationOutcome::Failed {
-            kind: OperationKind::Fetch,
-            error: RepoFailure::new(
-                classify_stderr(&stderr_text),
-                "Fetch failed",
-                if tail.is_empty() {
-                    String::from("Git reported an error without output.")
-                } else {
-                    tail
-                },
-            ),
-        })
-    }
-}
-
-/// Streams stderr, forwarding rate-limited progress lines; returns the
-/// collected text and whether cancellation killed the child.
-///
-/// Progress lines arrive `\r`-terminated while a phase counts up, so this
-/// reads bytewise instead of waiting for the newline at phase end.
-fn pump_stderr(
-    child: &mut std::process::Child,
-    sink: &dyn OperationSink,
-    cancelled: &AtomicBool,
-) -> (String, bool) {
-    let mut stderr = child.stderr.take();
-    let mut stderr_text = String::new();
-    let mut line = String::new();
-    let mut last_report: Option<Instant> = None;
-    let mut buffer = [0_u8; 512];
-    let Some(pipe) = stderr.as_mut() else {
-        return (stderr_text, false);
-    };
-    loop {
-        if cancelled.load(Ordering::Acquire) {
-            let _ = child.kill();
-            return (stderr_text, true);
-        }
-        let Ok(read) = pipe.read(&mut buffer) else {
-            break;
-        };
-        if read == 0 {
-            break;
-        }
-        let chunk = String::from_utf8_lossy(&buffer[..read]).into_owned();
-        stderr_text.push_str(&chunk);
-        for character in chunk.chars() {
-            if character == '\r' || character == '\n' {
-                let due =
-                    last_report.is_none_or(|reported| reported.elapsed() >= PROGRESS_INTERVAL);
-                if !line.trim().is_empty() && due {
-                    sink.report(parse_progress(line.trim()));
-                    last_report = Some(Instant::now());
-                }
-                line.clear();
-            } else {
-                line.push(character);
-            }
-        }
-    }
-    (stderr_text, false)
-}
-
-/// Extracts `completed`/`total` from lines like
-/// `Receiving objects:  42% (123/292)`.
-fn parse_progress(line: &str) -> OperationProgress {
-    let counts = line
-        .rsplit_once('(')
-        .and_then(|(_, tail)| tail.split_once(')'))
-        .map(|(inside, _)| inside)
-        .and_then(|inside| inside.split_once('/'))
-        .and_then(|(done, total)| {
-            Some((
-                done.trim().parse::<u64>().ok()?,
-                total.trim().parse::<u64>().ok()?,
-            ))
-        });
-    OperationProgress {
-        kind: OperationKind::Fetch,
-        message: line.to_owned(),
-        completed: counts.map(|(done, _)| done),
-        total: counts.map(|(_, total)| total),
-    }
+            argv: fetch_argv(request),
+            summarize: &summarize_porcelain,
+            classify: &classify_stderr,
+            failed_title: "Fetch failed",
+        },
+        location,
+        sink,
+        cancelled,
+    )
 }
 
 #[cfg(test)]
@@ -229,8 +80,8 @@ mod tests {
     };
     use sourcefour_test_support::TempRepo;
 
-    use super::{classify_stderr, fetch, fetch_argv, summarize_porcelain};
-    use crate::{OperationSink, discover};
+    use super::{fetch, fetch_argv, summarize_porcelain};
+    use crate::{OperationSink, discover, operation::classify_stderr};
 
     struct CollectingSink(Mutex<Vec<OperationProgress>>);
 

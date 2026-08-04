@@ -125,6 +125,8 @@ pub(crate) struct SourcefourWindow {
     fetching: Option<Arc<Mutex<Option<OperationProgress>>>>,
     /// Cooperative cancellation flag of the running fetch.
     fetch_cancel: Option<Arc<AtomicBool>>,
+    /// Which operation `fetching` belongs to, for button labels.
+    running_op: Option<chrome::NetworkOp>,
     /// The last operation outcome: success flag and message.
     fetch_status: Option<(bool, String)>,
     /// The §6.13 create-branch dialog, when open.
@@ -324,6 +326,7 @@ impl SourcefourWindow {
             details_focus: cx.focus_handle(),
             fetching: None,
             fetch_cancel: None,
+            running_op: None,
             fetch_status: None,
             branch_dialog: None,
             branch_input: cx

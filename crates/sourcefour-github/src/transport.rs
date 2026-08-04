@@ -55,6 +55,8 @@ fn classify_status(status: u16, ratelimit_remaining: Option<&str>) -> String {
         }
         403 => String::from("GitHub refused access (403); the token may lack scopes."),
         404 => String::from("GitHub reports no such resource (404)."),
+        // Asking for the checks of a commit GitHub has never seen.
+        422 => String::from("Not on GitHub yet."),
         other => format!("GitHub answered with status {other}."),
     }
 }
@@ -69,6 +71,7 @@ mod tests {
         assert!(classify_status(403, Some("0")).contains("rate limit"));
         assert!(classify_status(403, Some("55")).contains("scopes"));
         assert!(classify_status(404, None).contains("no such resource"));
+        assert!(classify_status(422, None).contains("Not on GitHub"));
         assert!(classify_status(500, None).contains("500"));
     }
 }

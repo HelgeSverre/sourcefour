@@ -14,6 +14,40 @@ use crate::{
 
 use super::{SourcefourWindow, counted, head_label};
 
+/// The three network operations the toolbar can launch (§6.12).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum NetworkOp {
+    Fetch,
+    Push,
+    Pull,
+}
+
+impl NetworkOp {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Fetch => "Fetch",
+            Self::Push => "Push",
+            Self::Pull => "Pull",
+        }
+    }
+
+    fn running_label(self) -> &'static str {
+        match self {
+            Self::Fetch => "Fetching",
+            Self::Push => "Pushing",
+            Self::Pull => "Pulling",
+        }
+    }
+
+    fn icon(self) -> &'static str {
+        match self {
+            Self::Fetch => "icons/cloud-download.svg",
+            Self::Push => "icons/arrow-up-from-line.svg",
+            Self::Pull => "icons/arrow-down-to-line.svg",
+        }
+    }
+}
+
 /// Forwards the newest fetch progress into shared state; latest wins.
 struct LatestSink(Arc<Mutex<Option<OperationProgress>>>);
 
@@ -86,9 +120,9 @@ impl SourcefourWindow {
             .border_b_1()
             .border_color(self.theme.border)
             .bg(self.theme.bg_chrome)
-            .child(self.fetch_button(cx))
-            .child(action("Pull", "icons/arrow-down-to-line.svg"))
-            .child(action("Push", "icons/arrow-up-from-line.svg"))
+            .child(self.operation_button(NetworkOp::Fetch, cx))
+            .child(self.operation_button(NetworkOp::Pull, cx))
+            .child(self.operation_button(NetworkOp::Push, cx))
             .child(action("Commit", "icons/git-commit-horizontal.svg"))
             .child(
                 self.toolbar_column("Branch", "icons/git-branch.svg", true)
@@ -131,21 +165,23 @@ impl SourcefourWindow {
             .child(label)
     }
 
-    /// The toolbar's Fetch action: live, and disabled while one runs (§6.12).
-    pub(super) fn fetch_button(&self, cx: &mut gpui::Context<Self>) -> gpui::Stateful<Div> {
-        let running = self.fetching.is_some();
+    /// One live operation button: disabled while any operation runs, and
+    /// wearing the running label while its own does (§6.12).
+    fn operation_button(&self, op: NetworkOp, cx: &mut gpui::Context<Self>) -> gpui::Stateful<Div> {
+        let busy = self.fetching.is_some();
+        let mine = self.running_op == Some(op);
         self.toolbar_column(
-            if running { "Fetching" } else { "Fetch" },
-            "icons/cloud-download.svg",
-            !running,
+            if mine { op.running_label() } else { op.label() },
+            op.icon(),
+            !busy,
         )
-        .id("fetch")
-        .when(!running, |this| {
+        .id(op.label())
+        .when(!busy, |this| {
             this.cursor_pointer()
                 .hover(|style| style.bg(self.theme.bg_hover))
         })
-        .on_click(cx.listener(|this, _, _, cx| {
-            this.start_fetch(cx);
+        .on_click(cx.listener(move |this, _, _, cx| {
+            this.start_operation(op, cx);
         }))
     }
 
@@ -203,11 +239,11 @@ impl SourcefourWindow {
             )
     }
 
-    /// Starts a fetch of every remote through the user's own Git (§6.12).
+    /// Starts one network operation through the user's own Git (§6.12).
     ///
-    /// A second fetch while one runs is a no-op: the button disables, and
-    /// this guard holds even if a keybinding races the render.
-    pub(super) fn start_fetch(&mut self, cx: &mut gpui::Context<Self>) {
+    /// A second operation while one runs is a no-op: the buttons disable,
+    /// and this guard holds even if a keybinding races the render.
+    pub(super) fn start_operation(&mut self, op: NetworkOp, cx: &mut gpui::Context<Self>) {
         if self.fetching.is_some() {
             return;
         }
@@ -222,17 +258,26 @@ impl SourcefourWindow {
         let latest = Arc::new(Mutex::new(None));
         let cancel = Arc::new(AtomicBool::new(false));
         self.fetching = Some(Arc::clone(&latest));
+        self.running_op = Some(op);
         self.fetch_cancel = Some(Arc::clone(&cancel));
         self.fetch_status = None;
         cx.spawn(async move |this, cx| {
             let outcome = cx
                 .background_executor()
                 .spawn(async move {
-                    sourcefour_git::fetch(&location, &request, &LatestSink(latest), &cancel)
+                    let sink = LatestSink(latest);
+                    match op {
+                        NetworkOp::Fetch => {
+                            sourcefour_git::fetch(&location, &request, &sink, &cancel)
+                        }
+                        NetworkOp::Push => sourcefour_git::push(&location, &sink, &cancel),
+                        NetworkOp::Pull => sourcefour_git::pull(&location, &sink, &cancel),
+                    }
                 })
                 .await;
             this.update(cx, |this, cx| {
                 this.fetching = None;
+                this.running_op = None;
                 this.fetch_cancel = None;
                 match outcome {
                     Ok(OperationOutcome::Succeeded { summary, .. }) => {
@@ -242,7 +287,7 @@ impl SourcefourWindow {
                         this.begin_reload(cx);
                     }
                     Ok(OperationOutcome::Cancelled { .. }) => {
-                        this.fetch_status = Some((true, String::from("Fetch cancelled")));
+                        this.fetch_status = Some((true, format!("{} cancelled", op.label())));
                     }
                     Ok(OperationOutcome::Failed { error, .. }) => {
                         this.fetch_status = Some((false, error.user.message));
@@ -335,7 +380,15 @@ impl SourcefourWindow {
                     .lock()
                     .ok()
                     .and_then(|progress| progress.clone())
-                    .map_or_else(|| String::from("Fetching…"), |progress| progress.message);
+                    .map_or_else(
+                        || {
+                            format!(
+                                "{}…",
+                                self.running_op.map_or("Working", NetworkOp::running_label)
+                            )
+                        },
+                        |progress| progress.message,
+                    );
                 div().text_color(self.theme.accent).child(message)
             }))
             .children(self.fetch_status.clone().map(|(ok, message)| {

@@ -12,6 +12,9 @@ mod discover;
 mod fetch;
 mod files;
 mod history;
+mod operation;
+mod pull;
+mod push;
 mod refs;
 mod session;
 mod watch;
@@ -28,6 +31,8 @@ pub use crate::{
     fetch::fetch,
     files::commit_files,
     history::{FIRST_BATCH_ROWS, GixHistoryCursor, NEXT_BATCH_ROWS},
+    pull::pull,
+    push::push,
     refs::{References, references},
     session::snapshot,
     watch::{MetadataChange, MetadataWatcher},

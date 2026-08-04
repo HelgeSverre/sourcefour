@@ -707,6 +707,10 @@ pub enum DiffLineKind {
 pub enum OperationKind {
     /// Fetch remote refs and objects.
     Fetch,
+    /// Push the current branch to its upstream.
+    Push,
+    /// Pull the current branch from its upstream.
+    Pull,
     /// Create a branch.
     CreateBranch,
     /// Create and check out a branch.
