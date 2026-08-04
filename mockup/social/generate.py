@@ -1,17 +1,20 @@
 #!/usr/bin/env python3
-"""Sourcefour social loop: the audio and the frame timeline, from one clock.
+"""Sourcefour social spot: the audio and the frame timeline, from one clock.
 
-Synthesizes a 7.5s techno loop (128 BPM, 16 beats, C minor) whose hits line
+Synthesizes a 15s techno piece (128 BPM, 32 beats, C minor) whose hits line
 up with the wordmark animation, and writes the ffmpeg concat lists that cut
-the frame PNGs on the same grid. The synthesis recipes are ported from
-~/code/rave-c (kick pitch-sweep, 303 saw->SVF bass, noise hats/clap,
-sidechain duck, stab delay send) in dependency-free Python.
+the frame PNGs on the same grid. At 128 fps every 16th note is exactly 15
+frames, so the cuts are frame-exact against the audio. The synthesis recipes
+are ported from ~/code/rave-c (kick pitch-sweep, 303 saw->SVF bass, noise
+hats/clap, sidechain duck, stab delay send) in dependency-free Python.
 
-Timeline (one bar per phase of the gag):
+Timeline (one bar per phase of the gag, then the outro):
   bar 1  Sourcetree, plain groove
   bar 2  "tree" blinks on 8ths, hats go 16ths
   bar 3  "++" lands on the downbeat, blink doubles to 16ths, riser + roll
-  bar 4  drop: Sourcefour on the one, four<->4 swaps every beat with stabs
+  bar 4  drop: Sourcefour on the one, four<->4 swaps every beat
+  bar 5  swaps double to 8ths, then the mark locks on "Sourcefour"
+  bars 6-8  elements drop out one by one and the whole thing fades
 """
 
 import math
@@ -23,9 +26,9 @@ import wave
 SR = 44100
 BPM = 128.0
 BEAT = 60.0 / BPM
-LOOP_BEATS = 16
-LOOP_SECONDS = BEAT * LOOP_BEATS  # 7.5
-N = int(round(SR * LOOP_SECONDS))
+BEATS = 32
+SECONDS = BEAT * BEATS  # 15.0
+N = int(round(SR * SECONDS))
 
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "out")
 
@@ -56,28 +59,42 @@ class Svf:
         return self.lo, self.bp, hi
 
 
+CHORD_A = [60, 63, 67]  # Cm — shows "four"
+CHORD_B = [58, 62, 65]  # Bb — shows "4"
+
+
 def events():
-    """(beat, kind, data) for one loop."""
+    """(beat, kind, data) for the whole piece."""
     ev = []
-    for b in range(16):
-        ev.append((b, "kick", None))
-        if b % 2 == 1:
-            ev.append((b, "clap", None))
+    for b in range(BEATS):
         bar = b // 4
-        if bar in (0, 3):
+        if bar < 7 or b == 28:
+            ev.append((b, "kick", None))
+        if b % 2 == 1 and bar < 6:
+            ev.append((b, "clap", None))
+        if bar in (0, 3, 4):
             ev.append((b + 0.5, "hat", 0.030))
-        else:
+        elif bar in (1, 2):
             for s in range(4):
                 ev.append((b + s / 4, "hat", 0.030))
-        # bass: 16ths around the kick, octave pop on alternate beats
-        for s in (1, 2, 3):
-            up = s == 2 and b % 2 == 1
-            ev.append((b + s / 4, "bass", (36 + (12 if up else 0), up)))
-    # the ++ hit, the drop, and the four<->4 stabs
+        # bass: 16ths around the kick, octave pop on alternate beats,
+        # thinning to lone 8ths in bar 7 and out entirely in bar 8
+        if bar < 6:
+            for s in (1, 2, 3):
+                up = s == 2 and b % 2 == 1
+                ev.append((b + s / 4, "bass", (36 + (12 if up else 0), up)))
+        elif bar == 6:
+            ev.append((b + 0.5, "bass", (36, False)))
+    # the ++ hit, the drop swaps, the 8th-note swaps, the lock, the goodbye
     ev.append((8, "hat", 0.20))
-    for i, b in enumerate(range(12, 16)):
-        ev.append((b, "hat", 0.20))
-        ev.append((b, "stab", [60, 63, 67] if i % 2 == 0 else [58, 62, 65]))
+    swaps = [(12 + i, i) for i in range(4)]
+    swaps += [(16 + i / 2, i) for i in range(4)]
+    for beat, i in swaps:
+        ev.append((beat, "hat", 0.20))
+        ev.append((beat, "stab", CHORD_A if i % 2 == 0 else CHORD_B))
+    ev.append((18, "hat", 0.20))
+    ev.append((18, "stab", CHORD_A))
+    ev.append((28, "stab", CHORD_A))
     # snare roll into the drop: 16ths then 32nds, rising
     t = 10.0
     while t < 12.0:
@@ -91,14 +108,9 @@ def synthesize():
     random.seed(4)  # sourcefour
     frand = random.random
 
-    # triggers per sample index, two identical loops (second one is exported,
-    # so bar 1 carries bar 4's tails and the file loops cleanly)
-    total = 2 * N
     trig = {}
-    for loop in range(2):
-        for beat, kind, data in events():
-            n = int(round((loop * LOOP_SECONDS + beat * BEAT) * SR))
-            trig.setdefault(n, []).append((kind, data))
+    for beat, kind, data in events():
+        trig.setdefault(int(round(beat * BEAT * SR)), []).append((kind, data))
 
     # decay constants (rave-c's numbers)
     k_pc, k_ac = tc(0.020), tc(0.10)
@@ -132,7 +144,7 @@ def synthesize():
     dtime = int(3 * BEAT / 4 * SR)  # dotted-8th echo, fits the 16k buffer
 
     frames = []
-    for n in range(total):
+    for n in range(N):
         for kind, data in trig.get(n, ()):
             if kind == "kick":
                 k_ph, k_pe, k_ae, duck = 0.0, 1.0, 1.0, 1.0
@@ -149,8 +161,6 @@ def synthesize():
             elif kind == "stab":
                 st_freq = [mtof(m) for m in data]
                 st_fe = st_ae = 1.0
-
-        t_loop = (n % N) / SR
 
         # kick: sine, exp pitch env 180->48
         k_pe *= k_pc
@@ -201,7 +211,7 @@ def synthesize():
         stab = lo * st_ae
 
         # riser: bandpassed noise sweeping up through bar 3
-        beat_pos = t_loop / BEAT
+        beat_pos = n / SR / BEAT
         if 8.0 <= beat_pos < 12.0:
             r = (beat_pos - 8.0) / 4.0
             _, bp, _ = r_svf.run(frand() * 2 - 1, 600.0 + 6000.0 * r * r, 0.9)
@@ -231,8 +241,7 @@ def synthesize():
 
         left = math.tanh((dry + dl * 0.45) * 0.85)
         right = math.tanh((dry + dr * 0.45) * 0.85)
-        if n >= N:
-            frames.append((left, right))
+        frames.append((left, right))
     return frames
 
 
@@ -254,11 +263,16 @@ def write_wav(frames, path):
 
 
 def segments():
-    """(state, seconds) for one loop, on the same beat grid as the audio."""
+    """(state, seconds) for the whole piece, on the same beat grid."""
     seg = [(0, 4 * BEAT)]
     seg += [(0 if i % 2 == 0 else 1, BEAT / 2) for i in range(8)]
     seg += [(2 if i % 2 == 0 else 3, BEAT / 4) for i in range(16)]
     seg += [(4, BEAT), (5, BEAT), (4, BEAT), (5, BEAT)]
+    seg += [(4, BEAT / 2), (5, BEAT / 2), (4, BEAT / 2), (5, BEAT / 2)]
+    # the lock: Sourcefour held to the end — in beat-sized entries, because
+    # the concat demuxer won't duplicate frames across one long gap
+    seg += [(4, BEAT)] * 14
+    assert abs(sum(d for _, d in seg) - SECONDS) < 1e-9
     return seg
 
 
@@ -278,7 +292,7 @@ def write_concat_lists():
 def main():
     os.makedirs(OUT, exist_ok=True)
     write_concat_lists()
-    print(f"loop {LOOP_SECONDS}s at {BPM:.0f} BPM, synthesizing...")
+    print(f"{SECONDS}s at {BPM:.0f} BPM, synthesizing...")
     write_wav(synthesize(), os.path.join(OUT, "techno.wav"))
     print("out/techno.wav + concat lists written")
 
