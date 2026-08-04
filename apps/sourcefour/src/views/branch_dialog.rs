@@ -62,10 +62,7 @@ impl SourcefourWindow {
         dialog.running = true;
         dialog.error = None;
         let request = sourcefour_model::CreateBranchRequest {
-            worktree: self
-                .snapshot()
-                .and_then(|snapshot| snapshot.active_worktree.clone())
-                .unwrap_or_else(|| sourcefour_model::WorktreeId(String::from("active"))),
+            worktree: self.active_worktree_id(),
             name,
             start,
             checkout,

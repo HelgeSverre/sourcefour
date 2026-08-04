@@ -418,6 +418,14 @@ impl SourcefourWindow {
     /// Reading refs and worktrees touches the filesystem, so it never runs on
     /// the render thread (§15.8). Ahead/behind follows as a second pass so the
     /// sidebar appears before any history is walked (§6.7).
+    /// The worktree an operation targets: the snapshot's active one, or the
+    /// stable placeholder used before metadata has arrived.
+    pub(super) fn active_worktree_id(&self) -> sourcefour_model::WorktreeId {
+        self.snapshot()
+            .and_then(|snapshot| snapshot.active_worktree.clone())
+            .unwrap_or_else(|| sourcefour_model::WorktreeId(String::from("active")))
+    }
+
     /// Starts a metadata reload of the current location: a new generation
     /// retires every result still in flight (§5.5) and the loaded snapshot
     /// stays usable on screen as `Refreshing` until the fresh one arrives
