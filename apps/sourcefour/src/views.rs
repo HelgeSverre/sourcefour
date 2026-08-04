@@ -75,6 +75,24 @@ pub(crate) struct SourcefourWindow {
     github_request: u64,
     /// The masked personal-access-token field of the GitHub section.
     token_input: gpui::Entity<crate::text_input::TextInput>,
+    /// The GitHub repository behind the remotes, when the integration is on.
+    github_remote: Option<sourcefour_github::GithubRemote>,
+    /// Open pull requests with their fetch time, for branch chips.
+    github_pulls: Option<(Vec<sourcefour_model::PrSummary>, std::time::Instant)>,
+    /// Token for the newest pull-request load, so stale results drop.
+    github_pulls_request: u64,
+    /// The selected commit's check runs: commit, outcome, fetch time.
+    github_checks: Option<(
+        sourcefour_model::Oid,
+        Result<Vec<sourcefour_model::CheckRun>, String>,
+        std::time::Instant,
+    )>,
+    /// Token for the newest check-run load, so stale results drop.
+    github_checks_request: u64,
+    /// Recent Actions workflow runs with their fetch time.
+    github_runs: Option<(Vec<sourcefour_model::WorkflowRun>, std::time::Instant)>,
+    /// Token for the newest workflow-run load, so stale results drop.
+    github_runs_request: u64,
     /// Juxtapose area bounds captured at paint, for mapping mouse X.
     juxtapose_bounds: std::rc::Rc<std::cell::Cell<gpui::Bounds<gpui::Pixels>>>,
     /// The last chosen diff layout, persisted across launches.
@@ -129,6 +147,8 @@ enum SidebarSection {
     Worktrees,
     Branches,
     Remotes,
+    /// GitHub Actions runs; renders only when a GitHub remote resolves.
+    Actions,
 }
 
 impl SidebarSection {
@@ -138,6 +158,7 @@ impl SidebarSection {
             Self::Worktrees => "worktrees",
             Self::Branches => "branches",
             Self::Remotes => "remotes",
+            Self::Actions => "actions",
         }
     }
 
@@ -146,18 +167,24 @@ impl SidebarSection {
             "worktrees" => Some(Self::Worktrees),
             "branches" => Some(Self::Branches),
             "remotes" => Some(Self::Remotes),
+            "actions" => Some(Self::Actions),
             _ => None,
         }
     }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "one collapse flag per section, mirroring the section enum"
+)]
 struct SidebarSections {
     worktrees: bool,
     branches: bool,
     remotes: bool,
+    actions: bool,
     /// Render order, user-adjustable by dragging section headers.
-    order: [SidebarSection; 3],
+    order: [SidebarSection; 4],
 }
 
 /// The payload carried while a section header is dragged.
@@ -343,10 +370,12 @@ impl Default for SidebarSections {
             worktrees: true,
             branches: true,
             remotes: true,
+            actions: true,
             order: [
                 SidebarSection::Worktrees,
                 SidebarSection::Branches,
                 SidebarSection::Remotes,
+                SidebarSection::Actions,
             ],
         }
     }
@@ -358,6 +387,7 @@ impl SidebarSections {
             SidebarSection::Worktrees => self.worktrees,
             SidebarSection::Branches => self.branches,
             SidebarSection::Remotes => self.remotes,
+            SidebarSection::Actions => self.actions,
         }
     }
     fn toggle(&mut self, section: SidebarSection) {
@@ -365,25 +395,32 @@ impl SidebarSections {
             SidebarSection::Worktrees => self.worktrees = !self.worktrees,
             SidebarSection::Branches => self.branches = !self.branches,
             SidebarSection::Remotes => self.remotes = !self.remotes,
+            SidebarSection::Actions => self.actions = !self.actions,
         }
     }
     /// The sections in their current display order.
-    fn ordered(self) -> [SidebarSection; 3] {
+    fn ordered(self) -> [SidebarSection; 4] {
         self.order
     }
     /// Applies persisted order and collapse state, ignoring anything that
-    /// no longer names a section.
+    /// no longer names a section. Sections this build knows but the file
+    /// predates keep their default position at the end.
     fn apply(&mut self, state: &crate::ui_state::UiState) {
         if let Some(saved) = &state.section_order {
-            let mapped: Vec<SidebarSection> = saved
-                .iter()
-                .filter_map(|name| SidebarSection::from_name(name))
-                .collect();
-            if let Ok(order) = <[SidebarSection; 3]>::try_from(mapped)
-                && order[0] != order[1]
-                && order[1] != order[2]
-                && order[0] != order[2]
-            {
+            let mut mapped: Vec<SidebarSection> = Vec::new();
+            for name in saved {
+                if let Some(section) = SidebarSection::from_name(name)
+                    && !mapped.contains(&section)
+                {
+                    mapped.push(section);
+                }
+            }
+            for section in self.order {
+                if !mapped.contains(&section) {
+                    mapped.push(section);
+                }
+            }
+            if let Ok(order) = <[SidebarSection; 4]>::try_from(mapped) {
                 self.order = order;
             }
         }
@@ -392,6 +429,7 @@ impl SidebarSections {
                 Some(SidebarSection::Worktrees) => self.worktrees = false,
                 Some(SidebarSection::Branches) => self.branches = false,
                 Some(SidebarSection::Remotes) => self.remotes = false,
+                Some(SidebarSection::Actions) => self.actions = false,
                 None => {}
             }
         }
@@ -428,7 +466,7 @@ impl SidebarSections {
             .position(|&s| s == target)
             .unwrap_or_default();
         order.insert(if from < to { position + 1 } else { position }, moved);
-        if let Ok(order) = <[SidebarSection; 3]>::try_from(order) {
+        if let Ok(order) = <[SidebarSection; 4]>::try_from(order) {
             self.order = order;
         }
     }
@@ -569,6 +607,53 @@ fn remote_marker(theme: &Theme) -> gpui::Svg {
         .path("icons/globe.svg")
         .size(px(12.0))
         .text_color(theme.orange)
+}
+
+/// The demo must render identically on every machine, so it never reads
+/// this user's settings file (§12.4).
+fn initial_settings(demo: bool) -> crate::settings::AppSettings {
+    if demo {
+        crate::settings::AppSettings::default()
+    } else {
+        crate::settings::AppSettings::load()
+    }
+}
+
+/// How long fetched GitHub data serves before a refresh, bounding API use
+/// well under the 5,000/hour limit.
+const GITHUB_TTL: std::time::Duration = std::time::Duration::from_mins(1);
+
+/// Whether data fetched at `fetched` still serves at `now`.
+fn github_cache_fresh(fetched: std::time::Instant, now: std::time::Instant) -> bool {
+    now.duration_since(fetched) < GITHUB_TTL
+}
+
+/// The open pull request whose head is `branch`, for the sidebar chip.
+fn pr_for_branch<'a>(
+    pulls: Option<&'a (Vec<sourcefour_model::PrSummary>, std::time::Instant)>,
+    branch: &str,
+) -> Option<&'a sourcefour_model::PrSummary> {
+    pulls?.0.iter().find(|pull| pull.head_branch == branch)
+}
+
+/// The glyph and color a check status renders as.
+fn check_glyph(theme: &Theme, status: sourcefour_model::CheckStatus) -> (&'static str, gpui::Hsla) {
+    use sourcefour_model::{CheckConclusion, CheckStatus};
+    match status {
+        CheckStatus::Queued => ("○", theme.text_faint),
+        CheckStatus::InProgress => ("●", theme.orange),
+        CheckStatus::Completed(CheckConclusion::Success) => ("✓", theme.green),
+        CheckStatus::Completed(CheckConclusion::Failure | CheckConclusion::TimedOut) => {
+            ("✗", theme.red)
+        }
+        CheckStatus::Completed(CheckConclusion::ActionRequired) => ("!", theme.orange),
+        CheckStatus::Completed(
+            CheckConclusion::Neutral
+            | CheckConclusion::Cancelled
+            | CheckConclusion::Skipped
+            | CheckConclusion::Unknown,
+        ) => ("−", theme.text_faint),
+    }
 }
 
 /// The token the configured auth method yields right now, or the words to
@@ -754,23 +839,19 @@ impl SourcefourWindow {
             diff_focus: cx.focus_handle(),
             diff_scroll: UniformListScrollHandle::new(),
             scrubbing: Scrub::None,
-            // The demo must render identically on every machine, so it never
-            // reads this user's settings file (§12.4).
-            settings: if launch.demo {
-                crate::settings::AppSettings::default()
-            } else {
-                crate::settings::AppSettings::load()
-            },
+            settings: initial_settings(launch.demo),
             settings_view: None,
             settings_focus: cx.focus_handle(),
             github_connection: crate::settings_ui::GithubConnection::Idle,
             github_request: 0,
-            token_input: cx.new(|cx| {
-                let mut input =
-                    crate::text_input::TextInput::new("ghp_… or github_pat_…", &Theme::dark(), cx);
-                input.masked = true;
-                input
-            }),
+            github_remote: None,
+            github_pulls: None,
+            github_pulls_request: 0,
+            github_checks: None,
+            github_checks_request: 0,
+            github_runs: None,
+            github_runs_request: 0,
+            token_input: Self::masked_token_input(cx),
             juxtapose_bounds: std::rc::Rc::default(),
             preferred_diff_mode: DiffMode::Unified,
             compare_parent: DiffParent::FirstParent,
@@ -925,6 +1006,7 @@ impl SourcefourWindow {
                         let selected = this.history.selected;
                         this.start_history(scope, cx);
                         this.history.selected = selected;
+                        this.refresh_github(cx);
                     }
                     cx.notify();
                     applied
@@ -1073,6 +1155,8 @@ impl SourcefourWindow {
     /// the read starts only if the selection still stands after ~50ms. A
     /// result is dropped when the selection or generation moved on.
     fn load_selected_files(&mut self, cx: &mut gpui::Context<Self>) {
+        // Checks follow the selection with their own cache and TTL.
+        self.load_selected_checks(false, cx);
         let Some(oid) = self.history.selected else {
             self.detail = None;
             self.files = None;
@@ -1489,9 +1573,75 @@ impl SourcefourWindow {
                             )
                         }))
                     }),
+                // Only a GitHub repository has Actions to show.
+                SidebarSection::Actions if self.github_remote.is_none() => root,
+                SidebarSection::Actions => {
+                    let runs = self
+                        .github_runs
+                        .as_ref()
+                        .map_or(&[][..], |(runs, _)| runs.as_slice());
+                    root.child(self.section("ACTIONS", runs.len().to_string(), section, cx))
+                        .when(self.sections.actions, |this| {
+                            this.children(
+                                runs.iter()
+                                    .enumerate()
+                                    .map(|(index, run)| self.workflow_run_row(index, run)),
+                            )
+                        })
+                }
             };
         }
         root
+    }
+
+    /// One Actions run: status glyph, workflow and number, branch; clicking
+    /// opens the run on github.com.
+    fn workflow_run_row(
+        &self,
+        index: usize,
+        run: &sourcefour_model::WorkflowRun,
+    ) -> gpui::Stateful<Div> {
+        let (glyph, color) = check_glyph(&self.theme, run.status);
+        let url = run.html_url.clone();
+        div()
+            .id(("workflow-run", index))
+            .h(px(24.0))
+            .flex()
+            .items_center()
+            .gap(px(7.0))
+            .px(px(15.0))
+            .cursor_pointer()
+            .hover(|style| style.bg(self.theme.bg_hover))
+            .on_click(move |_, _, cx| {
+                cx.stop_propagation();
+                cx.open_url(&url);
+            })
+            .child(
+                div()
+                    .w(px(12.0))
+                    .flex_none()
+                    .font_weight(FontWeight::BOLD)
+                    .text_color(color)
+                    .child(glyph),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(1.0))
+                    .overflow_hidden()
+                    .text_ellipsis()
+                    .whitespace_nowrap()
+                    .text_size(px(11.5))
+                    .text_color(self.theme.text_secondary)
+                    .child(format!("{} #{}", run.name, run.run_number)),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .text_size(px(10.0))
+                    .text_color(self.theme.text_faint)
+                    .child(run.branch.clone()),
+            )
     }
 
     fn worktree_row(&self, tree: &sourcefour_model::WorktreeSnapshot) -> Div {
@@ -1603,6 +1753,32 @@ impl SourcefourWindow {
             })
             .child(branch_marker(&self.theme))
             .child(branch.short_name.clone())
+            .children(
+                pr_for_branch(self.github_pulls.as_ref(), &branch.short_name).map(|pull| {
+                    let color = if pull.draft {
+                        self.theme.text_faint
+                    } else {
+                        self.theme.green
+                    };
+                    let url = pull.html_url.clone();
+                    div()
+                        .id(("pr-chip", pull.number))
+                        .flex_none()
+                        .px(px(4.0))
+                        .rounded(px(3.0))
+                        .border_1()
+                        .border_color(color.opacity(0.45))
+                        .text_size(px(9.0))
+                        .text_color(color)
+                        .cursor_pointer()
+                        .hover(|style| style.bg(self.theme.bg_hover))
+                        .on_click(move |_, _, cx| {
+                            cx.stop_propagation();
+                            cx.open_url(&url);
+                        })
+                        .child(format!("#{}", pull.number))
+                }),
+            )
             .child(div().flex_grow())
             .children(ahead_behind_text(branch.ahead_behind).map(|text| {
                 div()
@@ -1667,6 +1843,9 @@ impl SourcefourWindow {
                 SidebarSection::Worktrees => "WORKTREES",
                 SidebarSection::Branches => "BRANCHES",
                 SidebarSection::Remotes => "REMOTES",
+                // Nothing to promise while metadata loads: Actions appears
+                // only once a GitHub remote resolves.
+                SidebarSection::Actions => continue,
             };
             root = root
                 .child(self.section(title, "", section, cx))
@@ -2416,8 +2595,100 @@ impl SourcefourWindow {
                             .text_size(px(11.5))
                             .text_color(self.theme.text_secondary)
                             .child(body)
-                    })),
+                    }))
+                    .children(self.checks_block(cx)),
             )
+    }
+
+    /// The selected commit's checks (§ GitHub): rendered only once an answer
+    /// for exactly this commit exists, so the block never flickers.
+    fn checks_block(&self, cx: &mut gpui::Context<Self>) -> Option<Div> {
+        let selected = self.history.selected?;
+        let (cached, outcome, _) = self.github_checks.as_ref()?;
+        if *cached != selected {
+            return None;
+        }
+        let body: Vec<Div> = match outcome {
+            Ok(runs) if runs.is_empty() => return None,
+            Ok(runs) => runs
+                .iter()
+                .enumerate()
+                .map(|(index, run)| {
+                    let (glyph, color) = check_glyph(&self.theme, run.status);
+                    let url = run.html_url.clone();
+                    div().child(
+                        div()
+                            .id(("check-run", index))
+                            .h(px(20.0))
+                            .flex()
+                            .items_center()
+                            .gap(px(8.0))
+                            .cursor_pointer()
+                            .hover(|style| style.bg(self.theme.bg_hover))
+                            .on_click(move |_, _, cx| {
+                                cx.stop_propagation();
+                                cx.open_url(&url);
+                            })
+                            .child(
+                                div()
+                                    .w(px(12.0))
+                                    .flex_none()
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(color)
+                                    .child(glyph),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(11.0))
+                                    .text_color(self.theme.text_secondary)
+                                    .child(run.name.clone()),
+                            ),
+                    )
+                })
+                .collect(),
+            Err(message) => vec![
+                div()
+                    .text_size(px(10.5))
+                    .text_color(self.theme.text_faint)
+                    .child(message.clone()),
+            ],
+        };
+        Some(
+            div()
+                .mt(px(8.0))
+                .pt(px(8.0))
+                .border_t_1()
+                .border_color(self.theme.border)
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(8.0))
+                        .pb(px(4.0))
+                        .child(
+                            div()
+                                .text_size(px(10.0))
+                                .font_weight(FontWeight::BOLD)
+                                .text_color(self.theme.text_faint)
+                                .child("CHECKS"),
+                        )
+                        .child(
+                            div()
+                                .id("checks-refresh")
+                                .px(px(4.0))
+                                .rounded(px(3.0))
+                                .cursor_pointer()
+                                .text_size(px(10.0))
+                                .text_color(self.theme.text_faint)
+                                .hover(|style| style.bg(self.theme.bg_hover))
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.load_selected_checks(true, cx);
+                                }))
+                                .child("↻"),
+                        ),
+                )
+                .children(body),
+        )
     }
 
     /// The right details column: the changed-files header and scrollable list.
@@ -2497,6 +2768,18 @@ impl SourcefourWindow {
         self.diff_view = Some(view);
     }
 
+    /// The GitHub section's token field: like every input, but masked.
+    fn masked_token_input(
+        cx: &mut gpui::Context<Self>,
+    ) -> gpui::Entity<crate::text_input::TextInput> {
+        cx.new(|cx| {
+            let mut input =
+                crate::text_input::TextInput::new("ghp_… or github_pat_…", &Theme::dark(), cx);
+            input.masked = true;
+            input
+        })
+    }
+
     /// Opens the settings overlay and moves focus into it.
     pub(crate) fn open_settings(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) {
         if self.settings_view.is_none() {
@@ -2534,6 +2817,8 @@ impl SourcefourWindow {
     ) {
         apply(&mut self.settings);
         self.settings.save();
+        // A changed toggle or auth method takes effect without a restart.
+        self.refresh_github(cx);
         cx.notify();
     }
 
@@ -2593,6 +2878,182 @@ impl SourcefourWindow {
                     },
                     Err(message) => GithubConnection::Failed { message },
                 };
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Re-resolves which GitHub repository the remotes point at and refreshes
+    /// the read surfaces; origin wins when several remotes are GitHub.
+    fn refresh_github(&mut self, cx: &mut gpui::Context<Self>) {
+        self.github_remote = None;
+        if !self.settings.github.enabled {
+            self.github_pulls = None;
+            self.github_checks = None;
+            cx.notify();
+            return;
+        }
+        let Some(snapshot) = self.snapshot() else {
+            return;
+        };
+        self.github_remote = snapshot
+            .remotes
+            .iter()
+            .filter(|remote| remote.name == "origin")
+            .chain(snapshot.remotes.iter())
+            .find_map(|remote| {
+                remote
+                    .fetch_url
+                    .as_deref()
+                    .and_then(sourcefour_github::GithubRemote::parse)
+            });
+        self.load_pulls(false, cx);
+        self.load_selected_checks(false, cx);
+        self.load_runs(false, cx);
+    }
+
+    /// Fetches recent Actions workflow runs unless the cache is still fresh.
+    fn load_runs(&mut self, force: bool, cx: &mut gpui::Context<Self>) {
+        let Some(remote) = self.github_remote.clone() else {
+            return;
+        };
+        if !force
+            && self
+                .github_runs
+                .as_ref()
+                .is_some_and(|(_, at)| github_cache_fresh(*at, std::time::Instant::now()))
+        {
+            return;
+        }
+        let method = self.settings.github.auth_method;
+        let host = self.settings.github.host.clone();
+        let credentials = crate::ui_state::support_file("credentials.json");
+        self.github_runs_request += 1;
+        let request = self.github_runs_request;
+        cx.spawn(async move |this, cx| {
+            let outcome = cx
+                .background_executor()
+                .spawn(async move {
+                    let token = resolve_github_token(method, &host, credentials.as_deref())?;
+                    sourcefour_github::workflow_runs(
+                        &sourcefour_github::UreqTransport,
+                        &remote,
+                        &token,
+                        20,
+                    )
+                    .map_err(|failure| failure.message)
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                if this.github_runs_request != request {
+                    return;
+                }
+                match outcome {
+                    Ok(runs) => {
+                        this.github_runs = Some((runs, std::time::Instant::now()));
+                        cx.notify();
+                    }
+                    // A stale list beats a section that flickers empty.
+                    Err(message) => tracing::warn!(message, "workflow runs could not load"),
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Fetches the open pull requests unless the cache is still fresh.
+    fn load_pulls(&mut self, force: bool, cx: &mut gpui::Context<Self>) {
+        let Some(remote) = self.github_remote.clone() else {
+            return;
+        };
+        if !force
+            && self
+                .github_pulls
+                .as_ref()
+                .is_some_and(|(_, at)| github_cache_fresh(*at, std::time::Instant::now()))
+        {
+            return;
+        }
+        let method = self.settings.github.auth_method;
+        let host = self.settings.github.host.clone();
+        let credentials = crate::ui_state::support_file("credentials.json");
+        self.github_pulls_request += 1;
+        let request = self.github_pulls_request;
+        cx.spawn(async move |this, cx| {
+            let outcome = cx
+                .background_executor()
+                .spawn(async move {
+                    let token = resolve_github_token(method, &host, credentials.as_deref())?;
+                    sourcefour_github::open_pulls(
+                        &sourcefour_github::UreqTransport,
+                        &remote,
+                        &token,
+                    )
+                    .map_err(|failure| failure.message)
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                if this.github_pulls_request != request {
+                    return;
+                }
+                match outcome {
+                    Ok(pulls) => {
+                        this.github_pulls = Some((pulls, std::time::Instant::now()));
+                        cx.notify();
+                    }
+                    // Stale chips beat a sidebar that flickers on every
+                    // network hiccup; the message lands in the log.
+                    Err(message) => tracing::warn!(message, "pull requests could not load"),
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Fetches the selected commit's check runs unless the cache is fresh.
+    fn load_selected_checks(&mut self, force: bool, cx: &mut gpui::Context<Self>) {
+        let Some(remote) = self.github_remote.clone() else {
+            return;
+        };
+        let Some(oid) = self.history.selected else {
+            self.github_checks = None;
+            return;
+        };
+        if !force
+            && self.github_checks.as_ref().is_some_and(|(cached, _, at)| {
+                *cached == oid && github_cache_fresh(*at, std::time::Instant::now())
+            })
+        {
+            return;
+        }
+        let method = self.settings.github.auth_method;
+        let host = self.settings.github.host.clone();
+        let credentials = crate::ui_state::support_file("credentials.json");
+        self.github_checks_request += 1;
+        let request = self.github_checks_request;
+        cx.spawn(async move |this, cx| {
+            let outcome = cx
+                .background_executor()
+                .spawn(async move {
+                    let token = resolve_github_token(method, &host, credentials.as_deref())?;
+                    sourcefour_github::check_runs(
+                        &sourcefour_github::UreqTransport,
+                        &remote,
+                        &token,
+                        &oid.to_hex(),
+                    )
+                    .map_err(|failure| failure.message)
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                if this.github_checks_request != request {
+                    return;
+                }
+                this.github_checks = Some((oid, outcome, std::time::Instant::now()));
                 cx.notify();
             })
             .ok();
@@ -4031,20 +4492,37 @@ mod tests {
 
     #[test]
     fn sidebar_sections_reorder_by_dropping_onto_a_target() {
-        use SidebarSection::{Branches, Remotes, Worktrees};
+        use SidebarSection::{Actions, Branches, Remotes, Worktrees};
         let mut sections = SidebarSections::default();
-        assert_eq!(sections.ordered(), [Worktrees, Branches, Remotes]);
+        assert_eq!(sections.ordered(), [Worktrees, Branches, Remotes, Actions]);
 
         // Dragging a section onto another takes that section's position.
         sections.reorder(Remotes, Worktrees);
-        assert_eq!(sections.ordered(), [Remotes, Worktrees, Branches]);
+        assert_eq!(sections.ordered(), [Remotes, Worktrees, Branches, Actions]);
 
         sections.reorder(Remotes, Branches);
-        assert_eq!(sections.ordered(), [Worktrees, Branches, Remotes]);
+        assert_eq!(sections.ordered(), [Worktrees, Branches, Remotes, Actions]);
 
         // Dropping a section onto itself changes nothing.
         sections.reorder(Branches, Branches);
-        assert_eq!(sections.ordered(), [Worktrees, Branches, Remotes]);
+        assert_eq!(sections.ordered(), [Worktrees, Branches, Remotes, Actions]);
+    }
+
+    #[test]
+    fn a_section_order_predating_actions_keeps_it_at_the_end() {
+        use SidebarSection::{Actions, Branches, Remotes, Worktrees};
+        let mut sections = SidebarSections::default();
+
+        sections.apply(&crate::ui_state::UiState {
+            section_order: Some(vec![
+                String::from("remotes"),
+                String::from("branches"),
+                String::from("worktrees"),
+            ]),
+            ..Default::default()
+        });
+
+        assert_eq!(sections.ordered(), [Remotes, Branches, Worktrees, Actions]);
     }
 
     #[test]
@@ -4085,5 +4563,56 @@ mod tests {
 
         assert_eq!(window.title, "Not a Git repository");
         assert_eq!(window.message, "No Git repository contains /opt.");
+    }
+
+    #[test]
+    fn github_caches_expire_at_the_ttl() {
+        let fetched = std::time::Instant::now();
+
+        assert!(super::github_cache_fresh(
+            fetched,
+            fetched + std::time::Duration::from_secs(59)
+        ));
+        assert!(!super::github_cache_fresh(
+            fetched,
+            fetched + std::time::Duration::from_secs(61)
+        ));
+    }
+
+    #[test]
+    fn branch_chips_find_their_pull_request_by_head() {
+        let pull = |number: u64, head: &str| sourcefour_model::PrSummary {
+            number,
+            title: String::from("t"),
+            draft: false,
+            head_branch: head.to_owned(),
+            head_sha: String::from("abc"),
+            html_url: String::from("https://example.invalid"),
+        };
+        let pulls = Some((
+            vec![pull(1, "feature/a"), pull(2, "feature/b")],
+            std::time::Instant::now(),
+        ));
+
+        assert_eq!(
+            super::pr_for_branch(pulls.as_ref(), "feature/b").map(|pull| pull.number),
+            Some(2)
+        );
+        assert_eq!(super::pr_for_branch(pulls.as_ref(), "main"), None);
+        assert_eq!(super::pr_for_branch(None, "main"), None);
+    }
+
+    #[test]
+    fn check_glyphs_read_at_a_glance() {
+        use sourcefour_model::{CheckConclusion, CheckStatus};
+
+        let theme = crate::theme::Theme::dark();
+        let glyph = |status| super::check_glyph(&theme, status).0;
+
+        assert_eq!(glyph(CheckStatus::Completed(CheckConclusion::Success)), "✓");
+        assert_eq!(glyph(CheckStatus::Completed(CheckConclusion::Failure)), "✗");
+        assert_eq!(glyph(CheckStatus::InProgress), "●");
+        assert_eq!(glyph(CheckStatus::Queued), "○");
+        assert_eq!(glyph(CheckStatus::Completed(CheckConclusion::Skipped)), "−");
     }
 }
