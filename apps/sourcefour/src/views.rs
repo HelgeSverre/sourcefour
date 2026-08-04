@@ -150,8 +150,8 @@ pub(crate) struct SourcefourWindow {
     fetch_cancel: Option<Arc<AtomicBool>>,
     /// Which operation `fetching` belongs to, for button labels.
     running_op: Option<chrome::NetworkOp>,
-    /// The last operation outcome: success flag and message.
-    fetch_status: Option<(bool, String)>,
+    /// The last operation outcome — any operation: success flag and message.
+    op_status: Option<(bool, String)>,
     /// The §6.13 create-branch dialog, when open.
     branch_dialog: Option<BranchDialog>,
     /// Name field of the create-branch dialog.
@@ -375,7 +375,7 @@ impl SourcefourWindow {
             fetching: None,
             fetch_cancel: None,
             running_op: None,
-            fetch_status: None,
+            op_status: None,
             branch_dialog: None,
             branch_input: Self::plain_input("new-branch-name", cx),
             list_scroll: UniformListScrollHandle::new(),

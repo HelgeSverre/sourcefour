@@ -260,7 +260,7 @@ impl SourcefourWindow {
         self.fetching = Some(Arc::clone(&latest));
         self.running_op = Some(op);
         self.fetch_cancel = Some(Arc::clone(&cancel));
-        self.fetch_status = None;
+        self.op_status = None;
         cx.spawn(async move |this, cx| {
             let outcome = cx
                 .background_executor()
@@ -281,19 +281,19 @@ impl SourcefourWindow {
                 this.fetch_cancel = None;
                 match outcome {
                     Ok(OperationOutcome::Succeeded { summary, .. }) => {
-                        this.fetch_status = Some((true, summary));
+                        this.op_status = Some((true, summary));
                         // Refresh immediately rather than waiting for the
                         // watcher's next poll (§6.12).
                         this.begin_reload(cx);
                     }
                     Ok(OperationOutcome::Cancelled { .. }) => {
-                        this.fetch_status = Some((true, format!("{} cancelled", op.label())));
+                        this.op_status = Some((true, format!("{} cancelled", op.label())));
                     }
                     Ok(OperationOutcome::Failed { error, .. }) => {
-                        this.fetch_status = Some((false, error.user.message));
+                        this.op_status = Some((false, error.user.message));
                     }
                     Err(failure) => {
-                        this.fetch_status = Some((false, failure.user.message));
+                        this.op_status = Some((false, failure.user.message));
                     }
                 }
                 cx.notify();
@@ -391,7 +391,7 @@ impl SourcefourWindow {
                     );
                 div().text_color(self.theme.accent).child(message)
             }))
-            .children(self.fetch_status.clone().map(|(ok, message)| {
+            .children(self.op_status.clone().map(|(ok, message)| {
                 div()
                     .text_color(if ok { self.theme.green } else { self.theme.red })
                     .child(message)

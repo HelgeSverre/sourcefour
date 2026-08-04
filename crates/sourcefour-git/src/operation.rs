@@ -7,7 +7,10 @@
 use std::{
     io::Read,
     process::{Command, Stdio},
-    sync::atomic::{AtomicBool, Ordering},
+    sync::{
+        Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, Instant},
 };
 
@@ -71,24 +74,50 @@ pub(crate) fn run(
             .with_details(error.to_string())
         })?;
 
-    let (stderr_text, was_cancelled) = pump_stderr(&mut child, operation.kind, sink, cancelled);
+    // Both pipes must drain concurrently: a child whose stdout fills the OS
+    // pipe buffer blocks in write(2), produces no more stderr, and never
+    // exits. Stdout gets its own reader thread while this thread pumps
+    // stderr for progress; a watcher thread kills the child on cancellation
+    // so Cancel works even while every pipe is silent.
+    let stdout_pipe = child.stdout.take();
+    let stderr_pipe = child.stderr.take();
+    let child = Mutex::new(child);
+    let finished = AtomicBool::new(false);
+    let (stderr_text, stdout_bytes) = std::thread::scope(|scope| {
+        let stdout_reader = scope.spawn(move || {
+            let mut buffer = Vec::new();
+            if let Some(mut pipe) = stdout_pipe {
+                pipe.read_to_end(&mut buffer).ok();
+            }
+            buffer
+        });
+        scope.spawn(|| {
+            while !finished.load(Ordering::Acquire) {
+                if cancelled.load(Ordering::Acquire) {
+                    if let Ok(mut child) = child.lock() {
+                        child.kill().ok();
+                    }
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        });
+        let stderr_text = pump_stderr(stderr_pipe, operation.kind, sink);
+        // Killed or exited, the pipes have closed; release the watcher.
+        finished.store(true, Ordering::Release);
+        let stdout_bytes = stdout_reader.join().unwrap_or_default();
+        (stderr_text, stdout_bytes)
+    });
 
-    let output = child.wait_with_output().map_err(|error| {
-        RepoFailure::new(
-            RepoFailureKind::Internal,
-            "Git did not finish",
-            "The operation process could not be reaped.",
-        )
-        .with_details(error.to_string())
-    })?;
+    let status = reap(child)?;
 
-    if was_cancelled {
+    if cancelled.load(Ordering::Acquire) {
         return Ok(OperationOutcome::Cancelled {
             kind: operation.kind,
         });
     }
-    let stdout_text = String::from_utf8_lossy(&output.stdout);
-    if output.status.success() {
+    let stdout_text = String::from_utf8_lossy(&stdout_bytes);
+    if status.success() {
         Ok(OperationOutcome::Succeeded {
             kind: operation.kind,
             summary: (operation.summarize)(&stdout_text),
@@ -121,6 +150,28 @@ pub(crate) fn run(
     }
 }
 
+/// Waits the finished (or killed) child out of its mutex.
+fn reap(child: Mutex<std::process::Child>) -> Result<std::process::ExitStatus, RepoFailure> {
+    child
+        .into_inner()
+        .map_err(|_| {
+            RepoFailure::new(
+                RepoFailureKind::Internal,
+                "Git did not finish",
+                "The operation's watcher thread panicked.",
+            )
+        })?
+        .wait()
+        .map_err(|error| {
+            RepoFailure::new(
+                RepoFailureKind::Internal,
+                "Git did not finish",
+                "The operation process could not be reaped.",
+            )
+            .with_details(error.to_string())
+        })
+}
+
 /// Maps Git's words onto the failure taxonomy shared by every network
 /// operation (§6.12).
 pub(crate) fn classify_stderr(stderr: &str) -> RepoFailureKind {
@@ -136,33 +187,25 @@ pub(crate) fn classify_stderr(stderr: &str) -> RepoFailureKind {
     }
 }
 
-/// Streams stderr, forwarding rate-limited progress lines; returns the
-/// collected text and whether cancellation killed the child.
+/// Streams stderr until it closes, forwarding rate-limited progress lines;
+/// returns the collected text. Cancellation is the watcher thread's job —
+/// killing the child closes this pipe and ends the loop.
 ///
 /// Progress lines arrive `\r`-terminated while a phase counts up, so this
 /// reads bytewise instead of waiting for the newline at phase end.
 fn pump_stderr(
-    child: &mut std::process::Child,
+    pipe: Option<std::process::ChildStderr>,
     kind: OperationKind,
     sink: &dyn OperationSink,
-    cancelled: &AtomicBool,
-) -> (String, bool) {
-    let mut stderr = child.stderr.take();
+) -> String {
     let mut stderr_text = String::new();
     let mut line = String::new();
     let mut last_report: Option<Instant> = None;
     let mut buffer = [0_u8; 512];
-    let Some(pipe) = stderr.as_mut() else {
-        return (stderr_text, false);
+    let Some(mut pipe) = pipe else {
+        return stderr_text;
     };
-    loop {
-        if cancelled.load(Ordering::Acquire) {
-            let _ = child.kill();
-            return (stderr_text, true);
-        }
-        let Ok(read) = pipe.read(&mut buffer) else {
-            break;
-        };
+    while let Ok(read) = pipe.read(&mut buffer) {
         if read == 0 {
             break;
         }
@@ -182,7 +225,7 @@ fn pump_stderr(
             }
         }
     }
-    (stderr_text, false)
+    stderr_text
 }
 
 /// Extracts `completed`/`total` from lines like

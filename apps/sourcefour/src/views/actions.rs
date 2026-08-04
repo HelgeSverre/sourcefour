@@ -102,6 +102,28 @@ fn default_step(job: &WorkflowJob) -> Option<usize> {
         })
 }
 
+/// The run's status as the fetched jobs tell it — `run.status` froze when
+/// the overlay opened, so a live run's header follows the jobs instead.
+fn effective_run_status(view: &ActionsView) -> CheckStatus {
+    let jobs = view.jobs_ok();
+    if jobs.is_empty() {
+        return view.run.status;
+    }
+    if jobs
+        .iter()
+        .any(|job| matches!(job.status, CheckStatus::InProgress | CheckStatus::Queued))
+    {
+        return CheckStatus::InProgress;
+    }
+    if jobs
+        .iter()
+        .any(|job| matches!(job.status, CheckStatus::Completed(CheckConclusion::Failure)))
+    {
+        return CheckStatus::Completed(CheckConclusion::Failure);
+    }
+    CheckStatus::Completed(CheckConclusion::Success)
+}
+
 /// Wall seconds between two boundaries when both are known.
 fn duration_of(started: Option<i64>, completed: Option<i64>) -> Option<i64> {
     Some((completed? - started?).max(0))
@@ -180,8 +202,9 @@ fn demo_run() -> WorkflowRun {
     }
 }
 
-/// 2026-08-04T14:30:00Z, the demo run's start.
-const DEMO_BASE: i64 = 1_785_853_800;
+/// Two hours before the demo's fixed "now", so relative dates and
+/// elapsed math stay coherent with [`crate::demo::NOW_SECONDS`].
+const DEMO_BASE: i64 = crate::demo::NOW_SECONDS - 7200;
 
 /// The demo jobs, matching the mockup rail and timeline.
 fn demo_jobs() -> Vec<WorkflowJob> {
@@ -282,19 +305,19 @@ fn demo_jobs() -> Vec<WorkflowJob> {
 /// The demo windows job's log, matching the mockup's failing clippy step.
 fn demo_log() -> Vec<String> {
     [
-        "2026-08-04T14:30:04Z ##[group]Run actions/checkout@v4",
-        "2026-08-04T14:30:07Z Syncing repository: HelgeSverre/sourcefour",
-        "2026-08-04T14:30:12Z ##[group]Run dtolnay/rust-toolchain@stable",
-        "2026-08-04T14:30:51Z installed rustc 1.97.0",
-        "2026-08-04T14:30:54Z     Checking sourcefour v0.1.0 (D:\\a\\sourcefour\\apps\\sourcefour)",
-        "2026-08-04T14:31:40Z error[E0308]: mismatched types",
-        "2026-08-04T14:31:40Z   --> apps\\sourcefour\\src\\views\\chrome.rs:221:36",
-        "2026-08-04T14:31:40Z     |",
-        "2026-08-04T14:31:40Z 221 |    .unwrap_or_else(|| WorktreeId(String::from(\"active\"))),",
-        "2026-08-04T14:31:40Z     |                       ^^^^^^^^^^ expected `PathBuf`, found `String`",
-        "2026-08-04T14:31:41Z warning: unused import: `std::path::PathBuf`",
-        "2026-08-04T14:31:44Z error: could not compile `sourcefour` (bin \"sourcefour\") due to 1 previous error",
-        "2026-08-04T14:31:55Z ##[error]Process completed with exit code 101.",
+        "2024-08-02T10:00:04Z ##[group]Run actions/checkout@v4",
+        "2024-08-02T10:00:07Z Syncing repository: HelgeSverre/sourcefour",
+        "2024-08-02T10:00:12Z ##[group]Run dtolnay/rust-toolchain@stable",
+        "2024-08-02T10:00:51Z installed rustc 1.97.0",
+        "2024-08-02T10:00:54Z     Checking sourcefour v0.1.0 (D:\\a\\sourcefour\\apps\\sourcefour)",
+        "2024-08-02T10:01:40Z error[E0308]: mismatched types",
+        "2024-08-02T10:01:40Z   --> apps\\sourcefour\\src\\views\\chrome.rs:221:36",
+        "2024-08-02T10:01:40Z     |",
+        "2024-08-02T10:01:40Z 221 |    .unwrap_or_else(|| WorktreeId(String::from(\"active\"))),",
+        "2024-08-02T10:01:40Z     |                       ^^^^^^^^^^ expected `PathBuf`, found `String`",
+        "2024-08-02T10:01:41Z warning: unused import: `std::path::PathBuf`",
+        "2024-08-02T10:01:44Z error: could not compile `sourcefour` (bin \"sourcefour\") due to 1 previous error",
+        "2024-08-02T10:01:55Z ##[error]Process completed with exit code 101.",
     ]
     .map(String::from)
     .to_vec()
@@ -325,10 +348,13 @@ impl SourcefourWindow {
                 jobs: Some(outcome),
                 ..
             }) => self.apply_actions_jobs(run_id, outcome, cx),
-            // The press's fetch is in flight; its completion lands in the
-            // view through the same apply path.
-            Some(ActionsPrefetch { jobs: None, .. }) => {}
-            None => self.fetch_actions_jobs(run_id, cx),
+            // A press's fetch may be in flight — but a later press for a
+            // different run retires it through the shared request counter,
+            // so never trust it: re-request. The newest counter wins, so
+            // the cost is one redundant read in the benign race.
+            Some(ActionsPrefetch { jobs: None, .. }) | None => {
+                self.fetch_actions_jobs(run_id, cx);
+            }
         }
         self.poll_actions(cx);
     }
@@ -527,12 +553,14 @@ impl SourcefourWindow {
                         let Some(view) = &this.actions_view else {
                             return false;
                         };
-                        let done = matches!(view.run.status, CheckStatus::Completed(_))
+                        // `run.status` froze at open time, so completion is
+                        // read from the fetched jobs.
+                        let done = !view.jobs_ok().is_empty()
                             && view
                                 .jobs_ok()
                                 .iter()
                                 .all(|job| matches!(job.status, CheckStatus::Completed(_)));
-                        if done && view.jobs.is_some() {
+                        if done {
                             return false;
                         }
                         if let Some(view) = &this.actions_view {
@@ -635,7 +663,7 @@ impl SourcefourWindow {
 
     /// Title row and chip row, per the mockup's header.
     fn actions_header(&self, view: &ActionsView, cx: &mut gpui::Context<Self>) -> Div {
-        let (glyph, color) = check_glyph(&self.theme, view.run.status);
+        let (glyph, color) = check_glyph(&self.theme, effective_run_status(view));
         let wall = elapsed_of(
             view.run.started_at,
             view.run.completed_at,

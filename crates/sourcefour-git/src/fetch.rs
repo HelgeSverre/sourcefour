@@ -172,6 +172,33 @@ mod tests {
     }
 
     #[test]
+    fn a_stdout_burst_larger_than_the_pipe_buffer_cannot_deadlock()
+    -> Result<(), Box<dyn std::error::Error>> {
+        // 700 new branches make the porcelain ref listing far exceed the
+        // 16 KiB macOS pipe buffer; without a concurrent stdout drain the
+        // child blocks in write(2) and this test hangs forever.
+        let origin = TempRepo::init();
+        let clone = TempRepo::clone_of(&origin);
+        for index in 0..700 {
+            origin.git(&["branch", &format!("bulk/branch-{index:04}")]);
+        }
+        let sink = CollectingSink(Mutex::new(Vec::new()));
+
+        let outcome = fetch(
+            &discover(clone.path())?,
+            &request(Some("origin"), false),
+            &sink,
+            &AtomicBool::new(false),
+        )?;
+
+        let OperationOutcome::Succeeded { summary, .. } = outcome else {
+            panic!("the bulk fetch succeeds: {outcome:?}");
+        };
+        assert_eq!(summary, "700 refs updated");
+        Ok(())
+    }
+
+    #[test]
     fn a_cancelled_fetch_reports_cancelled() -> Result<(), Box<dyn std::error::Error>> {
         let origin = TempRepo::init();
         let clone = TempRepo::clone_of(&origin);

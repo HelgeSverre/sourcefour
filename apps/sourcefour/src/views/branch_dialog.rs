@@ -77,7 +77,7 @@ impl SourcefourWindow {
                 match outcome {
                     Ok(OperationOutcome::Succeeded { summary, .. }) => {
                         this.branch_dialog = None;
-                        this.fetch_status = Some((true, summary));
+                        this.op_status = Some((true, summary));
                         this.begin_reload(cx);
                     }
                     Ok(OperationOutcome::Failed { error, .. }) | Err(error) => {
