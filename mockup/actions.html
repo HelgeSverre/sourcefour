@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>sourcefour — Actions run detail prototype</title>
+<style>
+  :root {
+    color-scheme: only dark;
+    --bg-page: #0b0c0f;
+    --bg-chrome: #15171c;
+    --bg-panel: #191c22;
+    --bg-list: #1d2129;
+    --bg-hover: #222734;
+    --bg-sel: #263042;
+    --border: #262a33;
+    --border-strong: #2f3542;
+    --text: #dfe3ec;
+    --text2: #9aa2b3;
+    --text3: #5f677a;
+    --accent: #5b9dff;
+    --green: #7ec96f;
+    --orange: #e0a458;
+    --purple: #b392f0;
+    --red: #e5655e;
+    --cyan: #64c7d6;
+    --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+    --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: var(--bg-page);
+    font-family: var(--font-ui);
+    color: var(--text);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 28px;
+    padding: 28px;
+    -webkit-font-smoothing: antialiased;
+  }
+  .annotation {
+    width: 1280px;
+    color: var(--text3);
+    font-size: 12px;
+    line-height: 1.5;
+  }
+  .annotation b { color: var(--text2); font-weight: 600; }
+
+  /* ── the app window with the overlay open ─────────────────────────── */
+  .window {
+    width: 1280px;
+    height: 800px;
+    position: relative;
+    background: var(--bg-chrome);
+    border: 1px solid var(--border-strong);
+    border-radius: 10px;
+    overflow: hidden;
+    box-shadow: 0 30px 80px rgba(0,0,0,.55);
+  }
+  .app-ghost {
+    position: absolute; inset: 0;
+    display: flex; flex-direction: column;
+    filter: brightness(.45);
+  }
+  .ghost-titlebar { height: 38px; background: var(--bg-chrome); border-bottom: 1px solid var(--border); }
+  .ghost-toolbar  { height: 46px; background: var(--bg-chrome); border-bottom: 1px solid var(--border); }
+  .ghost-body { flex: 1; display: flex; }
+  .ghost-sidebar { width: 236px; background: var(--bg-panel); border-right: 1px solid var(--border); }
+  .ghost-list { flex: 1; background: var(--bg-list); }
+  .backdrop { position: absolute; inset: 0; background: rgba(0,0,0,.55); }
+
+  .overlay {
+    position: absolute; inset: 26px;
+    display: flex; flex-direction: column;
+    background: var(--bg-panel);
+    border: 1px solid var(--border-strong);
+    border-radius: 10px;
+    overflow: hidden;
+    box-shadow: 0 18px 60px rgba(0,0,0,.5);
+  }
+
+  /* header */
+  .run-header {
+    padding: 12px 16px 10px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-chrome);
+  }
+  .run-title-row { display: flex; align-items: center; gap: 10px; }
+  .glyph { font-weight: 700; }
+  .g-red { color: var(--red); } .g-green { color: var(--green); }
+  .g-orange { color: var(--orange); } .g-faint { color: var(--text3); }
+  .run-title { font-size: 14px; font-weight: 600; flex: 1; min-width: 0;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .run-duration { font-size: 12px; color: var(--text2); font-variant-numeric: tabular-nums; }
+  .esc-hint { font-size: 11px; color: var(--text3); }
+  .close { color: var(--text2); font-size: 13px; padding: 2px 8px; border-radius: 4px; }
+  .close:hover { background: var(--bg-hover); }
+  .run-meta { display: flex; align-items: center; gap: 6px; margin-top: 7px; }
+  .chip {
+    font-size: 10px; padding: 1px 6px; border-radius: 4px;
+    border: 1px solid var(--border-strong); color: var(--text2);
+  }
+  .chip.mono { font-family: var(--font-mono); }
+  .chip.wf { color: var(--accent); border-color: rgba(91,157,255,.4); background: rgba(91,157,255,.08); }
+  .chip.branch { color: var(--green); border-color: rgba(126,201,111,.4); background: rgba(126,201,111,.08); }
+  .meta-sep { color: var(--text3); font-size: 10px; }
+  .gh-link { margin-left: auto; font-size: 11px; color: var(--text3); }
+  .gh-link:hover { color: var(--accent); }
+
+  /* body: jobs rail + steps */
+  .run-body { flex: 1; display: flex; min-height: 0; }
+  .jobs {
+    width: 232px; flex: none; border-right: 1px solid var(--border);
+    background: var(--bg-panel); padding-top: 8px; overflow-y: auto;
+  }
+  .jobs-label, .steps-label {
+    font-size: 10px; font-weight: 700; color: var(--text3);
+    padding: 0 14px 6px; letter-spacing: .04em;
+  }
+  .job {
+    display: flex; align-items: center; gap: 8px;
+    padding: 0 14px; height: 34px; font-size: 12px; color: var(--text2);
+    border-left: 2px solid transparent; cursor: pointer;
+  }
+  .job:hover { background: var(--bg-hover); }
+  .job.sel { background: var(--bg-sel); color: var(--text); border-left-color: var(--accent); }
+  .job .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .dur { font-size: 10.5px; color: var(--text3); font-variant-numeric: tabular-nums; flex: none; }
+
+  .steps { flex: 1; min-width: 0; display: flex; flex-direction: column; background: var(--bg-list); }
+  .job-header {
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 16px 8px; font-size: 12.5px; border-bottom: 1px solid var(--border);
+  }
+  .job-header .runner { color: var(--text3); font-size: 11px; }
+  .job-header .dur { margin-left: auto; font-size: 11.5px; color: var(--text2); }
+  .steps-scroll { flex: 1; overflow-y: auto; padding: 6px 0 12px; }
+  .step {
+    display: grid; grid-template-columns: 26px 1fr 120px 56px; align-items: center;
+    height: 26px; padding: 0 16px; font-size: 12px; color: var(--text2);
+  }
+  .step:hover { background: var(--bg-hover); }
+  .step .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .step.failed .name { color: var(--text); }
+  .step.skipped { color: var(--text3); }
+  .bar-track { height: 4px; border-radius: 2px; background: var(--bg-hover); margin-right: 14px; }
+  .bar { height: 4px; border-radius: 2px; background: var(--border-strong); }
+  .bar.green { background: rgba(126,201,111,.55); }
+  .bar.red { background: rgba(229,101,94,.75); }
+  .step .dur { text-align: right; }
+
+  /* the auto-expanded failing step log */
+  .log {
+    margin: 4px 0 0;
+    border-top: 1px solid var(--border);
+    background: var(--bg-page);
+    font-family: var(--font-mono);
+    font-size: 11px; line-height: 1.55;
+    padding: 8px 16px 8px 42px;
+    overflow-x: auto;
+  }
+  .log .ts { color: var(--text3); user-select: none; }
+  .log .err { color: var(--red); }
+  .log .warn { color: var(--orange); }
+  .log .ctx { color: var(--text2); }
+  .log .hl { background: rgba(229,101,94,.12); display: inline-block; width: 100%; }
+  .log-foot {
+    display: flex; gap: 14px; padding: 5px 16px 8px 42px; margin-bottom: 4px;
+    font-size: 10.5px; color: var(--text3);
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-page);
+  }
+  .log-foot a { color: var(--accent); }
+
+  /* waterfall */
+  .waterfall {
+    flex: none; border-top: 1px solid var(--border);
+    background: var(--bg-panel); padding: 8px 16px 10px;
+  }
+  .wf-title { font-size: 10px; font-weight: 700; color: var(--text3); letter-spacing: .04em; margin-bottom: 6px; }
+  .wf-grid { position: relative; }
+  .wf-row { display: flex; align-items: center; gap: 8px; height: 18px; }
+  .wf-name { width: 150px; flex: none; font-size: 10.5px; color: var(--text2);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .wf-track { flex: 1; position: relative; height: 8px; }
+  .wf-bar { position: absolute; top: 1px; height: 6px; border-radius: 3px; }
+  .wf-axis { display: flex; margin-left: 158px; justify-content: space-between;
+    font-size: 9.5px; color: var(--text3); margin-top: 4px; font-variant-numeric: tabular-nums; }
+
+  /* ── the improved sidebar rows, before/after ──────────────────────── */
+  .compare { width: 1280px; display: flex; gap: 28px; }
+  .panel-card {
+    flex: 1; background: var(--bg-panel); border: 1px solid var(--border-strong);
+    border-radius: 10px; overflow: hidden;
+  }
+  .panel-card h3 {
+    font-size: 10px; font-weight: 700; letter-spacing: .04em; color: var(--text3);
+    padding: 10px 14px 6px;
+  }
+  .srow { display: flex; align-items: center; gap: 7px; padding: 0 15px; height: 24px; font-size: 12px; color: var(--text2); }
+  .srow:hover { background: var(--bg-hover); }
+  .srow .dot { width: 6px; height: 6px; border-radius: 50%; flex: none; }
+  .srow .meta { margin-left: auto; font-size: 10px; color: var(--text3); flex: none; }
+  .srow2 { display: flex; flex-direction: column; justify-content: center; gap: 1px; padding: 4px 15px; height: 38px; }
+  .srow2:hover { background: var(--bg-hover); }
+  .srow2 .top { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--text); }
+  .srow2 .top .title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .srow2 .sub { padding-left: 13px; font-size: 10px; color: var(--text3); }
+</style>
+</head>
+<body>
+
+<div class="annotation">
+  <b>Actions run detail — failure-first.</b> Clicking a run in the ACTIONS sidebar opens this
+  overlay instead of the browser. The failing job is pre-selected, the failing step is
+  pre-expanded with its log tail inline: zero clicks from "red dot" to "why". Durations and
+  proportional bars on every step answer "where did the time go"; the timeline strip shows
+  job parallelism. Esc closes, ↑↓ moves steps, j/k moves jobs, Enter toggles a log.
+</div>
+
+<div class="window">
+  <div class="app-ghost">
+    <div class="ghost-titlebar"></div>
+    <div class="ghost-toolbar"></div>
+    <div class="ghost-body">
+      <div class="ghost-sidebar"></div>
+      <div class="ghost-list"></div>
+    </div>
+  </div>
+  <div class="backdrop"></div>
+
+  <div class="overlay">
+    <div class="run-header">
+      <div class="run-title-row">
+        <span class="glyph g-red">✗</span>
+        <span class="run-title">fix: Windows paths, in the interface and in fixtures</span>
+        <span class="run-duration">3m 42s</span>
+        <span class="esc-hint">Esc</span>
+        <span class="close">✕</span>
+      </div>
+      <div class="run-meta">
+        <span class="chip wf">CI #143</span>
+        <span class="chip branch">main</span>
+        <span class="chip">push</span>
+        <span class="chip">HelgeSverre</span>
+        <span class="chip mono">b61a08d</span>
+        <span class="meta-sep">attempt 1 · 58 minutes ago</span>
+        <a class="gh-link" href="#">Open on GitHub ↗</a>
+      </div>
+    </div>
+
+    <div class="run-body">
+      <div class="jobs">
+        <div class="jobs-label">JOBS · 3 OF 4 FAILED OR SKIPPED</div>
+        <div class="job"><span class="glyph g-green">✓</span><span class="name">quality (ubuntu-latest)</span><span class="dur">2m 01s</span></div>
+        <div class="job sel"><span class="glyph g-red">✗</span><span class="name">quality (windows-latest)</span><span class="dur">1m 58s</span></div>
+        <div class="job"><span class="glyph g-green">✓</span><span class="name">quality (macos-14)</span><span class="dur">1m 24s</span></div>
+        <div class="job"><span class="glyph g-faint">−</span><span class="name">package (.pkg, .msi)</span><span class="dur">skipped</span></div>
+      </div>
+
+      <div class="steps">
+        <div class="job-header">
+          <span class="glyph g-red">✗</span>
+          <span>quality (windows-latest)</span>
+          <span class="runner">windows-latest · run 4 of workflow ci.yml</span>
+          <span class="dur">1m 58s</span>
+        </div>
+        <div class="steps-scroll">
+          <div class="step"><span class="glyph g-green">✓</span><span class="name">Set up job</span><div class="bar-track"><div class="bar green" style="width:4%"></div></div><span class="dur">3s</span></div>
+          <div class="step"><span class="glyph g-green">✓</span><span class="name">Checkout</span><div class="bar-track"><div class="bar green" style="width:6%"></div></div><span class="dur">4s</span></div>
+          <div class="step"><span class="glyph g-green">✓</span><span class="name">Install Rust toolchain</span><div class="bar-track"><div class="bar green" style="width:38%"></div></div><span class="dur">41s</span></div>
+          <div class="step"><span class="glyph g-green">✓</span><span class="name">cargo fmt --check</span><div class="bar-track"><div class="bar green" style="width:3%"></div></div><span class="dur">2s</span></div>
+          <div class="step failed"><span class="glyph g-red">✗</span><span class="name">cargo clippy --all-targets</span><div class="bar-track"><div class="bar red" style="width:60%"></div></div><span class="dur">1m 02s</span></div>
+
+          <div class="log">
+<span class="ts">14:32:18</span> <span class="ctx">    Checking sourcefour v0.1.0 (D:\a\sourcefour\apps\sourcefour)</span><br>
+<span class="hl"><span class="ts">14:32:41</span> <span class="err">error[E0308]: mismatched types</span></span><br>
+<span class="ts">14:32:41</span>   <span class="ctx">--&gt; apps\sourcefour\src\views\chrome.rs:221:36</span><br>
+<span class="ts">14:32:41</span>    <span class="ctx">|</span><br>
+<span class="ts">14:32:41</span> <span class="ctx">221 |    .unwrap_or_else(|| WorktreeId(String::from("active"))),</span><br>
+<span class="ts">14:32:41</span>    <span class="ctx">|                       <span class="err">^^^^^^^^^^ expected `PathBuf`, found `String`</span></span><br>
+<span class="ts">14:32:42</span> <span class="warn">warning: unused import: `std::path::PathBuf`</span><br>
+<span class="hl"><span class="ts">14:32:44</span> <span class="err">error: could not compile `sourcefour` (bin "sourcefour") due to 1 previous error</span></span><br>
+<span class="ts">14:32:44</span> <span class="err">##[error]Process completed with exit code 101.</span>
+          </div>
+          <div class="log-foot">
+            <span>showing last 9 of 1,204 lines · jumped to first error</span>
+            <a href="#">full log</a>
+            <a href="#">copy</a>
+          </div>
+
+          <div class="step skipped"><span class="glyph g-faint">−</span><span class="name">cargo test</span><div class="bar-track"></div><span class="dur">—</span></div>
+          <div class="step skipped"><span class="glyph g-faint">−</span><span class="name">Upload artifacts</span><div class="bar-track"></div><span class="dur">—</span></div>
+          <div class="step"><span class="glyph g-green">✓</span><span class="name">Post checkout · cleanup</span><div class="bar-track"><div class="bar green" style="width:2%"></div></div><span class="dur">1s</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="waterfall">
+      <div class="wf-title">TIMELINE · WALL TIME 3M 42S · LONGEST JOB QUALITY (UBUNTU) 2M 01S</div>
+      <div class="wf-grid">
+        <div class="wf-row"><span class="wf-name">quality (ubuntu-latest)</span><div class="wf-track"><div class="wf-bar" style="left:1%;width:54%;background:rgba(126,201,111,.6)"></div></div></div>
+        <div class="wf-row"><span class="wf-name">quality (windows-latest)</span><div class="wf-track"><div class="wf-bar" style="left:1.5%;width:53%;background:rgba(229,101,94,.7)"></div></div></div>
+        <div class="wf-row"><span class="wf-name">quality (macos-14)</span><div class="wf-track"><div class="wf-bar" style="left:2%;width:38%;background:rgba(126,201,111,.6)"></div></div></div>
+        <div class="wf-row"><span class="wf-name">package (.pkg, .msi)</span><div class="wf-track"><div class="wf-bar" style="left:56%;width:2%;background:var(--border-strong)"></div></div></div>
+      </div>
+      <div class="wf-axis"><span>0s</span><span>1m</span><span>2m</span><span>3m</span><span>3m 42s</span></div>
+    </div>
+  </div>
+</div>
+
+<div class="annotation">
+  <b>ACTIONS sidebar, varied naming.</b> Today every row reads "CI #n" because the workflow
+  name is the row title. The run's <b>display title</b> (commit subject or PR title) becomes
+  the primary line, with workflow, number, and branch demoted to a secondary line — rows
+  become distinguishable at a glance and the section doubles as a build history.
+</div>
+
+<div class="compare">
+  <div class="panel-card">
+    <h3>BEFORE — TODAY</h3>
+    <div class="srow"><span class="dot" style="background:var(--orange)"></span>CI #143<span class="meta">main</span></div>
+    <div class="srow"><span class="dot" style="background:var(--red)"></span>CI #142<span class="meta">main</span></div>
+    <div class="srow"><span class="dot" style="background:var(--red)"></span>CI #141<span class="meta">main</span></div>
+    <div class="srow"><span class="dot" style="background:var(--green)"></span>CI #140<span class="meta">ci/windows-probe</span></div>
+    <div class="srow"><span class="dot" style="background:var(--green)"></span>Release #12<span class="meta">main</span></div>
+    <div class="srow" style="margin-bottom:8px"><span class="dot" style="background:var(--green)"></span>CI #139<span class="meta">main</span></div>
+  </div>
+  <div class="panel-card">
+    <h3>AFTER — DISPLAY TITLE FIRST</h3>
+    <div class="srow2"><div class="top"><span class="dot" style="background:var(--orange)"></span><span class="title">feat: CI dots on history rows via one GraphQL…</span></div><div class="sub">CI #143 · main · 4m ago</div></div>
+    <div class="srow2"><div class="top"><span class="dot" style="background:var(--red)"></span><span class="title">fix: Windows paths, in the interface and in fix…</span></div><div class="sub">CI #142 · main · 58m ago</div></div>
+    <div class="srow2"><div class="top"><span class="dot" style="background:var(--green)"></span><span class="title">ci: build and test on Windows</span></div><div class="sub">CI #140 · ci/windows-probe · 1h ago</div></div>
+    <div class="srow2" style="margin-bottom:8px"><div class="top"><span class="dot" style="background:var(--green)"></span><span class="title">v0.1.0 — first packaged release</span></div><div class="sub">Release #12 · main · 2h ago</div></div>
+  </div>
+</div>
+
+</body>
+</html>
