@@ -1,9 +1,20 @@
 name: CI
 
+# Cost control, 2026-08-04. This repo is the only one on the account actually
+# billing money (August: $12.80 of $12.80 total, all of it here). Two causes:
+# every push to main re-ran what its PR had just run, and every run paid for
+# macOS and Windows, which bill at 10x and 2x Linux respectively.
+#
+# So: PRs run Linux only, and the full matrix runs on demand.
+#
+# >> RE-ENABLE THE FULL MATRIX BEFORE CUTTING A RELEASE. <<
+# Run this workflow manually (Actions -> CI -> Run workflow) and it builds all
+# three platforms. Nothing else checks the Windows MSI definition or that the
+# macOS/Windows builds still compile, and release.yml packages all three.
+# Until then day-to-day work does not need them.
 on:
   pull_request:
-  push:
-    branches: [main]
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
@@ -14,7 +25,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, ubuntu-latest, windows-latest]
+        # Linux on PRs; all three when dispatched by hand (see the note above).
+        os: ${{ fromJSON(github.event_name == 'workflow_dispatch' && '["macos-latest","ubuntu-latest","windows-latest"]' || '["ubuntu-latest"]') }}
     runs-on: ${{ matrix.os }}
     steps:
       - name: Enable long paths
