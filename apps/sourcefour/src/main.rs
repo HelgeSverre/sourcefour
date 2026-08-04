@@ -5,6 +5,7 @@ mod demo;
 mod graph_paint;
 mod history;
 mod panels;
+mod text_input;
 mod theme;
 mod ui_state;
 mod views;

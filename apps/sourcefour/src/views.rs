@@ -49,8 +49,8 @@ pub(crate) struct SourcefourWindow {
     files_for: Option<sourcefour_model::Oid>,
     list_scroll: UniformListScrollHandle,
     focus: FocusHandle,
-    /// Focus target of the §4.7 filter field.
-    filter_focus: FocusHandle,
+    /// The §4.7 filter field.
+    filter_input: gpui::Entity<crate::text_input::TextInput>,
 }
 
 actions!(
@@ -63,6 +63,8 @@ actions!(
         PageDown,
         PageUp,
         FocusFilter,
+        FilterEscape,
+        FilterEnter,
     ]
 );
 
@@ -536,8 +538,18 @@ impl SourcefourWindow {
             files_for: None,
             list_scroll: UniformListScrollHandle::new(),
             focus: cx.focus_handle(),
-            filter_focus: cx.focus_handle(),
+            filter_input: cx
+                .new(|cx| crate::text_input::TextInput::new("Filter commits", &Theme::dark(), cx)),
         };
+        // The input owns the text; the window derives the filtered view.
+        cx.observe(&window.filter_input, |this, input, cx| {
+            let text = input.read(cx).content.to_string();
+            if this.history.filter != text {
+                this.history.set_filter(&text);
+                cx.notify();
+            }
+        })
+        .detach();
         let state = crate::ui_state::UiState::load();
         window.sections.apply(&state);
         window.panels.apply(&state);
@@ -969,55 +981,25 @@ impl SourcefourWindow {
             .child(self.filter_box(window, cx))
     }
 
-    /// The §4.7 filter field: a minimal single-line input.
-    ///
-    /// Escape clears the query; a second Escape returns focus to history.
+    /// The §4.7 filter field, wrapping the real text input.
     fn filter_box(
         &self,
         window: &Window,
         cx: &mut gpui::Context<Self>,
     ) -> impl IntoElement + use<> {
-        let query = self.history.filter.clone();
-        let focused = self.filter_focus.is_focused(window);
+        let focused = self.filter_input.read(cx).focus_handle.is_focused(window);
         let matches = self
             .history
             .is_filtering()
-            .then(|| format!("{}", self.history.visible_len()));
+            .then(|| self.history.visible_len().to_string());
         div()
             .id("filter")
-            .track_focus(&self.filter_focus)
-            .key_context("Filter")
-            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
-                let keystroke = &event.keystroke;
-                if keystroke.modifiers.platform || keystroke.modifiers.control {
-                    return;
-                }
-                match keystroke.key.as_str() {
-                    "backspace" => {
-                        let mut text = this.history.filter.clone();
-                        text.pop();
-                        this.history.set_filter(&text);
-                    }
-                    "escape" => {
-                        if this.history.filter.is_empty() {
-                            this.focus.focus(window);
-                        } else {
-                            this.history.set_filter("");
-                        }
-                    }
-                    "enter" => this.focus.focus(window),
-                    _ => {
-                        let Some(typed) = keystroke.key_char.clone() else {
-                            return;
-                        };
-                        let text = format!("{}{typed}", this.history.filter);
-                        this.history.set_filter(&text);
-                    }
-                }
-                cx.notify();
-            }))
             .on_click(cx.listener(|this, _, window, cx| {
-                this.filter_focus.focus(window);
+                this.filter_input
+                    .read(cx)
+                    .focus_handle
+                    .clone()
+                    .focus(window);
                 cx.notify();
             }))
             .w(px(260.0))
@@ -1035,24 +1017,9 @@ impl SourcefourWindow {
             })
             .bg(self.theme.bg_list)
             .text_size(px(12.0))
-            .text_color(if query.is_empty() {
-                self.theme.text_faint
-            } else {
-                self.theme.text_primary
-            })
+            .text_color(self.theme.text_primary)
             .child(filter_icon(&self.theme))
-            .child(
-                div()
-                    .flex_1()
-                    .min_w(px(1.0))
-                    .overflow_hidden()
-                    .whitespace_nowrap()
-                    .child(if query.is_empty() {
-                        String::from("Filter commits")
-                    } else {
-                        query
-                    }),
-            )
+            .child(self.filter_input.clone())
             .children(matches.map(|matches| {
                 div()
                     .flex_none()
@@ -1918,7 +1885,25 @@ impl Render for SourcefourWindow {
                 this.select_row(last, cx);
             }))
             .on_action(cx.listener(|this, _: &FocusFilter, window, cx| {
-                this.filter_focus.focus(window);
+                this.filter_input
+                    .read(cx)
+                    .focus_handle
+                    .clone()
+                    .focus(window);
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &FilterEscape, window, cx| {
+                // First Escape clears the query; a second returns to history.
+                if this.history.filter.is_empty() {
+                    this.focus.focus(window);
+                } else {
+                    this.filter_input
+                        .update(cx, |input, cx| input.set_text("", cx));
+                }
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &FilterEnter, window, cx| {
+                this.focus.focus(window);
                 cx.notify();
             }))
             // Splitter handles arm `dragging`; the window-wide handlers below

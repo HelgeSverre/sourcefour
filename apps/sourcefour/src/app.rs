@@ -96,6 +96,7 @@ pub(crate) fn run(request: &LaunchRequest) -> ExitCode {
             })
             .detach();
             cx.bind_keys(history_keymap());
+            cx.bind_keys(crate::text_input::keymap());
             let result = match launch {
                 Launch::Window(window) => {
                     let options = window_options(
@@ -130,8 +131,8 @@ pub(crate) fn run(request: &LaunchRequest) -> ExitCode {
 /// History navigation keys, declared once rather than matched ad hoc (§8.5).
 fn history_keymap() -> Vec<gpui::KeyBinding> {
     use crate::views::{
-        FocusFilter, PageDown, PageUp, SelectFirstCommit, SelectLastLoadedCommit, SelectNextCommit,
-        SelectPreviousCommit,
+        FilterEnter, FilterEscape, FocusFilter, PageDown, PageUp, SelectFirstCommit,
+        SelectLastLoadedCommit, SelectNextCommit, SelectPreviousCommit,
     };
     vec![
         gpui::KeyBinding::new("down", SelectNextCommit, Some("History")),
@@ -142,6 +143,8 @@ fn history_keymap() -> Vec<gpui::KeyBinding> {
         gpui::KeyBinding::new("end", SelectLastLoadedCommit, Some("History")),
         // The filter is reachable from anywhere in the window (§4.7).
         gpui::KeyBinding::new("cmd-f", FocusFilter, None),
+        gpui::KeyBinding::new("escape", FilterEscape, Some("FilterInput")),
+        gpui::KeyBinding::new("enter", FilterEnter, Some("FilterInput")),
     ]
 }
 

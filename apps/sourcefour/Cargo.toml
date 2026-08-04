@@ -20,6 +20,7 @@ sourcefour-git = { path = "../../crates/sourcefour-git" }
 sourcefour-graph = { path = "../../crates/sourcefour-graph" }
 sourcefour-model = { path = "../../crates/sourcefour-model" }
 tracing.workspace = true
+unicode-segmentation.workspace = true
 tracing-subscriber.workspace = true
 
 [dev-dependencies]
