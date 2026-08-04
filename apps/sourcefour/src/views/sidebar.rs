@@ -245,6 +245,7 @@ impl SourcefourWindow {
         div()
             .id(title)
             .h(px(27.0))
+            .flex_none()
             .flex()
             .items_end()
             .justify_between()
@@ -285,10 +286,10 @@ impl SourcefourWindow {
             }))
     }
 
-    pub(super) fn sidebar(&self, cx: &mut gpui::Context<Self>) -> Div {
+    pub(super) fn sidebar(&self, cx: &mut gpui::Context<Self>) -> gpui::AnyElement {
         match self.snapshot() {
-            Some(snapshot) => self.repository_sidebar(snapshot, cx),
-            None => self.loading_sidebar(cx),
+            Some(snapshot) => self.repository_sidebar(snapshot, cx).into_any_element(),
+            None => self.loading_sidebar(cx).into_any_element(),
         }
     }
 
@@ -298,13 +299,14 @@ impl SourcefourWindow {
         &self,
         snapshot: &RepoSnapshot,
         cx: &mut gpui::Context<Self>,
-    ) -> Div {
+    ) -> gpui::Stateful<Div> {
         let mut root = div()
             .w(px(self.panels.sidebar))
             .flex_none()
             .flex()
             .flex_col()
-            .overflow_hidden()
+            .id("sidebar-scroll")
+            .overflow_y_scroll()
             .bg(self.theme.bg_panel);
         for section in self.sections.ordered() {
             root = match section {
@@ -381,6 +383,7 @@ impl SourcefourWindow {
         };
         div()
             .h(px(47.0))
+            .flex_none()
             .flex()
             .flex_col()
             .justify_center()
@@ -457,6 +460,7 @@ impl SourcefourWindow {
         div()
             .id(gpui::SharedString::from(branch.full_name.clone()))
             .h(px(26.0))
+            .flex_none()
             .flex()
             .items_center()
             .px(px(15.0))
@@ -494,6 +498,7 @@ impl SourcefourWindow {
     pub(super) fn remote_row(&self, remote: &sourcefour_model::RemoteSnapshot) -> Div {
         div()
             .h(px(29.0))
+            .flex_none()
             .flex()
             .items_center()
             .gap(px(6.0))
@@ -515,6 +520,7 @@ impl SourcefourWindow {
     pub(super) fn remote_branch_row(&self, short_name: &str) -> Div {
         div()
             .h(px(24.0))
+            .flex_none()
             .flex()
             .items_center()
             .pl(px(34.0))
