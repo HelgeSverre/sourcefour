@@ -535,6 +535,30 @@ section {
 .band .hl {
   color: var(--accent);
 }
+/* The live-follow claim gets subhero scale — a pattern break between
+   the feature rows and the card grid. */
+.band.subhero {
+  padding: 130px 0;
+}
+.band.subhero h2 {
+  font-size: clamp(44px, 4.8vw, 72px);
+  letter-spacing: -0.04em;
+  line-height: 1.02;
+  max-width: 15ch;
+  margin-bottom: 24px;
+}
+.band.subhero p {
+  font-size: var(--text-lg);
+  max-width: 46ch;
+}
+@media (max-width: 900px) {
+  .band.subhero {
+    padding: 84px 0;
+  }
+  .band.subhero p {
+    font-size: var(--text-md);
+  }
+}
 
 /* ── feature grid ────────────────────────────────────────────── */
 
