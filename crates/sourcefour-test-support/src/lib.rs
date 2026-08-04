@@ -5,14 +5,16 @@
 //! under test believes Git writes.
 
 use std::{
+    cell::Cell,
     path::{Path, PathBuf},
     process::Command,
 };
 
 use tempfile::TempDir;
 
-/// Fixed identity and timestamp so fixture commits hash identically everywhere.
-const FIXTURE_DATE: &str = "2001-02-03T04:05:06+00:00";
+/// Fixed identity and base timestamp so fixture commits hash identically on
+/// every machine. Each commit advances the clock by one second.
+const FIXTURE_EPOCH_SECONDS: i64 = 981_173_106;
 const FIXTURE_NAME: &str = "Sourcefour Fixture";
 const FIXTURE_EMAIL: &str = "fixture@sourcefour.invalid";
 
@@ -22,6 +24,12 @@ pub struct TempRepo {
     /// Owns the lifetime of every path below; dropping it removes them.
     _directory: TempDir,
     root: PathBuf,
+    /// Seconds added to the fixture date for the next commit.
+    ///
+    /// Without this every commit would share one timestamp, and two commits with
+    /// the same message on different branches would hash identically — which
+    /// silently turns a merge fixture into a no-op.
+    clock: Cell<i64>,
 }
 
 impl TempRepo {
@@ -179,10 +187,26 @@ impl TempRepo {
         run_git(&self.root, arguments)
     }
 
+    /// Adds an empty commit with a timestamp later than every previous one.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `git commit` fails.
+    pub fn commit(&self, message: &str) -> String {
+        self.clock.set(self.clock.get() + 1);
+        run_git_at(
+            &self.root,
+            &["commit", "--allow-empty", "-m", message],
+            self.clock.get(),
+        );
+        self.git(&["rev-parse", "HEAD"])
+    }
+
     fn new(directory: TempDir, root: &Path) -> Self {
         Self {
             _directory: directory,
             root: canonical(root),
+            clock: Cell::new(0),
         }
     }
 }
@@ -197,6 +221,11 @@ fn canonical(path: &Path) -> PathBuf {
 }
 
 fn run_git(directory: &Path, arguments: &[&str]) -> String {
+    run_git_at(directory, arguments, 0)
+}
+
+fn run_git_at(directory: &Path, arguments: &[&str], clock: i64) -> String {
+    let date = format!("{} +0000", FIXTURE_EPOCH_SECONDS + clock);
     let output = Command::new("git")
         .args(arguments)
         .current_dir(directory)
@@ -207,10 +236,10 @@ fn run_git(directory: &Path, arguments: &[&str]) -> String {
         .env("GIT_CONFIG_NOSYSTEM", "1")
         .env("GIT_AUTHOR_NAME", FIXTURE_NAME)
         .env("GIT_AUTHOR_EMAIL", FIXTURE_EMAIL)
-        .env("GIT_AUTHOR_DATE", FIXTURE_DATE)
+        .env("GIT_AUTHOR_DATE", &date)
         .env("GIT_COMMITTER_NAME", FIXTURE_NAME)
         .env("GIT_COMMITTER_EMAIL", FIXTURE_EMAIL)
-        .env("GIT_COMMITTER_DATE", FIXTURE_DATE)
+        .env("GIT_COMMITTER_DATE", &date)
         .output()
         .unwrap_or_else(|error| panic!("could not run `git {}`: {error}", arguments.join(" ")));
     assert!(

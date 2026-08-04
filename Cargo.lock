@@ -5343,6 +5343,7 @@ version = "0.1.0"
 dependencies = [
  "gix",
  "smallvec",
+ "sourcefour-graph",
  "sourcefour-model",
  "sourcefour-test-support",
 ]

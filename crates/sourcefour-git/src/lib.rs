@@ -6,6 +6,7 @@
 
 mod ahead_behind;
 mod discover;
+mod history;
 mod refs;
 mod session;
 mod watch;
@@ -16,6 +17,7 @@ use std::sync::atomic::AtomicBool;
 pub use crate::{
     ahead_behind::{AheadBehindCache, apply as apply_ahead_behind},
     discover::{discover, display_name},
+    history::{FIRST_BATCH_ROWS, GixHistoryCursor, NEXT_BATCH_ROWS},
     refs::{References, references},
     session::snapshot,
     watch::{MetadataChange, MetadataWatcher},
@@ -71,17 +73,21 @@ pub trait RepoReader: Send + Sync {
 }
 
 /// Long-lived, single-consumer history traversal.
+///
+/// §6.9 sketches `next_batch(max_rows, &AtomicBool)`, but the traversal owns its
+/// repository on a worker thread (§6.3) and therefore owns its cancellation flag
+/// too; a borrowed flag cannot outlive the call while the thread still needs it.
+/// Cancellation is a separate method instead.
 pub trait HistoryCursor: Send {
-    /// Produces at most `max_rows` matching rows unless cancellation is observed.
+    /// Produces at most `max_rows` matching rows, resuming the traversal.
     ///
     /// # Errors
     ///
     /// Returns a typed failure when traversal cannot continue.
-    fn next_batch(
-        &mut self,
-        max_rows: usize,
-        cancelled: &AtomicBool,
-    ) -> Result<HistoryBatch, RepoFailure>;
+    fn next_batch(&mut self, max_rows: usize) -> Result<HistoryBatch, RepoFailure>;
+
+    /// Stops the traversal at the next row boundary.
+    fn cancel(&self);
 }
 
 /// Explicit user-initiated Git operations.
