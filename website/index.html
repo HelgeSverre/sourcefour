@@ -78,7 +78,7 @@
     </div>
 
     <div class="row bento">
-      <div class="cell shot-cell">
+      <div class="shot-cell">
         <img src="screenshots/sidebar.png" alt="The sidebar: three worktrees with their checked-out branches, then remotes, then five local branches.">
       </div>
       <div class="cell">
@@ -89,15 +89,35 @@
         carry their ahead/behind counts; remotes carry their tracking branches.</p>
         <p>Click a branch to scope history to it. Click again to widen back out.</p>
       </div>
-      <div class="cell term-cell">
-        <div class="term" aria-hidden="true">
-          <div class="term-bar"><span></span><span></span><span></span></div>
-          <pre><span class="cmd-line">$ git worktree add ../scratch prototype</span>
-Preparing worktree (checking out 'prototype')
-HEAD is now at 3d88c70 Add graph colour continuity goldens</pre>
+      <div class="cell states-cell">
+        <div class="wt-rows">
+          <div class="wt-row">
+            <span class="wt-dot" style="background: var(--green)"></span>
+            <div>
+              <span class="wt-name">sourcefour-history</span>
+              <span class="wt-path">~/code/sourcefour-history</span>
+            </div>
+            <span class="wt-badge locked">locked</span>
+          </div>
+          <div class="wt-row">
+            <span class="wt-dot" style="background: var(--ink-3)"></span>
+            <div>
+              <span class="wt-name">scratch</span>
+              <span class="wt-path">~/code/scratch</span>
+            </div>
+            <span class="wt-badge detached">detached</span>
+          </div>
+          <div class="wt-row">
+            <span class="wt-dot" style="background: var(--red)"></span>
+            <div>
+              <span class="wt-name">portable</span>
+              <span class="wt-path">/Volumes/T7/portable</span>
+            </div>
+            <span class="wt-badge missing">missing</span>
+          </div>
         </div>
-        <p class="term-note">Made in the terminal, already in the sidebar. Sourcefour
-        watches the repository itself — there is nothing to refresh.</p>
+        <p class="cell-note">The odd states too — a lock, a detached HEAD, a checkout
+        on a drive that left. Straight from the plumbing, never a guess.</p>
       </div>
     </div>
 
