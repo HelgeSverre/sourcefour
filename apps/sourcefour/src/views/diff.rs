@@ -224,7 +224,7 @@ impl SourcefourWindow {
                 .inset_0()
                 .flex()
                 .p(px(26.0))
-                .bg(gpui::black().opacity(0.55))
+                .bg(self.theme.scrim())
                 .on_click(cx.listener(|this, event: &gpui::ClickEvent, window, cx| {
                     // A slider or scrollbar drag released over the backdrop
                     // is the end of a drag, not a request to close.
@@ -506,7 +506,7 @@ impl SourcefourWindow {
             .px(px(6.0))
             .py(px(1.0))
             .rounded(px(4.0))
-            .bg(self.theme.bg_chrome.opacity(0.85))
+            .bg(self.theme.hud())
             .text_size(px(9.5))
             .font_weight(FontWeight::SEMIBOLD)
             .text_color(self.theme.text_faint)
@@ -686,16 +686,22 @@ impl SourcefourWindow {
         right: bool,
     ) -> Div {
         let base = div().flex_1().min_w(px(1.0)).h_full().flex().items_center();
+        let rule = || {
+            div()
+                .w(px(1.0))
+                .flex_none()
+                .h_full()
+                .bg(self.theme.gutter_rule())
+        };
         let Some(side) = side else {
-            return base.bg(self.theme.bg_panel.opacity(0.4));
+            return base
+                .bg(self.theme.bg_panel.opacity(0.4))
+                .child(div().w(px(44.0)).flex_none().h_full())
+                .child(rule());
         };
         let (text_color, background) = match side.kind {
-            DiffLineKind::Addition if right => {
-                (self.theme.green, Some(self.theme.green.opacity(0.08)))
-            }
-            DiffLineKind::Deletion if !right => {
-                (self.theme.red, Some(self.theme.red.opacity(0.08)))
-            }
+            DiffLineKind::Addition if right => (self.theme.green, Some(self.theme.tint_added())),
+            DiffLineKind::Deletion if !right => (self.theme.red, Some(self.theme.tint_removed())),
             _ => (self.theme.text_secondary, None),
         };
         base.when_some(background, gpui::Styled::bg)
@@ -712,6 +718,7 @@ impl SourcefourWindow {
                             .map_or_else(String::new, |number| number.to_string()),
                     ),
             )
+            .child(rule())
             .child(
                 div()
                     .flex_1()
@@ -823,8 +830,8 @@ impl SourcefourWindow {
     /// One rendered diff line: numbers, marker, and tinted content.
     pub(super) fn diff_line_row(&self, line: &DiffLine) -> Div {
         let (marker, text_color, background) = match line.kind {
-            DiffLineKind::Addition => ("+", self.theme.green, Some(self.theme.green.opacity(0.08))),
-            DiffLineKind::Deletion => ("-", self.theme.red, Some(self.theme.red.opacity(0.08))),
+            DiffLineKind::Addition => ("+", self.theme.green, Some(self.theme.tint_added())),
+            DiffLineKind::Deletion => ("-", self.theme.red, Some(self.theme.tint_removed())),
             DiffLineKind::Hunk => ("", self.theme.accent, Some(self.theme.bg_hover)),
             DiffLineKind::Meta | DiffLineKind::Marker => ("", self.theme.text_faint, None),
             DiffLineKind::Context => (" ", self.theme.text_secondary, None),
@@ -839,6 +846,13 @@ impl SourcefourWindow {
                 .text_color(self.theme.text_faint)
                 .child(value.map_or_else(String::new, |value| value.to_string()))
         };
+        // The gutter rule pauses on hunk headers, which read as full-width
+        // banners rather than numbered lines.
+        let rule = if matches!(line.kind, DiffLineKind::Hunk) {
+            gpui::transparent_black()
+        } else {
+            self.theme.gutter_rule()
+        };
         div()
             .h(px(20.0))
             .w_full()
@@ -847,6 +861,7 @@ impl SourcefourWindow {
             .when_some(background, gpui::Styled::bg)
             .child(number(line.old_line))
             .child(number(line.new_line))
+            .child(div().w(px(1.0)).flex_none().h_full().bg(rule))
             .child(
                 div()
                     .w(px(14.0))

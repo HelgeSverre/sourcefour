@@ -1,3 +1,60 @@
+//! The palette, and the map of where each color belongs.
+//!
+//! Every color in the app comes from here — either a `Theme` field (a token)
+//! or a semantic helper on `Theme` (a derived modifier). Views never invent
+//! their own `opacity(..)` math for a recurring role; if a new role recurs,
+//! it gets a named helper here first. The website's `brand.css` mirrors these
+//! values — change one, change the other.
+//!
+//! # Where each token paints
+//!
+//! ```text
+//! the window                                  an overlay (diff, settings,
+//! ┌─────────────────────────────────────┐     actions, branch dialog)
+//! │ titlebar                  bg_chrome │
+//! │ toolbar                   bg_chrome │     ░░░░░░ scrim() ░░░░░░░░░░░
+//! ├──────────┬──────┬───────────────────┤     ░┌────────────────────┐░
+//! │ sidebar  │ graph│ history   bg_list │     ░│ header   bg_chrome │░
+//! │ bg_panel │      │ hover    bg_hover │     ░├────┬───────────────┤░
+//! │          │      │ selected          │     ░│ 12 │ code  bg_list │░
+//! │          │      │       bg_selected │     ░│ 13 │+ added line   │░
+//! │          │      ├───────────────────┤     ░│    │- removed line │░
+//! │          │      │ details  bg_panel │     ░└────┴───────────────┘░
+//! ├──────────┴──────┴───────────────────┤     ░░░░░░░░│░░░░░░░░░░░░░░░
+//! │ status bar                bg_chrome │       gutter_rule() divider,
+//! └─────────────────────────────────────┘       tint_added()/removed()
+//! ```
+//!
+//! # The ladders
+//!
+//! Surfaces, recessed to raised — pick by how far forward a region sits:
+//! `bg_page` (the void behind everything) → `bg_chrome` (window furniture:
+//! bars, headers) → `bg_panel` (framed regions: sidebar, details, overlay
+//! frames) → `bg_list` (content being read: history, diffs, logs) →
+//! `bg_hover` (transient emphasis) → `bg_selected` (the current row).
+//!
+//! Borders: `border` between regions that already differ in surface;
+//! `border_strong` when the two sides share a surface and the line itself
+//! must carry the separation (input outlines, the diff gutter rule).
+//!
+//! Ink: `text_primary` for what the user came to read, `text_secondary`
+//! for supporting matter, `text_faint` for furniture (line numbers, hints).
+//!
+//! Status colors: `green` success/additions · `red` failure/deletions ·
+//! `orange` in-progress/warnings · `purple` tags/detached · `accent`
+//! interaction and selection. `graph_lanes` recycles them for lanes.
+//!
+//! # Derived modifiers
+//!
+//! | helper                      | use it for                                |
+//! |-----------------------------|-------------------------------------------|
+//! | `scrim()`                   | the backdrop behind every overlay         |
+//! | `gutter_rule()`             | line-number ↔ code divider in diffs       |
+//! | `tint_added()`/`removed()`  | washes behind diff lines                  |
+//! | `chip_border()`/`chip_fill()` | tinted badges: CURRENT, refs, PRs, chips |
+//! | `hud()`                     | floating labels over media                |
+//! | `grab_active()`/`grab_hover()` | splitters under drag / pointer         |
+
 use gpui::{Hsla, rgb};
 use sourcefour_model::GRAPH_COLOR_COUNT;
 
@@ -43,6 +100,59 @@ pub(crate) struct Theme {
 }
 
 impl Theme {
+    /// The modal backdrop behind every overlay: dims the window without
+    /// hiding it. Used by the diff, settings, actions and branch dialogs.
+    #[expect(clippy::unused_self, reason = "a palette role, kept on Theme")]
+    pub(crate) fn scrim(&self) -> Hsla {
+        gpui::black().opacity(0.55)
+    }
+
+    /// The divider between line numbers and code in the diff overlay —
+    /// `border_strong`, so it stays visible over the add/del washes.
+    pub(crate) fn gutter_rule(&self) -> Hsla {
+        self.border_strong
+    }
+
+    /// The wash behind an added diff line. A tint over `bg_list`, never a
+    /// surface of its own.
+    pub(crate) fn tint_added(&self) -> Hsla {
+        self.green.opacity(0.08)
+    }
+
+    /// The wash behind a removed diff line.
+    pub(crate) fn tint_removed(&self) -> Hsla {
+        self.red.opacity(0.08)
+    }
+
+    /// Border of a tinted badge (CURRENT, ref chips, PR chips, run chips):
+    /// the badge's own color at 45%, over `chip_fill` of the same color.
+    #[expect(clippy::unused_self, reason = "a palette role, kept on Theme")]
+    pub(crate) fn chip_border(&self, color: Hsla) -> Hsla {
+        color.opacity(0.45)
+    }
+
+    /// Fill of a tinted badge: the badge's own color at 10%.
+    #[expect(clippy::unused_self, reason = "a palette role, kept on Theme")]
+    pub(crate) fn chip_fill(&self, color: Hsla) -> Hsla {
+        color.opacity(0.1)
+    }
+
+    /// Floating labels over media, like the image diff's Before/After
+    /// chips: chrome at 85% so the picture shows through.
+    pub(crate) fn hud(&self) -> Hsla {
+        self.bg_chrome.opacity(0.85)
+    }
+
+    /// A splitter being dragged.
+    pub(crate) fn grab_active(&self) -> Hsla {
+        self.accent.opacity(0.55)
+    }
+
+    /// A splitter under the pointer.
+    pub(crate) fn grab_hover(&self) -> Hsla {
+        self.accent.opacity(0.35)
+    }
+
     pub(crate) fn dark() -> Self {
         let accent = rgb(0x5b_9d_ff).into();
         let green = rgb(0x7e_c9_6f).into();

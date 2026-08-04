@@ -654,7 +654,7 @@ impl SourcefourWindow {
                 .inset_0()
                 .flex()
                 .p(px(26.0))
-                .bg(gpui::black().opacity(0.55))
+                .bg(self.theme.scrim())
                 .on_click(cx.listener(|this, event: &gpui::ClickEvent, window, cx| {
                     let (down, up) = (event.down.position, event.up.position);
                     if (down.x.0 - up.x.0).abs() > 3.0 || (down.y.0 - up.y.0).abs() > 3.0 {
@@ -790,8 +790,8 @@ impl SourcefourWindow {
                 .px(px(6.0))
                 .rounded(px(4.0))
                 .border_1()
-                .border_color(color.opacity(0.4))
-                .bg(color.opacity(0.08))
+                .border_color(self.theme.chip_border(color))
+                .bg(self.theme.chip_fill(color))
                 .text_size(px(10.0))
                 .text_color(color)
                 .child(label)

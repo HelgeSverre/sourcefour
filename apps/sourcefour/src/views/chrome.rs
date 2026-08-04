@@ -335,13 +335,13 @@ impl SourcefourWindow {
             // The graph divider floats over content, so it only shows itself
             // when interacted with; the panel dividers read as borders.
             .bg(if dragging {
-                self.theme.accent.opacity(0.55)
+                self.theme.grab_active()
             } else if matches!(splitter, Splitter::Graph) {
                 gpui::transparent_black()
             } else {
                 self.theme.border
             })
-            .hover(|style| style.bg(self.theme.accent.opacity(0.35)))
+            .hover(|style| style.bg(self.theme.grab_hover()))
             .on_mouse_down(
                 gpui::MouseButton::Left,
                 cx.listener(move |this, _, _, cx| {

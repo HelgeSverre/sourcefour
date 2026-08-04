@@ -130,7 +130,7 @@ impl SourcefourWindow {
                 .flex()
                 .items_center()
                 .justify_center()
-                .bg(gpui::black().opacity(0.55))
+                .bg(self.theme.scrim())
                 .on_click(cx.listener(|this, _, window, cx| {
                     this.close_branch_dialog(window, cx);
                 }))

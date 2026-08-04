@@ -541,7 +541,7 @@ impl SourcefourWindow {
                 .px(px(4.0))
                 .rounded(px(3.0))
                 .border_1()
-                .border_color(color.opacity(0.45))
+                .border_color(self.theme.chip_border(color))
                 .text_size(px(9.0))
                 .text_color(color)
                 .cursor_pointer()

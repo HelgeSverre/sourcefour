@@ -63,7 +63,7 @@ pub(crate) fn overlay(
         .flex()
         .items_center()
         .justify_center()
-        .bg(gpui::black().opacity(0.55))
+        .bg(theme.scrim())
         .on_click(cx.listener(|this, _, window, cx| {
             this.close_settings(window, cx);
         }))
