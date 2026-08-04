@@ -2,9 +2,13 @@ use gpui::{
     Div, FontWeight, IntoElement, Render, ScrollHandle, StatefulInteractiveElement, Window, div,
     point, prelude::*, px, svg,
 };
-use sourcefour_model::RepoFailure;
+use sourcefour_model::{
+    AheadBehindState, Generation, HeadSnapshot, LoadState, RepoEnvelope, RepoFailure,
+    RepoSessionId, RepoSnapshot, RequestId, WorktreeAccessibility,
+};
 
 use crate::{
+    app::WindowLaunch,
     demo::COMMITS,
     theme::{
         DETAILS_HEIGHT, GRAPH_WIDTH, HEADER_HEIGHT, HISTORY_ROW_HEIGHT, SIDEBAR_WIDTH,
@@ -18,6 +22,10 @@ pub(crate) struct SourcefourWindow {
     /// Display-friendly active worktree path.
     path: String,
     demo: bool,
+    /// Identity every background result must match to be applied.
+    session: RepoSessionId,
+    generation: Generation,
+    repo: LoadState<RepoSnapshot>,
     theme: Theme,
     sections: SidebarSections,
     history_scroll: ScrollHandle,
@@ -105,6 +113,78 @@ impl SidebarSections {
             SidebarSection::Branches => self.branches = !self.branches,
             SidebarSection::Remotes => self.remotes = !self.remotes,
         }
+    }
+}
+
+/// Whether a background result still belongs to the window that asked for it.
+///
+/// A result from a superseded generation is dropped rather than applied; this
+/// is how cheap reads are cancelled (§5.5).
+fn belongs_to<T>(
+    session: RepoSessionId,
+    generation: Generation,
+    envelope: &RepoEnvelope<T>,
+) -> bool {
+    envelope.session == session && envelope.generation == generation
+}
+
+/// Divergence text for a branch, or `None` when there is nothing to claim.
+///
+/// A branch with no upstream shows nothing rather than a zero, and unrelated
+/// histories show a marker rather than a fabricated count (§6.7).
+fn ahead_behind_text(state: AheadBehindState) -> Option<String> {
+    match state {
+        AheadBehindState::Known {
+            ahead: 0,
+            behind: 0,
+        }
+        | AheadBehindState::Unavailable
+        | AheadBehindState::Pending
+        | AheadBehindState::Failed => None,
+        AheadBehindState::Known { ahead, behind } => Some(match (ahead, behind) {
+            (0, behind) => format!("-{behind}"),
+            (ahead, 0) => format!("+{ahead}"),
+            (ahead, behind) => format!("+{ahead} -{behind}"),
+        }),
+        AheadBehindState::Unrelated => Some(String::from("↕")),
+    }
+}
+
+/// Short description of a worktree's HEAD for the sidebar's second line.
+fn head_label(head: &HeadSnapshot) -> String {
+    match head {
+        HeadSnapshot::Branch { short_name, .. } => short_name.clone(),
+        HeadSnapshot::Detached { oid } => oid.abbreviated(7),
+        HeadSnapshot::Unborn { .. } => String::from("unborn"),
+        HeadSnapshot::Missing => String::from("no HEAD"),
+    }
+}
+
+/// The status bar's right-hand summary of what the snapshot contains.
+fn status_summary(snapshot: &RepoSnapshot) -> String {
+    let remote_branches: usize = snapshot
+        .remotes
+        .iter()
+        .map(|remote| remote.branches.len())
+        .sum();
+    format!(
+        "{} / {} / {} / {} / {}",
+        head_label(&snapshot.head),
+        counted(snapshot.worktrees.len(), "worktree"),
+        counted(snapshot.local_branches.len(), "branch"),
+        counted(remote_branches, "remote branch"),
+        counted(snapshot.tags_count, "tag")
+    )
+}
+
+/// Pluralizes a count, because "1 worktrees" reads like a bug.
+fn counted(count: usize, noun: &str) -> String {
+    if count == 1 {
+        format!("1 {noun}")
+    } else if let Some(stem) = noun.strip_suffix("ch") {
+        format!("{count} {stem}ches")
+    } else {
+        format!("{count} {noun}s")
     }
 }
 
@@ -231,15 +311,72 @@ fn lane_marker(theme: &Theme, lane: usize, merge: bool) -> Div {
 }
 
 impl SourcefourWindow {
-    pub(crate) fn new(demo: bool, name: String, path: String) -> Self {
-        Self {
-            name,
-            path,
-            demo,
+    pub(crate) fn new(launch: WindowLaunch, cx: &mut gpui::Context<Self>) -> Self {
+        let session = RepoSessionId::new();
+        let generation = Generation(0);
+        let mut window = Self {
+            name: launch.name,
+            path: launch.path,
+            demo: launch.demo,
+            session,
+            generation,
+            repo: LoadState::Idle,
             theme: Theme::dark(),
             sections: SidebarSections::default(),
             history_scroll: ScrollHandle::new(),
+        };
+        if let Some(location) = launch.location {
+            window.repo = LoadState::Loading {
+                started_at: std::time::Instant::now(),
+            };
+            // Reading refs and worktrees touches the filesystem, so it never
+            // runs on the render thread (§15.8). The window is already drawable.
+            cx.spawn(async move |this, cx| {
+                let payload = cx
+                    .background_executor()
+                    .spawn(async move { sourcefour_git::snapshot(&location) })
+                    .await;
+                this.update(cx, |this, cx| {
+                    this.apply_snapshot(&RepoEnvelope {
+                        session,
+                        generation,
+                        request: RequestId(0),
+                        payload,
+                    });
+                    cx.notify();
+                })
+                .ok();
+            })
+            .detach();
         }
+        window
+    }
+
+    /// Applies a metadata result, ignoring one belonging to a past generation.
+    ///
+    /// Stale rejection is the primary cancellation mechanism for cheap reads
+    /// (§5.5); a slow result from a closed repository must never overwrite the
+    /// current one.
+    fn apply_snapshot(
+        &mut self,
+        envelope: &RepoEnvelope<Result<RepoSnapshot, RepoFailure>>,
+    ) -> bool {
+        if !belongs_to(self.session, self.generation, envelope) {
+            return false;
+        }
+        self.repo = match &envelope.payload {
+            Ok(snapshot) => LoadState::Ready(snapshot.clone()),
+            Err(failure) => LoadState::Failed {
+                error: failure.user.clone(),
+                previous: self.repo.value().cloned(),
+            },
+        };
+        true
+    }
+
+    /// The loaded snapshot, if metadata has arrived.
+    fn snapshot(&self) -> Option<&RepoSnapshot> {
+        self.repo.value()
     }
 
     fn titlebar(&self) -> impl IntoElement {
@@ -320,10 +457,11 @@ impl SourcefourWindow {
     fn section(
         &self,
         title: &'static str,
-        count: &'static str,
+        count: impl Into<gpui::SharedString>,
         section: SidebarSection,
         cx: &mut gpui::Context<Self>,
     ) -> impl IntoElement {
+        let count = count.into();
         let expanded = self.sections.expanded(section);
         div()
             .id(title)
@@ -358,7 +496,10 @@ impl SourcefourWindow {
     )]
     fn sidebar(&self, cx: &mut gpui::Context<Self>) -> Div {
         if !self.demo {
-            return self.loading_sidebar(cx);
+            return match self.snapshot() {
+                Some(snapshot) => self.repository_sidebar(snapshot, cx),
+                None => self.loading_sidebar(cx),
+            };
         }
         let worktree = |name: &'static str, path: &'static str, current: bool| {
             div()
@@ -484,6 +625,182 @@ impl SourcefourWindow {
                         .child("feature/worktrees"),
                 )
             })
+    }
+
+    /// The sidebar built from real repository metadata.
+    fn repository_sidebar(&self, snapshot: &RepoSnapshot, cx: &mut gpui::Context<Self>) -> Div {
+        div()
+            .w(px(SIDEBAR_WIDTH))
+            .flex_none()
+            .flex()
+            .flex_col()
+            .bg(self.theme.bg_panel)
+            .border_r_1()
+            .border_color(self.theme.border)
+            .child(self.section(
+                "WORKTREES",
+                snapshot.worktrees.len().to_string(),
+                SidebarSection::Worktrees,
+                cx,
+            ))
+            .when(self.sections.worktrees, |this| {
+                this.children(
+                    snapshot
+                        .worktrees
+                        .iter()
+                        .map(|tree| self.worktree_row(tree)),
+                )
+            })
+            .child(self.section(
+                "BRANCHES",
+                snapshot.local_branches.len().to_string(),
+                SidebarSection::Branches,
+                cx,
+            ))
+            .when(self.sections.branches, |this| {
+                this.children(
+                    snapshot
+                        .local_branches
+                        .iter()
+                        .map(|branch| self.branch_row(branch)),
+                )
+            })
+            // The prototype counts remotes here, not their branches.
+            .child(self.section(
+                "REMOTES",
+                snapshot.remotes.len().to_string(),
+                SidebarSection::Remotes,
+                cx,
+            ))
+            .when(self.sections.remotes, |this| {
+                this.children(snapshot.remotes.iter().flat_map(|remote| {
+                    std::iter::once(self.remote_row(remote)).chain(
+                        remote
+                            .branches
+                            .iter()
+                            .map(|branch| self.remote_branch_row(&branch.short_name)),
+                    )
+                }))
+            })
+    }
+
+    fn worktree_row(&self, tree: &sourcefour_model::WorktreeSnapshot) -> Div {
+        let marker = match (&tree.accessibility, tree.is_current) {
+            (WorktreeAccessibility::Inaccessible { .. }, _) => self.theme.red,
+            (WorktreeAccessibility::Prunable { .. }, _) => self.theme.orange,
+            (WorktreeAccessibility::Accessible, true) => self.theme.green,
+            (WorktreeAccessibility::Accessible, false) => self.theme.text_faint,
+        };
+        div()
+            .h(px(47.0))
+            .flex()
+            .flex_col()
+            .justify_center()
+            .px(px(14.0))
+            .bg(if tree.is_current {
+                self.theme.bg_selected
+            } else {
+                self.theme.bg_panel
+            })
+            .text_color(self.theme.text_primary)
+            .child(
+                div()
+                    .flex()
+                    .justify_between()
+                    .text_size(px(12.0))
+                    .font_weight(FontWeight::MEDIUM)
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(6.0))
+                            .child(div().size(px(7.0)).rounded_full().bg(marker))
+                            .child(tree.display_name.clone())
+                            .when(tree.is_locked, |this| {
+                                this.child(
+                                    div()
+                                        .px(px(3.0))
+                                        .rounded(px(2.0))
+                                        .border_1()
+                                        .border_color(self.theme.text_faint)
+                                        .text_size(px(8.0))
+                                        .text_color(self.theme.text_faint)
+                                        .child("LOCKED"),
+                                )
+                            }),
+                    )
+                    .child(if tree.is_current { "CURRENT" } else { "" }),
+            )
+            .child(
+                div()
+                    .flex()
+                    .justify_between()
+                    .text_size(px(10.0))
+                    .text_color(self.theme.text_faint)
+                    .child(crate::app::display_path(&tree.path))
+                    .child(head_label(&tree.head)),
+            )
+    }
+
+    fn branch_row(&self, branch: &sourcefour_model::BranchSnapshot) -> Div {
+        div()
+            .h(px(26.0))
+            .flex()
+            .items_center()
+            .px(px(15.0))
+            .gap(px(7.0))
+            .bg(if branch.is_current {
+                self.theme.bg_selected
+            } else {
+                self.theme.bg_panel
+            })
+            .text_size(px(12.0))
+            .text_color(if branch.is_current {
+                self.theme.text_primary
+            } else {
+                self.theme.text_secondary
+            })
+            .child(branch_marker(&self.theme))
+            .child(branch.short_name.clone())
+            .child(div().flex_grow())
+            .children(ahead_behind_text(branch.ahead_behind).map(|text| {
+                div()
+                    .text_size(px(10.5))
+                    .text_color(self.theme.accent)
+                    .child(text)
+            }))
+    }
+
+    fn remote_row(&self, remote: &sourcefour_model::RemoteSnapshot) -> Div {
+        div()
+            .h(px(29.0))
+            .flex()
+            .items_center()
+            .gap(px(6.0))
+            .px(px(14.0))
+            .text_size(px(11.5))
+            .font_weight(FontWeight::MEDIUM)
+            .text_color(self.theme.orange)
+            .child(remote_marker(&self.theme))
+            .child(remote.name.clone())
+            .child(div().flex_grow())
+            .children(remote.fetch_url.clone().map(|url| {
+                div()
+                    .text_size(px(10.0))
+                    .text_color(self.theme.text_faint)
+                    .child(url)
+            }))
+    }
+
+    fn remote_branch_row(&self, short_name: &str) -> Div {
+        div()
+            .h(px(24.0))
+            .flex()
+            .items_center()
+            .pl(px(34.0))
+            .text_size(px(12.0))
+            .text_color(self.theme.purple)
+            .child(short_name.to_owned())
     }
 
     fn loading_sidebar(&self, cx: &mut gpui::Context<Self>) -> Div {
@@ -720,9 +1037,12 @@ impl SourcefourWindow {
             .child(path)
             .child(div().flex_grow())
             .child(if self.demo {
-                "main +2 / 3 worktrees / 5 branches / 4 remote / 18 commits / demo"
+                String::from("main +2 / 3 worktrees / 5 branches / 4 remote / 18 commits / demo")
             } else {
-                "Loading repository metadata..."
+                self.snapshot().map_or_else(
+                    || String::from("Loading repository metadata..."),
+                    status_summary,
+                )
             })
     }
 }
@@ -806,11 +1126,124 @@ impl Render for ErrorWindow {
 
 #[cfg(test)]
 mod tests {
-    use sourcefour_model::{RepoFailure, RepoFailureKind};
+    use sourcefour_model::{
+        AheadBehindState, Generation, HeadSnapshot, Oid, RepoEnvelope, RepoFailure,
+        RepoFailureKind, RepoSessionId, RequestId,
+    };
 
     use super::{
-        ColumnVisibility, ErrorWindow, SidebarSection, SidebarSections, scrollbar_metrics,
+        ColumnVisibility, ErrorWindow, SidebarSection, SidebarSections, ahead_behind_text,
+        belongs_to, counted, head_label, scrollbar_metrics,
     };
+
+    #[test]
+    fn counts_are_pluralized() {
+        assert_eq!(counted(1, "worktree"), "1 worktree");
+        assert_eq!(counted(0, "worktree"), "0 worktrees");
+        assert_eq!(counted(3, "worktree"), "3 worktrees");
+        assert_eq!(counted(1, "branch"), "1 branch");
+        assert_eq!(counted(2, "branch"), "2 branches");
+        assert_eq!(counted(2, "remote branch"), "2 remote branches");
+    }
+
+    #[test]
+    fn ahead_behind_shows_a_count_only_once_one_is_known() {
+        assert_eq!(ahead_behind_text(AheadBehindState::Unavailable), None);
+        assert_eq!(ahead_behind_text(AheadBehindState::Pending), None);
+        assert_eq!(ahead_behind_text(AheadBehindState::Failed), None);
+        assert_eq!(
+            ahead_behind_text(AheadBehindState::Known {
+                ahead: 0,
+                behind: 0
+            }),
+            None,
+            "a branch level with its upstream needs no indicator"
+        );
+        assert_eq!(
+            ahead_behind_text(AheadBehindState::Known {
+                ahead: 2,
+                behind: 0
+            })
+            .as_deref(),
+            Some("+2")
+        );
+        assert_eq!(
+            ahead_behind_text(AheadBehindState::Known {
+                ahead: 0,
+                behind: 3
+            })
+            .as_deref(),
+            Some("-3")
+        );
+        assert_eq!(
+            ahead_behind_text(AheadBehindState::Known {
+                ahead: 2,
+                behind: 3
+            })
+            .as_deref(),
+            Some("+2 -3")
+        );
+        assert_eq!(
+            ahead_behind_text(AheadBehindState::Unrelated).as_deref(),
+            Some("↕"),
+            "unrelated histories must not show a fabricated count"
+        );
+    }
+
+    #[test]
+    fn head_label_describes_every_head_state() {
+        assert_eq!(
+            head_label(&HeadSnapshot::Branch {
+                full_name: String::from("refs/heads/main"),
+                short_name: String::from("main"),
+                oid: Oid::sha1([0; 20]),
+            }),
+            "main"
+        );
+        assert_eq!(
+            head_label(&HeadSnapshot::Detached {
+                oid: Oid::sha1([0xab; 20])
+            }),
+            "abababa",
+            "a detached HEAD shows an abbreviated hash"
+        );
+        assert_eq!(
+            head_label(&HeadSnapshot::Unborn {
+                intended_branch: Some(String::from("main"))
+            }),
+            "unborn"
+        );
+        assert_eq!(head_label(&HeadSnapshot::Missing), "no HEAD");
+    }
+
+    #[test]
+    fn a_result_from_a_superseded_generation_is_rejected() {
+        let session = RepoSessionId::new();
+        let envelope = |session, generation| RepoEnvelope {
+            session,
+            generation,
+            request: RequestId(0),
+            payload: (),
+        };
+
+        assert!(belongs_to(
+            session,
+            Generation(1),
+            &envelope(session, Generation(1))
+        ));
+        assert!(
+            !belongs_to(session, Generation(2), &envelope(session, Generation(1))),
+            "a result from an older generation must not be applied"
+        );
+        assert!(
+            !belongs_to(
+                session,
+                Generation(1),
+                &envelope(RepoSessionId::new(), Generation(1))
+            ),
+            "a result from another session must not be applied"
+        );
+    }
 
     #[test]
     fn sidebar_sections_start_expanded_and_toggle_independently() {

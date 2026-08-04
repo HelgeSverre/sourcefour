@@ -14,7 +14,7 @@ use gpui::{
     WindowBounds, WindowOptions, px, size,
 };
 use sourcefour_git::{discover, display_name};
-use sourcefour_model::RepoFailure;
+use sourcefour_model::{RepoFailure, RepoLocation};
 
 use crate::{
     LaunchRequest, demo,
@@ -30,14 +30,20 @@ const DISCOVERY_FAILED: u8 = 2;
 const WINDOW_FAILED: u8 = 1;
 
 /// What a launch resolved to before any window exists.
+#[derive(Clone, Debug)]
+pub(crate) struct WindowLaunch {
+    pub(crate) demo: bool,
+    pub(crate) name: String,
+    pub(crate) path: String,
+    /// Absent in demo mode, which must render without touching a repository.
+    pub(crate) location: Option<RepoLocation>,
+}
+
+/// The outcome of resolving a launch request.
 #[derive(Debug)]
 pub(crate) enum Launch {
     /// A repository window, or the deterministic demo fixture.
-    Window {
-        demo: bool,
-        name: String,
-        path: String,
-    },
+    Window(WindowLaunch),
     /// Discovery failed, so only the error window opens.
     Failed(RepoFailure),
 }
@@ -49,14 +55,15 @@ impl Launch {
     /// window wherever it is invoked from.
     pub(crate) fn resolve(request: &LaunchRequest) -> Self {
         if request.demo {
-            return Self::Window {
+            return Self::Window(WindowLaunch {
                 demo: true,
                 name: demo::REPOSITORY_NAME.to_owned(),
                 path: demo::REPOSITORY_PATH.to_owned(),
-            };
+                location: None,
+            });
         }
         match discover(&request.path) {
-            Ok(location) => Self::Window {
+            Ok(location) => Self::Window(WindowLaunch {
                 demo: false,
                 name: display_name(&location),
                 // A bare repository has no worktree, so show the repository itself.
@@ -66,7 +73,8 @@ impl Launch {
                         .as_deref()
                         .unwrap_or(&location.common_dir),
                 ),
-            },
+                location: Some(location),
+            }),
             Err(failure) => Self::Failed(failure),
         }
     }
@@ -88,7 +96,7 @@ pub(crate) fn run(request: &LaunchRequest) -> ExitCode {
             })
             .detach();
             let result = match launch {
-                Launch::Window { demo, name, path } => {
+                Launch::Window(window) => {
                     let options = window_options(
                         INITIAL_WIDTH,
                         INITIAL_HEIGHT,
@@ -96,7 +104,7 @@ pub(crate) fn run(request: &LaunchRequest) -> ExitCode {
                         cx,
                     );
                     cx.open_window(options, move |_window, cx| {
-                        cx.new(|_| SourcefourWindow::new(demo, name, path))
+                        cx.new(|cx| SourcefourWindow::new(window, cx))
                     })
                     .map(|_| ())
                 }
@@ -222,12 +230,16 @@ mod tests {
     fn demo_mode_opens_without_a_repository() {
         let launch = Launch::resolve(&request("/nowhere/at/all", true));
 
-        let Launch::Window { demo, name, path } = launch else {
+        let Launch::Window(window) = launch else {
             panic!("demo mode must open a window");
         };
-        assert!(demo);
-        assert!(!name.is_empty());
-        assert!(!path.is_empty());
+        assert!(window.demo);
+        assert!(!window.name.is_empty());
+        assert!(!window.path.is_empty());
+        assert_eq!(
+            window.location, None,
+            "demo mode must not depend on a repository"
+        );
     }
 
     #[test]
@@ -236,12 +248,16 @@ mod tests {
 
         let launch = Launch::resolve(&request(repository.path(), false));
 
-        let Launch::Window { demo, name, path } = launch else {
+        let Launch::Window(window) = launch else {
             panic!("a repository must open a window");
         };
-        assert!(!demo);
-        assert_eq!(name, "repository");
-        assert_eq!(path, display_path(repository.path()));
+        assert!(!window.demo);
+        assert_eq!(window.name, "repository");
+        assert_eq!(window.path, display_path(repository.path()));
+        assert!(
+            window.location.is_some(),
+            "the window carries the location it will load metadata from"
+        );
     }
 
     #[test]
@@ -251,11 +267,11 @@ mod tests {
 
         let launch = Launch::resolve(&request(&linked, false));
 
-        let Launch::Window { name, path, .. } = launch else {
+        let Launch::Window(window) = launch else {
             panic!("a linked worktree must open a window");
         };
-        assert_eq!(name, "repository");
-        assert_eq!(path, display_path(&linked));
+        assert_eq!(window.name, "repository");
+        assert_eq!(window.path, display_path(&linked));
     }
 
     #[test]
