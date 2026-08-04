@@ -9,9 +9,10 @@ use std::{collections::BTreeMap, path::PathBuf, time::Instant};
 use smallvec::SmallVec;
 use sourcefour_graph::GraphState;
 use sourcefour_model::{
-    AheadBehindState, BranchSnapshot, CommitFlags, CommitRow, GitTime, GraphRow, HeadSnapshot, Oid,
-    RefKind, RefLabel, RemoteBranchSnapshot, RemoteSnapshot, RepoKind, RepoLocation, RepoSnapshot,
-    UpstreamSnapshot, WorktreeAccessibility, WorktreeId, WorktreeSnapshot,
+    AheadBehindState, BranchSnapshot, ChangeKind, ChangedFile, CommitFiles, CommitFlags, CommitRow,
+    DiffParent, GitTime, GraphRow, HeadSnapshot, Oid, RefKind, RefLabel, RemoteBranchSnapshot,
+    RemoteSnapshot, RepoKind, RepoLocation, RepoPath, RepoSnapshot, UpstreamSnapshot,
+    WorktreeAccessibility, WorktreeId, WorktreeSnapshot,
 };
 
 /// Repository identity shown by `--demo`, matching the screenshot fixture.
@@ -215,6 +216,35 @@ pub(crate) fn history() -> (Vec<CommitRow>, Vec<GraphRow>) {
         .map(|row| state.push(row.oid, &row.parents))
         .collect();
     (rows, layout)
+}
+
+/// Changed files for the fixture's initially selected commit (§12.4).
+pub(crate) fn files() -> CommitFiles {
+    let changed = |old: Option<&str>, new: Option<&str>, status: ChangeKind| ChangedFile {
+        old_path: old.map(|path| RepoPath(path.as_bytes().to_vec())),
+        new_path: new.map(|path| RepoPath(path.as_bytes().to_vec())),
+        status,
+        additions: None,
+        deletions: None,
+        is_binary: false,
+    };
+    CommitFiles {
+        oid: oid("9f3e21a"),
+        parent: DiffParent::FirstParent,
+        files: vec![
+            changed(
+                Some("apps/sourcefour/src/views.rs"),
+                Some("apps/sourcefour/src/views.rs"),
+                ChangeKind::Modified,
+            ),
+            changed(
+                None,
+                Some("crates/sourcefour-git/src/worktrees.rs"),
+                ChangeKind::Added,
+            ),
+            changed(Some("docs/restart-notes.md"), None, ChangeKind::Deleted),
+        ],
+    }
 }
 
 /// Expands a mockup hash prefix into a full deterministic object ID.

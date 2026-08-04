@@ -4,9 +4,9 @@ use gpui::{
 };
 use sourcefour_git::{GixHistoryCursor, HistoryCursor as _};
 use sourcefour_model::{
-    AheadBehindState, AheadBehindUpdate, Generation, HeadSnapshot, HistoryBatch, HistoryQuery,
-    HistoryScope, LoadState, RepoEnvelope, RepoFailure, RepoLocation, RepoSessionId, RepoSnapshot,
-    RequestId, WorktreeAccessibility,
+    AheadBehindState, AheadBehindUpdate, ChangeKind, ChangedFile, CommitFiles, Generation,
+    HeadSnapshot, HistoryBatch, HistoryQuery, HistoryScope, LoadState, RepoEnvelope, RepoFailure,
+    RepoLocation, RepoSessionId, RepoSnapshot, RequestId, WorktreeAccessibility,
 };
 
 use crate::{
@@ -41,6 +41,10 @@ pub(crate) struct SourcefourWindow {
     panels: PanelSizes,
     /// The splitter a mouse drag is currently moving.
     dragging: Option<Splitter>,
+    /// Changed files for the selected commit, when loaded (§6.10).
+    files: Option<CommitFiles>,
+    /// The commit the current `files` load belongs to, requested or done.
+    files_for: Option<sourcefour_model::Oid>,
     list_scroll: UniformListScrollHandle,
     focus: FocusHandle,
 }
@@ -125,6 +129,9 @@ const SNAPSHOT_REQUEST: RequestId = RequestId(0);
 const AHEAD_BEHIND_REQUEST: RequestId = RequestId(1);
 const HISTORY_REQUEST: RequestId = RequestId(2);
 
+/// §6.10 selection debounce before changed files are decoded.
+const FILES_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(50);
+
 /// Whether a background result still belongs to the window that asked for it.
 ///
 /// A result from a superseded generation is dropped rather than applied; this
@@ -184,6 +191,18 @@ fn status_summary(snapshot: &RepoSnapshot) -> String {
         counted(remote_branches, "remote branch"),
         counted(snapshot.tags_count, "tag")
     )
+}
+
+/// The one-letter status a changed file shows, following Git's own letters.
+fn change_letter(status: ChangeKind) -> &'static str {
+    match status {
+        ChangeKind::Added => "A",
+        ChangeKind::Modified => "M",
+        ChangeKind::Deleted => "D",
+        ChangeKind::Renamed => "R",
+        ChangeKind::Copied => "C",
+        ChangeKind::Unknown => "?",
+    }
 }
 
 /// Pluralizes a count, because "1 worktrees" reads like a bug.
@@ -377,6 +396,8 @@ impl SourcefourWindow {
             sections: SidebarSections::default(),
             panels: PanelSizes::default(),
             dragging: None,
+            files: None,
+            files_for: None,
             list_scroll: UniformListScrollHandle::new(),
             focus: cx.focus_handle(),
         };
@@ -387,6 +408,8 @@ impl SourcefourWindow {
             window.history.reset(HistoryScope::AllRefs);
             let (rows, layout) = demo::history();
             window.history.extend(rows, layout, false);
+            window.files = Some(demo::files());
+            window.files_for = window.history.selected;
         } else if let Some(location) = launch.location {
             window.repo = LoadState::Loading {
                 started_at: std::time::Instant::now(),
@@ -530,6 +553,8 @@ impl SourcefourWindow {
         // Dropping the previous cursor ends its worker thread.
         self.cursor = None;
         self.history.reset(scope.clone());
+        self.files = None;
+        self.files_for = None;
         match GixHistoryCursor::start(&location, HistoryQuery { scope }, labels) {
             Ok(cursor) => {
                 self.cursor = Some(cursor);
@@ -578,6 +603,8 @@ impl SourcefourWindow {
                     request: HISTORY_REQUEST,
                     payload: batch,
                 });
+                // The first batch selects the newest row; its files follow.
+                this.load_selected_files(cx);
                 cx.notify();
             })
             .ok();
@@ -610,6 +637,7 @@ impl SourcefourWindow {
         if let Some(index) = self.history.move_selection(delta) {
             self.list_scroll
                 .scroll_to_item(index, gpui::ScrollStrategy::Top);
+            self.load_selected_files(cx);
             cx.notify();
         }
     }
@@ -619,8 +647,58 @@ impl SourcefourWindow {
         if let Some(index) = self.history.select_index(index) {
             self.list_scroll
                 .scroll_to_item(index, gpui::ScrollStrategy::Top);
+            self.load_selected_files(cx);
             cx.notify();
         }
+    }
+
+    /// Loads the selected commit's changed files after a short debounce.
+    ///
+    /// §6.10: rapid arrow-key travel must not decode every passed commit, so
+    /// the read starts only if the selection still stands after ~50ms. A
+    /// result is dropped when the selection or generation moved on.
+    fn load_selected_files(&mut self, cx: &mut gpui::Context<Self>) {
+        let Some(oid) = self.history.selected else {
+            self.files = None;
+            self.files_for = None;
+            return;
+        };
+        if self.files_for == Some(oid) {
+            return;
+        }
+        self.files_for = Some(oid);
+        self.files = None;
+        let Some(location) = self.location.clone() else {
+            return;
+        };
+        let generation = self.generation;
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(FILES_DEBOUNCE).await;
+            let wanted = this
+                .update(cx, |this, _| {
+                    this.generation == generation && this.files_for == Some(oid)
+                })
+                .unwrap_or(false);
+            if !wanted {
+                return;
+            }
+            let files = cx
+                .background_executor()
+                .spawn(async move { sourcefour_git::commit_files(&location, oid) })
+                .await;
+            this.update(cx, |this, cx| {
+                if this.generation != generation || this.files_for != Some(oid) {
+                    return;
+                }
+                match files {
+                    Ok(files) => this.files = Some(files),
+                    Err(failure) => tracing::error!(%failure, "changed files could not load"),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// Merges divergence counts into the loaded snapshot.
@@ -1248,6 +1326,7 @@ impl SourcefourWindow {
             })
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.history.selected = Some(oid);
+                this.load_selected_files(cx);
                 cx.notify();
             }))
     }
@@ -1303,6 +1382,84 @@ impl SourcefourWindow {
                     .text_color(self.theme.text_secondary)
                     .child(author),
             )
+            .child(
+                div()
+                    .mt(px(8.0))
+                    .pt(px(8.0))
+                    .border_t_1()
+                    .border_color(self.theme.border)
+                    .text_size(px(10.0))
+                    .font_weight(FontWeight::BOLD)
+                    .text_color(self.theme.text_faint)
+                    .child(self.files.as_ref().map_or_else(
+                        || String::from("CHANGED FILES"),
+                        |files| format!("CHANGED FILES · {}", counted(files.files.len(), "file")),
+                    )),
+            )
+            .child(
+                div()
+                    .id("changed-files")
+                    .flex_grow()
+                    .min_h(px(0.0))
+                    .overflow_y_scroll()
+                    .children(
+                        self.files
+                            .iter()
+                            .flat_map(|files| &files.files)
+                            .map(|file| self.file_row(file)),
+                    ),
+            )
+    }
+
+    /// One changed file: status letter, path, and line counts when known.
+    fn file_row(&self, file: &ChangedFile) -> Div {
+        let color = match file.status {
+            ChangeKind::Added => self.theme.green,
+            ChangeKind::Deleted => self.theme.red,
+            ChangeKind::Modified => self.theme.orange,
+            ChangeKind::Renamed | ChangeKind::Copied => self.theme.purple,
+            ChangeKind::Unknown => self.theme.text_faint,
+        };
+        let path = file
+            .new_path
+            .as_ref()
+            .or(file.old_path.as_ref())
+            .map_or_else(String::new, sourcefour_model::RepoPath::display_lossy);
+        div()
+            .h(px(22.0))
+            .flex_none()
+            .flex()
+            .items_center()
+            .gap(px(8.0))
+            .text_size(px(11.0))
+            .child(
+                div()
+                    .w(px(12.0))
+                    .flex_none()
+                    .font_weight(FontWeight::BOLD)
+                    .text_color(color)
+                    .child(change_letter(file.status)),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(1.0))
+                    .overflow_hidden()
+                    .text_ellipsis()
+                    .whitespace_nowrap()
+                    .text_color(self.theme.text_secondary)
+                    .child(path),
+            )
+            .children(file.additions.map(|added| {
+                div()
+                    .text_color(self.theme.green)
+                    .child(format!("+{added}"))
+            }))
+            .children(file.deletions.map(|removed| {
+                div()
+                    .text_color(self.theme.red)
+                    .child(format!("-{removed}"))
+            }))
     }
 
     fn status(&self) -> impl IntoElement {
@@ -1462,6 +1619,20 @@ mod tests {
         ColumnVisibility, ErrorWindow, SidebarSection, SidebarSections, ahead_behind_text,
         belongs_to, counted, head_label,
     };
+
+    #[test]
+    fn change_letters_follow_git_conventions() {
+        use sourcefour_model::ChangeKind;
+
+        use super::change_letter;
+
+        assert_eq!(change_letter(ChangeKind::Added), "A");
+        assert_eq!(change_letter(ChangeKind::Modified), "M");
+        assert_eq!(change_letter(ChangeKind::Deleted), "D");
+        assert_eq!(change_letter(ChangeKind::Renamed), "R");
+        assert_eq!(change_letter(ChangeKind::Copied), "C");
+        assert_eq!(change_letter(ChangeKind::Unknown), "?");
+    }
 
     #[test]
     fn counts_are_pluralized() {

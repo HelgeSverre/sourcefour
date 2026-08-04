@@ -311,7 +311,10 @@ fn convert_oid(id: &gix::hash::oid) -> Option<Oid> {
     }
 }
 
-fn open_failure(git_dir: &std::path::Path, error: &impl std::fmt::Display) -> RepoFailure {
+pub(crate) fn open_failure(
+    git_dir: &std::path::Path,
+    error: &impl std::fmt::Display,
+) -> RepoFailure {
     RepoFailure::new(
         RepoFailureKind::CorruptRepository,
         "Repository could not be opened",
