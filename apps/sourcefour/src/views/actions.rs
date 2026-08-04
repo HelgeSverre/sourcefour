@@ -573,6 +573,9 @@ impl SourcefourWindow {
         };
         view.logs.clear();
         let run_id = view.run.id;
+        // Forget in-flight fetches as well: a refresh must be able to kick
+        // a hung request, not wait politely behind it.
+        self.actions_logs_pending.clear();
         self.fetch_actions_jobs(run_id, cx);
     }
 
@@ -582,6 +585,7 @@ impl SourcefourWindow {
         self.actions_poll += 1;
         let poll = self.actions_poll;
         cx.spawn(async move |this, cx| {
+            let mut log_retries = 0_u32;
             loop {
                 cx.background_executor()
                     .timer(std::time::Duration::from_secs(5))
@@ -591,17 +595,31 @@ impl SourcefourWindow {
                         if this.actions_poll != poll {
                             return false;
                         }
-                        let Some(view) = &this.actions_view else {
-                            return false;
-                        };
-                        // `run.status` froze at open time, so completion is
-                        // read from the fetched jobs.
-                        let done = !view.jobs_ok().is_empty()
-                            && view
-                                .jobs_ok()
+                        let (done, logs_missing) = {
+                            let Some(view) = &this.actions_view else {
+                                return false;
+                            };
+                            let jobs = view.jobs_ok();
+                            // `run.status` froze at open time, so completion
+                            // is read from the fetched jobs.
+                            let done = !jobs.is_empty()
+                                && jobs
+                                    .iter()
+                                    .all(|job| matches!(job.status, CheckStatus::Completed(_)));
+                            let missing = jobs
                                 .iter()
-                                .all(|job| matches!(job.status, CheckStatus::Completed(_)));
+                                .any(|job| !matches!(view.logs.get(&job.id), Some(Ok(_))));
+                            (done, missing)
+                        };
                         if done {
+                            // GitHub materializes a job's log a beat after the
+                            // job completes, so the last fetch can 404. Retry
+                            // a few ticks before going quiet.
+                            if logs_missing && log_retries < 3 {
+                                log_retries += 1;
+                                this.load_actions_logs(cx);
+                                return true;
+                            }
                             return false;
                         }
                         if let Some(view) = &this.actions_view {
