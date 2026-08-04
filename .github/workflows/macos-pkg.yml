@@ -1,0 +1,97 @@
+name: macOS Package
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build signed universal PKG
+    runs-on: macos-15
+    timeout-minutes: 90
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set signing asset paths
+        env:
+          APPLE_NOTARY_ISSUER_ID: ${{ vars.APPLE_NOTARY_ISSUER_ID }}
+          APPLE_NOTARY_KEY_ID: ${{ vars.APPLE_NOTARY_KEY_ID }}
+        run: |
+          if [[ -z "$APPLE_NOTARY_ISSUER_ID" ]]; then
+            echo "error: APPLE_NOTARY_ISSUER_ID is required; configure a team App Store Connect API key" >&2
+            exit 1
+          fi
+          if [[ -z "$APPLE_NOTARY_KEY_ID" ]]; then
+            echo "error: APPLE_NOTARY_KEY_ID is required" >&2
+            exit 1
+          fi
+          echo "APPLE_SIGNING_KEYCHAIN=$RUNNER_TEMP/sourcefour-signing.keychain-db" >> "$GITHUB_ENV"
+          echo "APPLE_NOTARY_KEY_PATH=$RUNNER_TEMP/AuthKey_${APPLE_NOTARY_KEY_ID}.p8" >> "$GITHUB_ENV"
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          toolchain: stable
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          shared-key: macos-universal-pkg
+
+      - name: Install cargo-packager
+        run: cargo install cargo-packager --version 0.11.8 --locked
+
+      - name: Import Apple signing assets
+        env:
+          APPLE_APPLICATION_CERTIFICATE_BASE64: ${{ secrets.APPLE_APPLICATION_CERTIFICATE_BASE64 }}
+          APPLE_APPLICATION_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_APPLICATION_CERTIFICATE_PASSWORD }}
+          APPLE_APPLICATION_SIGNING_IDENTITY: ${{ vars.APPLE_APPLICATION_SIGNING_IDENTITY }}
+          APPLE_INSTALLER_CERTIFICATE_BASE64: ${{ secrets.APPLE_INSTALLER_CERTIFICATE_BASE64 }}
+          APPLE_INSTALLER_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_INSTALLER_CERTIFICATE_PASSWORD }}
+          APPLE_INSTALLER_SIGNING_IDENTITY: ${{ vars.APPLE_INSTALLER_SIGNING_IDENTITY }}
+          APPLE_NOTARY_KEY_BASE64: ${{ secrets.APPLE_NOTARY_KEY_BASE64 }}
+        run: .github/scripts/import-apple-signing-assets.sh
+
+      - name: Build, sign, and notarize universal installer
+        env:
+          APPLE_APPLICATION_SIGNING_IDENTITY: ${{ vars.APPLE_APPLICATION_SIGNING_IDENTITY }}
+          APPLE_INSTALLER_SIGNING_IDENTITY: ${{ vars.APPLE_INSTALLER_SIGNING_IDENTITY }}
+          APPLE_NOTARY_ISSUER_ID: ${{ vars.APPLE_NOTARY_ISSUER_ID }}
+          APPLE_NOTARY_KEY_ID: ${{ vars.APPLE_NOTARY_KEY_ID }}
+          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+        run: .github/scripts/package-macos-pkg.sh
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: artifacts-build-macos-pkg
+          if-no-files-found: error
+          path: |
+            target/distrib/*.pkg
+            target/distrib/*.pkg.sha256
+
+      - name: Upload notarization diagnostics
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: macos-notarization-diagnostics
+          if-no-files-found: ignore
+          path: target/distrib/notarization-*.json
+
+      - name: Remove Apple signing assets
+        if: ${{ always() }}
+        run: |
+          if [[ -n "${APPLE_SIGNING_KEYCHAIN:-}" ]]; then
+            security delete-keychain "$APPLE_SIGNING_KEYCHAIN" 2>/dev/null || true
+          fi
+          if [[ -n "${APPLE_NOTARY_KEY_PATH:-}" ]]; then
+            rm -f "$APPLE_NOTARY_KEY_PATH"
+          fi

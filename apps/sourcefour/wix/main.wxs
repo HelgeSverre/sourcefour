@@ -1,0 +1,127 @@
+<?xml version='1.0' encoding='windows-1252'?>
+<!--
+  The MSI definition, consumed by `dist build` for the windows-msvc target.
+
+  Derived from the cargo-wix template (Copyright 2017 Christopher R. Field,
+  Apache-2.0), trimmed to what Sourcefour ships: the executable, a Start Menu
+  shortcut, and an optional PATH entry so `sourcefour` works from a shell the
+  way it does everywhere else. The instructional comments and the disabled
+  license/EULA/banner blocks are gone; recover them from cargo-wix if needed.
+
+  Variables (Version, CargoTargetBinDir, ...) are supplied at build time.
+-->
+
+<?if $(sys.BUILDARCH) = x64 or $(sys.BUILDARCH) = arm64 ?>
+    <?define PlatformProgramFilesFolder = "ProgramFiles64Folder" ?>
+<?else ?>
+    <?define PlatformProgramFilesFolder = "ProgramFilesFolder" ?>
+<?endif ?>
+
+<Wix xmlns='http://schemas.microsoft.com/wix/2006/wi'>
+
+    <Product
+        Id='*'
+        Name='Sourcefour'
+        UpgradeCode='519EB068-09EF-4C12-97E0-0C5EE8BE248D'
+        Manufacturer='Liseth Solutions AS'
+        Language='1033'
+        Codepage='1252'
+        Version='$(var.Version)'>
+
+        <Package Id='*'
+            Keywords='Installer'
+            Description='A fast, native Git history browser'
+            Manufacturer='Liseth Solutions AS'
+            InstallerVersion='450'
+            Languages='1033'
+            Compressed='yes'
+            InstallScope='perMachine'
+            SummaryCodepage='1252'
+            />
+
+        <MajorUpgrade
+            Schedule='afterInstallInitialize'
+            DowngradeErrorMessage='A newer version of [ProductName] is already installed. Setup will now exit.'/>
+
+        <Media Id='1' Cabinet='media1.cab' EmbedCab='yes' DiskPrompt='CD-ROM #1'/>
+        <Property Id='DiskPrompt' Value='Sourcefour Installation'/>
+
+        <Directory Id='TARGETDIR' Name='SourceDir'>
+            <Directory Id='$(var.PlatformProgramFilesFolder)' Name='PFiles'>
+                <Directory Id='APPLICATIONFOLDER' Name='Sourcefour'>
+                    <Directory Id='Bin' Name='bin'>
+                        <Component Id='Path' Guid='B14FC9E3-A9B9-48FB-9D4A-45084077A0B3' KeyPath='yes'>
+                            <Environment
+                                Id='PATH'
+                                Name='PATH'
+                                Value='[Bin]'
+                                Permanent='no'
+                                Part='last'
+                                Action='set'
+                                System='yes'/>
+                        </Component>
+                        <Component Id='binary0' Guid='*'>
+                            <File
+                                Id='exe0'
+                                Name='sourcefour.exe'
+                                DiskId='1'
+                                Source='$(var.CargoTargetBinDir)\sourcefour.exe'
+                                KeyPath='yes'>
+                                <Shortcut
+                                    Id='ApplicationStartMenuShortcut'
+                                    Directory='ApplicationProgramsFolder'
+                                    Name='Sourcefour'
+                                    Description='A fast, native Git history browser'
+                                    WorkingDirectory='APPLICATIONFOLDER'
+                                    Advertise='yes'/>
+                            </File>
+                            <RemoveFolder
+                                Id='ApplicationProgramsFolder'
+                                Directory='ApplicationProgramsFolder'
+                                On='uninstall'/>
+                        </Component>
+                    </Directory>
+                </Directory>
+            </Directory>
+            <Directory Id='ProgramMenuFolder'>
+                <Directory Id='ApplicationProgramsFolder' Name='Sourcefour'/>
+            </Directory>
+        </Directory>
+
+        <Feature
+            Id='Binaries'
+            Title='Sourcefour'
+            Description='Installs Sourcefour.'
+            Level='1'
+            ConfigurableDirectory='APPLICATIONFOLDER'
+            AllowAdvertise='no'
+            Display='expand'
+            Absent='disallow'>
+
+            <ComponentRef Id='binary0'/>
+
+            <Feature
+                Id='Environment'
+                Title='PATH Environment Variable'
+                Description='Add the install location of the [ProductName] executable to the PATH system environment variable. This allows the [ProductName] executable to be called from any location.'
+                Level='1'
+                Absent='allow'>
+                <ComponentRef Id='Path'/>
+            </Feature>
+        </Feature>
+
+        <SetProperty Id='ARPINSTALLLOCATION' Value='[APPLICATIONFOLDER]' After='CostFinalize'/>
+
+        <Icon Id='ProductICO' SourceFile='wix\Sourcefour.ico'/>
+        <Property Id='ARPPRODUCTICON' Value='ProductICO'/>
+        <Property Id='ARPHELPLINK' Value='https://github.com/HelgeSverre/sourcefour'/>
+
+        <UI>
+            <UIRef Id='WixUI_FeatureTree'/>
+            <Publish Dialog='WelcomeDlg' Control='Next' Event='NewDialog' Value='CustomizeDlg' Order='99'>1</Publish>
+            <Publish Dialog='CustomizeDlg' Control='Back' Event='NewDialog' Value='WelcomeDlg' Order='99'>1</Publish>
+        </UI>
+
+    </Product>
+
+</Wix>

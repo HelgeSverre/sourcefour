@@ -63,10 +63,20 @@ check: fmt-check lint test build build-release
 package:
     ./scripts/package.sh
 
-# Regenerate the app icon.
+# Build an unsigned dist/*.pkg, to check the installer without Apple's certs.
+[group('dist')]
+pkg:
+    .github/scripts/package-macos-pkg.sh --unsigned --output-dir dist
+
+# Regenerate the app icon in every packaging format.
 [group('dist')]
 icon:
     python3 scripts/make-icon.py
+
+# Recapture every screenshot the website ships.
+[group('dist')]
+screenshots:
+    ./scripts/screenshots.sh
 
 # Show what a release would produce.
 [group('dist')]

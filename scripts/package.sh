@@ -15,7 +15,7 @@ rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 
 cp target/release/sourcefour "$app/Contents/MacOS/sourcefour"
-cp -R apps/sourcefour/assets "$app/Contents/Resources/assets"
+# The interface assets are compiled into the binary; only the icon is a file.
 cp apps/sourcefour/assets/icon/Sourcefour.icns "$app/Contents/Resources/Sourcefour.icns"
 
 cat > "$app/Contents/Info.plist" <<PLIST

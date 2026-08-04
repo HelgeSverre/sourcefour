@@ -1,0 +1,65 @@
+name: Windows Installer
+
+# On demand only. The release builds the MSI through cargo-dist; this exists so
+# the installer can be built and inspected without cutting a tag first.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build MSI
+    runs-on: windows-2022
+    timeout-minutes: 60
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - name: Enable long paths
+        run: git config --global core.longpaths true
+
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          shared-key: windows-msi
+          cache-on-failure: "true"
+
+      - name: Install dist
+        shell: bash
+        run: .github/scripts/install-cargo-dist.sh
+
+      - name: Build MSI
+        run: dist build --artifacts=local --target=x86_64-pc-windows-msvc --output-format=json > dist-manifest.json
+
+      - name: Verify checksum
+        shell: pwsh
+        run: |
+          $msiFiles = @(Get-ChildItem target/distrib/*.msi)
+          if ($msiFiles.Count -ne 1) {
+            throw "Expected exactly one MSI, found $($msiFiles.Count)"
+          }
+          $msi = $msiFiles[0]
+          $expected = ((Get-Content "$($msi.FullName).sha256" -Raw).Trim() -split '\s+')[0]
+          $actual = (Get-FileHash $msi.FullName -Algorithm SHA256).Hash
+          if ($actual -ne $expected) {
+            throw "MSI checksum mismatch: expected $expected, got $actual"
+          }
+          Write-Output "$($msi.Name) built and checksum verified"
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-msi
+          if-no-files-found: error
+          path: |
+            target/distrib/*.msi
+            target/distrib/*.msi.sha256

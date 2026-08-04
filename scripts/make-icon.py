@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""Generates assets/icon/Sourcefour.icns: a flat dark tile with the graph glyph.
+"""Generates the app icon in every form packaging needs: a flat dark tile with
+the graph glyph, written as .icns (macOS), .ico (Windows installer), and .png
+(AppImage, and the website preview).
 
 Requires Pillow and the macOS `iconutil`. Rerun after design changes; the
-resulting .icns is committed so packaging needs no Python.
+results are committed so packaging needs no Python.
 """
 
 import pathlib
@@ -87,8 +89,14 @@ def main() -> None:
             ["iconutil", "-c", "icns", str(iconset), "-o", str(OUT_DIR / "Sourcefour.icns")],
             check=True,
         )
+    image.save(
+        OUT_DIR / "Sourcefour.ico",
+        sizes=[(size, size) for size in (16, 24, 32, 48, 64, 128, 256)],
+    )
+    image.resize((512, 512), Image.LANCZOS).save(OUT_DIR / "Sourcefour.png")
     image.resize((256, 256), Image.LANCZOS).save(OUT_DIR / "preview.png")
-    print(f"wrote {OUT_DIR / 'Sourcefour.icns'}")
+    for name in ("Sourcefour.icns", "Sourcefour.ico", "Sourcefour.png", "preview.png"):
+        print(f"wrote {OUT_DIR / name}")
 
 
 if __name__ == "__main__":

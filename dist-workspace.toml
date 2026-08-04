@@ -4,22 +4,35 @@ members = ["cargo:."]
 [dist]
 cargo-dist-version = "0.32.0"
 ci = "github"
-installers = ["homebrew"]
+installers = ["homebrew", "msi"]
 tap = "helgesverre/homebrew-tap"
 publish-jobs = ["homebrew"]
-# macOS only for now. The app builds on Linux (GPUI/X11) but has never shipped
-# there; add the two linux-gnu targets once the Linux CI job has stayed green.
-targets = ["aarch64-apple-darwin", "x86_64-apple-darwin"]
+targets = [
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+    "x86_64-pc-windows-msvc",
+    "x86_64-unknown-linux-gnu",
+]
 packages = ["sourcefour"]
 precise-builds = true
 merge-tasks = true
 pr-run-mode = "skip"
-# release.yml is hand-edited to gate every release job on the test suite, which
-# cargo-dist 0.32 cannot express in generated output.
-allow-dirty = ["ci"]
+# release.yml is hand-edited to gate every release job on the test suite and to
+# fold in the signed .pkg and the AppImage, neither of which cargo-dist 0.32
+# can produce. The WiX definition is customized with branding, a Start Menu
+# shortcut, and the instructional boilerplate removed.
+allow-dirty = ["ci", "msi"]
 
+# GPUI links against XKB and XCB on Linux; the rest of the desktop libraries
+# are loaded at runtime.
+[dist.dependencies.apt]
+libxcb1-dev = { version = "*", targets = ["x86_64-unknown-linux-gnu"] }
+libxkbcommon-x11-dev = { version = "*", targets = ["x86_64-unknown-linux-gnu"] }
+
+# Pinned to commits, not tags: a moved tag would silently change what runs.
+# Update these together with the pins in the hand-written workflows.
 [dist.github-action-commits]
-"actions/checkout" = "d23441a48e516b6c34aea4fa41551a30e30af803"
+"actions/checkout" = "3d3c42e5aac5ba805825da76410c181273ba90b1"
 "actions/download-artifact" = "3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c"
 "actions/upload-artifact" = "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
 
