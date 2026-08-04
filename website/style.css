@@ -161,14 +161,16 @@ section {
 /* ── hero ────────────────────────────────────────────────────── */
 
 .hero {
-  padding: 76px 0 0;
+  padding: 52px 0 0;
   text-align: center;
+  overflow: clip;
 }
 .hero h1 {
-  font-size: calc(var(--text-3xl) * 1.16);
-  letter-spacing: -0.03em;
-  max-width: 16ch;
-  margin: 0 auto 18px;
+  font-size: clamp(60px, 7vw, 104px);
+  letter-spacing: -0.045em;
+  line-height: 1;
+  max-width: 13ch;
+  margin: 0 auto 22px;
 }
 .hero h1 code {
   font-family: var(--font-mono);
@@ -180,8 +182,8 @@ section {
   color: var(--accent);
 }
 .hero .lede {
-  font-size: var(--text-md);
-  max-width: 52ch;
+  font-size: 1.25rem;
+  max-width: 44ch;
   margin: 0 auto 26px;
 }
 
@@ -246,13 +248,35 @@ section {
   }
 }
 
+/* The window leans back into the page under an accent halo, breaking out
+   of the container so it fills nearly the whole viewport. */
+.stage {
+  position: relative;
+}
+.stage::before {
+  content: "";
+  position: absolute;
+  left: -20%;
+  right: -20%;
+  top: -4%;
+  height: 110%;
+  background: radial-gradient(
+    ellipse 60% 45% at 50% 22%,
+    rgba(91, 157, 255, 0.5),
+    transparent 70%
+  );
+  filter: blur(18px);
+}
 .shot {
-  margin-top: 34px;
-  border-radius: var(--r-lg) var(--r-lg) 0 0;
+  position: relative;
+  margin-top: 44px;
+  border-radius: var(--r-lg);
   overflow: hidden;
-  box-shadow: var(--shadow);
-  width: min(1040px, 100%);
-  margin-inline: auto;
+  box-shadow: 0 0 140px 8px rgba(91, 157, 255, 0.3), var(--shadow);
+  width: min(1560px, 96vw);
+  margin-inline: calc((100% - min(1560px, 96vw)) / 2);
+  transform: perspective(1600px) rotateX(7deg);
+  transform-origin: 50% 0;
 }
 
 /* ── feature rows ────────────────────────────────────────────── */
@@ -569,7 +593,13 @@ footer {
     display: none;
   }
   .hero {
-    padding-top: 56px;
+    padding-top: 44px;
+  }
+  .hero h1 {
+    font-size: clamp(38px, 11.5vw, 60px);
+  }
+  .hero .lede {
+    font-size: var(--text-md);
   }
   /* The install command is 35 monospace characters; it has to give somewhere. */
   .install {
