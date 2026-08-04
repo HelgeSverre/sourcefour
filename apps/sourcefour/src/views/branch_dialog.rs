@@ -1,7 +1,7 @@
 //! The §6.13 create-branch dialog: state, overlay, and submission.
 
 use gpui::{Div, FontWeight, IntoElement, Window, div, prelude::*, px};
-use sourcefour_model::{Generation, HeadSnapshot, OperationOutcome};
+use sourcefour_model::{HeadSnapshot, OperationOutcome};
 
 use crate::theme::MONO_FONT;
 
@@ -81,10 +81,7 @@ impl SourcefourWindow {
                     Ok(OperationOutcome::Succeeded { summary, .. }) => {
                         this.branch_dialog = None;
                         this.fetch_status = Some((true, summary));
-                        this.generation = Generation(this.generation.0 + 1);
-                        if let Some(location) = this.location.clone() {
-                            this.load_metadata(location, cx);
-                        }
+                        this.begin_reload(cx);
                     }
                     Ok(OperationOutcome::Failed { error, .. }) | Err(error) => {
                         if let Some(dialog) = &mut this.branch_dialog {

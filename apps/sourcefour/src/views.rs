@@ -1,3 +1,20 @@
+//! The Sourcefour window: state, data plumbing, and the render root.
+//!
+//! Each surface lives in its own child module — descendants of this module,
+//! so they extend `SourcefourWindow` with their own `impl` blocks and reach
+//! its private fields directly:
+//!
+//! - [`chrome`] — titlebar, toolbar, filter, status bar, splitters, fetch
+//! - [`sidebar`] — the reorderable worktrees/branches/remotes/Actions panel
+//! - [`history_pane`] — the virtualized commit list and graph canvas
+//! - [`details`] — the commit message and changed-files pane
+//! - [`diff`] — the full-window diff overlay, text and image
+//! - [`branch_dialog`] — the create-branch dialog
+//! - [`github`] — the GitHub connection and its cached read surfaces
+//!
+//! The settings overlay is a sibling (`crate::settings_ui`) reaching in
+//! through `pub(crate)` methods only.
+
 use gpui::{
     Div, FocusHandle, FontWeight, IntoElement, Render, UniformListScrollHandle, Window, actions,
     div, prelude::*, px,
@@ -28,7 +45,7 @@ mod history_pane;
 mod sidebar;
 
 use branch_dialog::BranchDialog;
-use diff::{DiffMode, DiffView, Scrub};
+use diff::{DiffMode, DiffView};
 use github::{Cached, GithubChecks};
 use sidebar::{SidebarSections, head_label};
 
@@ -51,7 +68,9 @@ pub(crate) struct SourcefourWindow {
     sections: SidebarSections,
     panels: PanelSizes,
     /// The splitter a mouse drag is currently moving.
-    dragging: Option<Splitter>,
+    /// The one drag a held mouse button performs; splitters and the diff
+    /// overlay's scrub controls are mutually exclusive by construction.
+    drag: Option<Drag>,
     /// Full metadata for the selected commit, when loaded (§6.10).
     detail: Option<sourcefour_model::CommitDetail>,
     /// Changed files for the selected commit, when loaded (§6.10).
@@ -68,8 +87,6 @@ pub(crate) struct SourcefourWindow {
     diff_focus: FocusHandle,
     /// Scroll position of the diff overlay's line list.
     diff_scroll: UniformListScrollHandle,
-    /// Which diff-overlay control a held mouse button is dragging.
-    scrubbing: Scrub,
     /// The user's persisted configuration (settings.json).
     settings: crate::settings::AppSettings,
     /// The settings overlay's visible section, while open.
@@ -144,6 +161,17 @@ actions!(
 
 /// Rows a page key moves, matching the baseline viewport's row count.
 const PAGE_ROWS: isize = 20;
+
+/// What a held mouse button is dragging, window-wide.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Drag {
+    /// A panel splitter handle.
+    Splitter(Splitter),
+    /// The diff overlay's scrollbar thumb.
+    DiffBar,
+    /// The image juxtapose divider.
+    ImageSlider,
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ColumnVisibility {
@@ -267,7 +295,7 @@ impl SourcefourWindow {
             theme: Theme::dark(),
             sections: SidebarSections::default(),
             panels: PanelSizes::default(),
-            dragging: None,
+            drag: None,
             detail: None,
             files: None,
             files_for: None,
@@ -276,7 +304,6 @@ impl SourcefourWindow {
             diff_request: 0,
             diff_focus: cx.focus_handle(),
             diff_scroll: UniformListScrollHandle::new(),
-            scrubbing: Scrub::None,
             settings: initial_settings(launch.demo),
             settings_view: None,
             settings_focus: cx.focus_handle(),
@@ -377,26 +404,9 @@ impl SourcefourWindow {
                 if change.is_none() {
                     continue;
                 }
-                let reload = this.update(cx, |this, cx| {
-                    // A new generation retires every result still in flight.
-                    this.generation = Generation(this.generation.0 + 1);
-                    if let Some(current) = this.repo.value().cloned() {
-                        this.repo = LoadState::Refreshing {
-                            current,
-                            started_at: std::time::Instant::now(),
-                        };
-                    }
-                    cx.notify();
-                    this.location.clone()
-                });
-                match reload {
-                    Ok(Some(location)) => {
-                        this.update(cx, |this, cx| this.load_metadata(location, cx))
-                            .ok();
-                    }
-                    Ok(None) => {}
-                    // The window is gone, so the watcher has nothing to serve.
-                    Err(_) => return,
+                // The window is gone when the update errs; nothing to serve.
+                if this.update(cx, Self::begin_reload).is_err() {
+                    return;
                 }
             }
         })
@@ -408,6 +418,24 @@ impl SourcefourWindow {
     /// Reading refs and worktrees touches the filesystem, so it never runs on
     /// the render thread (§15.8). Ahead/behind follows as a second pass so the
     /// sidebar appears before any history is walked (§6.7).
+    /// Starts a metadata reload of the current location: a new generation
+    /// retires every result still in flight (§5.5) and the loaded snapshot
+    /// stays usable on screen as `Refreshing` until the fresh one arrives
+    /// (§11.2). Every reload path routes through here.
+    pub(super) fn begin_reload(&mut self, cx: &mut gpui::Context<Self>) {
+        self.generation = Generation(self.generation.0 + 1);
+        if let Some(current) = self.repo.value().cloned() {
+            self.repo = LoadState::Refreshing {
+                current,
+                started_at: std::time::Instant::now(),
+            };
+        }
+        if let Some(location) = self.location.clone() {
+            self.load_metadata(location, cx);
+        }
+        cx.notify();
+    }
+
     fn load_metadata(&mut self, location: RepoLocation, cx: &mut gpui::Context<Self>) {
         let session = self.session;
         let generation = self.generation;
@@ -917,29 +945,54 @@ impl SourcefourWindow {
     fn root_drag_handlers(root: Div, cx: &mut gpui::Context<Self>) -> Div {
         root.on_mouse_move(
             cx.listener(|this, event: &gpui::MouseMoveEvent, window, cx| {
-                if let Some(splitter) = this.dragging {
-                    this.panels.drag(
-                        splitter,
-                        event.position.x.0,
-                        event.position.y.0,
-                        window.viewport_size().height.0,
-                    );
-                    cx.notify();
-                } else {
-                    this.scrub_move(event.position.x.0, event.position.y.0, cx);
-                }
+                this.drag_move(event.position.x.0, event.position.y.0, window, cx);
             }),
         )
         .on_mouse_up(
             gpui::MouseButton::Left,
             cx.listener(|this, _, _, cx| {
-                if this.dragging.take().is_some() {
-                    this.persist_ui_state(cx);
-                    cx.notify();
-                }
-                this.end_scrub(cx);
+                this.end_drag(cx);
             }),
         )
+    }
+
+    /// Routes a held drag to whatever armed it.
+    pub(super) fn drag_move(
+        &mut self,
+        x: f32,
+        y: f32,
+        window: &Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        match self.drag {
+            None => {}
+            Some(Drag::Splitter(splitter)) => {
+                self.panels
+                    .drag(splitter, x, y, window.viewport_size().height.0);
+                cx.notify();
+            }
+            Some(Drag::DiffBar) => {
+                self.scrub_diff(y);
+                cx.notify();
+            }
+            Some(Drag::ImageSlider) => {
+                self.scrub_image(x);
+                cx.notify();
+            }
+        }
+    }
+
+    /// Ends whatever drag a released mouse button was holding; splitter
+    /// positions persist on release.
+    pub(super) fn end_drag(&mut self, cx: &mut gpui::Context<Self>) {
+        match self.drag.take() {
+            None => {}
+            Some(Drag::Splitter(_)) => {
+                self.persist_ui_state(cx);
+                cx.notify();
+            }
+            Some(Drag::DiffBar | Drag::ImageSlider) => cx.notify(),
+        }
     }
 }
 

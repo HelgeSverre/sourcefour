@@ -5,9 +5,7 @@ use std::sync::{Arc, Mutex, atomic::AtomicBool};
 
 use gpui::{Div, IntoElement, Window, div, prelude::*, px, svg};
 use sourcefour_git::OperationSink;
-use sourcefour_model::{
-    FetchRequest, Generation, LoadState, OperationOutcome, OperationProgress, RepoSnapshot,
-};
+use sourcefour_model::{FetchRequest, OperationOutcome, OperationProgress, RepoSnapshot};
 
 use crate::{
     panels::Splitter,
@@ -244,16 +242,7 @@ impl SourcefourWindow {
                         this.fetch_status = Some((true, summary));
                         // Refresh immediately rather than waiting for the
                         // watcher's next poll (§6.12).
-                        this.generation = Generation(this.generation.0 + 1);
-                        if let Some(current) = this.repo.value().cloned() {
-                            this.repo = LoadState::Refreshing {
-                                current,
-                                started_at: std::time::Instant::now(),
-                            };
-                        }
-                        if let Some(location) = this.location.clone() {
-                            this.load_metadata(location, cx);
-                        }
+                        this.begin_reload(cx);
                     }
                     Ok(OperationOutcome::Cancelled { .. }) => {
                         this.fetch_status = Some((true, String::from("Fetch cancelled")));
@@ -298,7 +287,7 @@ impl SourcefourWindow {
     /// A draggable divider; the window's mouse handlers do the actual moving.
     pub(super) fn splitter(&self, splitter: Splitter, cx: &mut gpui::Context<Self>) -> Div {
         let vertical = matches!(splitter, Splitter::Sidebar | Splitter::Graph);
-        let dragging = self.dragging == Some(splitter);
+        let dragging = self.drag == Some(super::Drag::Splitter(splitter));
         let base = div()
             .flex_none()
             // The graph divider floats over content, so it only shows itself
@@ -314,7 +303,7 @@ impl SourcefourWindow {
             .on_mouse_down(
                 gpui::MouseButton::Left,
                 cx.listener(move |this, _, _, cx| {
-                    this.dragging = Some(splitter);
+                    this.drag = Some(super::Drag::Splitter(splitter));
                     cx.notify();
                 }),
             );

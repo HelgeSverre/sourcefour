@@ -13,7 +13,7 @@ use sourcefour_model::{
 
 use crate::theme::MONO_FONT;
 
-use super::{SourcefourWindow, change_color, change_letter, counted, row_count_as_f32};
+use super::{Drag, SourcefourWindow, change_color, change_letter, counted, row_count_as_f32};
 
 /// How the diff overlay lays out its lines.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -36,15 +36,6 @@ impl DiffMode {
             _ => Self::Unified,
         }
     }
-}
-
-/// The diff-overlay drag in progress: the scrollbar and the image slider are
-/// mutually exclusive, so one state carries both.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum Scrub {
-    None,
-    DiffBar,
-    ImageSlider,
 }
 
 /// One open file diff: header info plus content once loaded (§6.11).
@@ -218,13 +209,15 @@ impl SourcefourWindow {
                 // Nothing behind the overlay may react to the mouse; occlusion
                 // also stops the root's handlers, so scrub drags route here.
                 .occlude()
-                .on_mouse_move(cx.listener(|this, event: &gpui::MouseMoveEvent, _, cx| {
-                    this.scrub_move(event.position.x.0, event.position.y.0, cx);
-                }))
+                .on_mouse_move(
+                    cx.listener(|this, event: &gpui::MouseMoveEvent, window, cx| {
+                        this.drag_move(event.position.x.0, event.position.y.0, window, cx);
+                    }),
+                )
                 .on_mouse_up(
                     gpui::MouseButton::Left,
                     cx.listener(|this, _, _, cx| {
-                        this.end_scrub(cx);
+                        this.end_drag(cx);
                     }),
                 )
                 .absolute()
@@ -546,7 +539,7 @@ impl SourcefourWindow {
     ) -> gpui::Stateful<Div> {
         let fraction = view.slider;
         let bounds_cell = self.juxtapose_bounds.clone();
-        let divider = if self.scrubbing == Scrub::ImageSlider {
+        let divider = if self.drag == Some(Drag::ImageSlider) {
             self.theme.text_secondary
         } else {
             self.theme.border_strong
@@ -560,7 +553,7 @@ impl SourcefourWindow {
             .on_mouse_down(
                 gpui::MouseButton::Left,
                 cx.listener(|this, event: &gpui::MouseDownEvent, _, cx| {
-                    this.scrubbing = Scrub::ImageSlider;
+                    this.drag = Some(Drag::ImageSlider);
                     this.scrub_image(event.position.x.0);
                     cx.notify();
                 }),
@@ -647,29 +640,6 @@ impl SourcefourWindow {
                     .size_full()
                     .object_fit(gpui::ObjectFit::Contain)
             }))
-    }
-
-    /// Routes a held drag to whichever diff-overlay control armed it.
-    pub(super) fn scrub_move(&mut self, x: f32, y: f32, cx: &mut gpui::Context<Self>) {
-        match self.scrubbing {
-            Scrub::None => {}
-            Scrub::DiffBar => {
-                self.scrub_diff(y);
-                cx.notify();
-            }
-            Scrub::ImageSlider => {
-                self.scrub_image(x);
-                cx.notify();
-            }
-        }
-    }
-
-    /// Ends any drag a released mouse button was holding.
-    pub(super) fn end_scrub(&mut self, cx: &mut gpui::Context<Self>) {
-        if self.scrubbing != Scrub::None {
-            self.scrubbing = Scrub::None;
-            cx.notify();
-        }
     }
 
     /// Maps a window-space X onto the juxtapose slider fraction.
@@ -798,7 +768,7 @@ impl SourcefourWindow {
                 .on_mouse_down(
                     gpui::MouseButton::Left,
                     cx.listener(|this, event: &gpui::MouseDownEvent, _, cx| {
-                        this.scrubbing = Scrub::DiffBar;
+                        this.drag = Some(Drag::DiffBar);
                         this.scrub_diff(event.position.y.0);
                         cx.notify();
                     }),
@@ -811,7 +781,7 @@ impl SourcefourWindow {
                         .w(px(8.0))
                         .h(px(thumb))
                         .rounded_full()
-                        .bg(if self.scrubbing == Scrub::DiffBar {
+                        .bg(if self.drag == Some(Drag::DiffBar) {
                             self.theme.accent
                         } else {
                             self.theme.border_strong
