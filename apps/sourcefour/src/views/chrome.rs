@@ -1,0 +1,373 @@
+//! The window chrome: titlebar, toolbar, filter field, status bar, and the
+//! panel splitters, plus the §6.12 fetch that the toolbar launches.
+
+use std::sync::{Arc, Mutex, atomic::AtomicBool};
+
+use gpui::{Div, IntoElement, Window, div, prelude::*, px, svg};
+use sourcefour_git::OperationSink;
+use sourcefour_model::{
+    FetchRequest, Generation, LoadState, OperationOutcome, OperationProgress, RepoSnapshot,
+};
+
+use crate::{
+    panels::Splitter,
+    theme::{SPLITTER_WIDTH, STATUS_HEIGHT, TITLEBAR_HEIGHT, TOOLBAR_HEIGHT, Theme},
+};
+
+use super::{SourcefourWindow, counted, head_label};
+
+/// Forwards the newest fetch progress into shared state; latest wins.
+struct LatestSink(Arc<Mutex<Option<OperationProgress>>>);
+
+impl OperationSink for LatestSink {
+    fn report(&self, progress: OperationProgress) {
+        if let Ok(mut latest) = self.0.lock() {
+            *latest = Some(progress);
+        }
+    }
+}
+
+/// The status bar's right-hand summary of what the snapshot contains.
+fn status_summary(snapshot: &RepoSnapshot) -> String {
+    let remote_branches: usize = snapshot
+        .remotes
+        .iter()
+        .map(|remote| remote.branches.len())
+        .sum();
+    format!(
+        "{} / {} / {} / {} / {}",
+        head_label(&snapshot.head),
+        counted(snapshot.worktrees.len(), "worktree"),
+        counted(snapshot.local_branches.len(), "branch"),
+        counted(remote_branches, "remote branch"),
+        counted(snapshot.tags_count, "tag")
+    )
+}
+
+fn filter_icon(theme: &Theme) -> gpui::Svg {
+    svg()
+        .path("icons/search.svg")
+        .size(px(13.0))
+        .text_color(theme.text_faint)
+}
+
+impl SourcefourWindow {
+    pub(super) fn titlebar(&self) -> impl IntoElement {
+        let repository = &self.name;
+        let path = &self.path;
+        div()
+            .h(px(TITLEBAR_HEIGHT))
+            .flex_none()
+            .flex()
+            .items_center()
+            .justify_center()
+            .border_b_1()
+            .border_color(self.theme.border)
+            .bg(self.theme.bg_chrome)
+            .text_size(px(12.5))
+            .text_color(self.theme.text_secondary)
+            .child(format!("sourcefour - {repository} - {path}"))
+    }
+
+    pub(super) fn toolbar(
+        &self,
+        window: &Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> impl IntoElement {
+        let action = |name, icon| {
+            self.toolbar_column(name, icon, false)
+                .hover(|this| this.bg(self.theme.bg_hover))
+        };
+        div()
+            .h(px(TOOLBAR_HEIGHT))
+            .flex_none()
+            .flex()
+            .items_center()
+            .gap(px(4.0))
+            .px(px(10.0))
+            .border_b_1()
+            .border_color(self.theme.border)
+            .bg(self.theme.bg_chrome)
+            .child(self.fetch_button(cx))
+            .child(action("Pull", "icons/arrow-down-to-line.svg"))
+            .child(action("Push", "icons/arrow-up-from-line.svg"))
+            .child(action("Commit", "icons/git-commit-horizontal.svg"))
+            .child(
+                self.toolbar_column("Branch", "icons/git-branch.svg", true)
+                    .id("branch-action")
+                    .cursor_pointer()
+                    .hover(|style| style.bg(self.theme.bg_hover))
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.open_branch_dialog(window, cx);
+                    })),
+            )
+            .child(action("Merge", "icons/git-merge.svg"))
+            .child(action("Stash", "icons/archive.svg"))
+            .child(div().flex_grow())
+            .child(self.filter_box(window, cx))
+            .child(crate::settings_ui::toolbar_button(&self.theme, cx))
+    }
+
+    /// One toolbar column: icon above label, lit when active. Callers add
+    /// identity and click behavior; planned actions stay inert and faint.
+    fn toolbar_column(&self, label: &'static str, icon: &'static str, active: bool) -> Div {
+        div()
+            .h_full()
+            .flex()
+            .flex_col()
+            .justify_center()
+            .items_center()
+            .gap(px(3.0))
+            .w(px(58.0))
+            .text_size(px(10.0))
+            .text_color(if active {
+                self.theme.text_secondary
+            } else {
+                self.theme.text_faint
+            })
+            .child(svg().path(icon).size(px(15.0)).text_color(if active {
+                self.theme.accent
+            } else {
+                self.theme.text_faint
+            }))
+            .child(label)
+    }
+
+    /// The toolbar's Fetch action: live, and disabled while one runs (§6.12).
+    pub(super) fn fetch_button(&self, cx: &mut gpui::Context<Self>) -> gpui::Stateful<Div> {
+        let running = self.fetching.is_some();
+        self.toolbar_column(
+            if running { "Fetching" } else { "Fetch" },
+            "icons/cloud-download.svg",
+            !running,
+        )
+        .id("fetch")
+        .when(!running, |this| {
+            this.cursor_pointer()
+                .hover(|style| style.bg(self.theme.bg_hover))
+        })
+        .on_click(cx.listener(|this, _, _, cx| {
+            this.start_fetch(cx);
+        }))
+    }
+
+    /// The §4.7 filter field, wrapping the real text input.
+    pub(super) fn filter_box(
+        &self,
+        window: &Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> impl IntoElement + use<> {
+        let focused = self.filter_input.read(cx).focus_handle.is_focused(window);
+        let matches = self
+            .history
+            .is_filtering()
+            .then(|| self.history.visible_len().to_string());
+        div()
+            .id("filter")
+            .on_click(cx.listener(|this, _, window, cx| {
+                this.filter_input
+                    .read(cx)
+                    .focus_handle
+                    .clone()
+                    .focus(window);
+                cx.notify();
+            }))
+            .w(px(260.0))
+            .h(px(28.0))
+            .flex()
+            .items_center()
+            .px(px(10.0))
+            .gap(px(7.0))
+            .rounded(px(6.0))
+            .border_1()
+            .border_color(if focused {
+                self.theme.accent
+            } else {
+                self.theme.border_strong
+            })
+            .bg(self.theme.bg_list)
+            .text_size(px(12.0))
+            .text_color(self.theme.text_primary)
+            .child(filter_icon(&self.theme))
+            .child(self.filter_input.clone())
+            .children(matches.map(|matches| {
+                div()
+                    .flex_none()
+                    .text_color(self.theme.accent)
+                    .child(matches)
+            }))
+            .child(
+                div()
+                    .flex_none()
+                    .text_size(px(9.0))
+                    .text_color(self.theme.text_faint.opacity(0.7))
+                    .child(if focused { "Esc" } else { "Cmd+F" }),
+            )
+    }
+
+    /// Starts a fetch of every remote through the user's own Git (§6.12).
+    ///
+    /// A second fetch while one runs is a no-op: the button disables, and
+    /// this guard holds even if a keybinding races the render.
+    pub(super) fn start_fetch(&mut self, cx: &mut gpui::Context<Self>) {
+        if self.fetching.is_some() {
+            return;
+        }
+        let Some(location) = self.location.clone() else {
+            return;
+        };
+        let request = FetchRequest {
+            worktree: self
+                .snapshot()
+                .and_then(|snapshot| snapshot.active_worktree.clone())
+                .unwrap_or_else(|| sourcefour_model::WorktreeId(String::from("active"))),
+            remote: None,
+            prune: false,
+        };
+        let latest = Arc::new(Mutex::new(None));
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.fetching = Some(Arc::clone(&latest));
+        self.fetch_cancel = Some(Arc::clone(&cancel));
+        self.fetch_status = None;
+        cx.spawn(async move |this, cx| {
+            let outcome = cx
+                .background_executor()
+                .spawn(async move {
+                    sourcefour_git::fetch(&location, &request, &LatestSink(latest), &cancel)
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                this.fetching = None;
+                this.fetch_cancel = None;
+                match outcome {
+                    Ok(OperationOutcome::Succeeded { summary, .. }) => {
+                        this.fetch_status = Some((true, summary));
+                        // Refresh immediately rather than waiting for the
+                        // watcher's next poll (§6.12).
+                        this.generation = Generation(this.generation.0 + 1);
+                        if let Some(current) = this.repo.value().cloned() {
+                            this.repo = LoadState::Refreshing {
+                                current,
+                                started_at: std::time::Instant::now(),
+                            };
+                        }
+                        if let Some(location) = this.location.clone() {
+                            this.load_metadata(location, cx);
+                        }
+                    }
+                    Ok(OperationOutcome::Cancelled { .. }) => {
+                        this.fetch_status = Some((true, String::from("Fetch cancelled")));
+                    }
+                    Ok(OperationOutcome::Failed { error, .. }) => {
+                        this.fetch_status = Some((false, error.user.message));
+                    }
+                    Err(failure) => {
+                        this.fetch_status = Some((false, failure.user.message));
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+        // Repaint on a short tick while the fetch runs so progress shows.
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(100))
+                    .await;
+                let done = this
+                    .update(cx, |this, cx| {
+                        if this.fetching.is_none() {
+                            true
+                        } else {
+                            cx.notify();
+                            false
+                        }
+                    })
+                    .unwrap_or(true);
+                if done {
+                    return;
+                }
+            }
+        })
+        .detach();
+        cx.notify();
+    }
+
+    /// A draggable divider; the window's mouse handlers do the actual moving.
+    pub(super) fn splitter(&self, splitter: Splitter, cx: &mut gpui::Context<Self>) -> Div {
+        let vertical = matches!(splitter, Splitter::Sidebar | Splitter::Graph);
+        let dragging = self.dragging == Some(splitter);
+        let base = div()
+            .flex_none()
+            // The graph divider floats over content, so it only shows itself
+            // when interacted with; the panel dividers read as borders.
+            .bg(if dragging {
+                self.theme.accent.opacity(0.55)
+            } else if matches!(splitter, Splitter::Graph) {
+                gpui::transparent_black()
+            } else {
+                self.theme.border
+            })
+            .hover(|style| style.bg(self.theme.accent.opacity(0.35)))
+            .on_mouse_down(
+                gpui::MouseButton::Left,
+                cx.listener(move |this, _, _, cx| {
+                    this.dragging = Some(splitter);
+                    cx.notify();
+                }),
+            );
+        if vertical {
+            base.w(px(SPLITTER_WIDTH))
+                .h_full()
+                .cursor(gpui::CursorStyle::ResizeLeftRight)
+        } else {
+            base.h(px(SPLITTER_WIDTH))
+                .w_full()
+                .cursor(gpui::CursorStyle::ResizeUpDown)
+        }
+    }
+
+    pub(super) fn status(&self) -> impl IntoElement {
+        let path = self.path.clone();
+        div()
+            .h(px(STATUS_HEIGHT))
+            .flex_none()
+            .flex()
+            .items_center()
+            .gap(px(14.0))
+            .px(px(12.0))
+            .border_t_1()
+            .border_color(self.theme.border)
+            .bg(self.theme.bg_chrome)
+            .text_size(px(10.0))
+            .text_color(self.theme.text_faint)
+            .child(path)
+            .children(self.fetching.as_ref().map(|latest| {
+                let message = latest
+                    .lock()
+                    .ok()
+                    .and_then(|progress| progress.clone())
+                    .map_or_else(|| String::from("Fetching…"), |progress| progress.message);
+                div().text_color(self.theme.accent).child(message)
+            }))
+            .children(self.fetch_status.clone().map(|(ok, message)| {
+                div()
+                    .text_color(if ok { self.theme.green } else { self.theme.red })
+                    .child(message)
+            }))
+            .children(self.history.is_filtering().then(|| {
+                div().text_color(self.theme.accent).child(format!(
+                    "Searching loaded history — {} of {} match",
+                    self.history.visible_len(),
+                    self.history.rows.len()
+                ))
+            }))
+            .child(div().flex_grow())
+            .child(self.snapshot().map_or_else(
+                || String::from("Loading repository metadata..."),
+                status_summary,
+            ))
+    }
+}
