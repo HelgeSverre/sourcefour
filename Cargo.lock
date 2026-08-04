@@ -5341,6 +5341,7 @@ version = "0.1.0"
 dependencies = [
  "gix",
  "sourcefour-model",
+ "sourcefour-test-support",
 ]
 
 [[package]]

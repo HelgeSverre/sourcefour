@@ -11,5 +11,8 @@ authors.workspace = true
 gix.workspace = true
 sourcefour-model = { path = "../sourcefour-model" }
 
+[dev-dependencies]
+sourcefour-test-support = { path = "../sourcefour-test-support" }
+
 [lints]
 workspace = true

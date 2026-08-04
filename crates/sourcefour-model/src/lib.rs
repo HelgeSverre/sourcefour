@@ -869,7 +869,22 @@ impl RepoFailure {
             generation: None,
         }
     }
+
+    /// Attaches diagnostics that are safe to reveal on request.
+    #[must_use]
+    pub fn with_details(mut self, details: impl Into<String>) -> Self {
+        self.user.details = Some(details.into());
+        self
+    }
 }
+
+impl fmt::Display for RepoFailure {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{}: {}", self.user.title, self.user.message)
+    }
+}
+
+impl std::error::Error for RepoFailure {}
 
 /// Semantic update to one branch's lazy ahead/behind state.
 #[derive(Clone, Debug, Eq, PartialEq)]

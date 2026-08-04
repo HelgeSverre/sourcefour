@@ -38,7 +38,7 @@ impl TempRepo {
         std::fs::create_dir(&root).expect("could not create the fixture working tree");
         run_git(&root, &["init", "--initial-branch", "main"]);
         run_git(&root, &["commit", "--allow-empty", "-m", "initial commit"]);
-        Self::new(directory, root)
+        Self::new(directory, &root)
     }
 
     /// Creates a bare repository with one commit on `main`.
@@ -60,7 +60,7 @@ impl TempRepo {
                 &root.to_string_lossy(),
             ],
         );
-        Self::new(directory, root)
+        Self::new(directory, &root)
     }
 
     /// Adds a linked worktree checked out on a new branch and returns its path.
@@ -101,11 +101,10 @@ impl TempRepo {
         run_git(&self.root, arguments)
     }
 
-    fn new(directory: TempDir, root: PathBuf) -> Self {
-        let root = canonical(&root);
+    fn new(directory: TempDir, root: &Path) -> Self {
         Self {
             _directory: directory,
-            root,
+            root: canonical(root),
         }
     }
 }

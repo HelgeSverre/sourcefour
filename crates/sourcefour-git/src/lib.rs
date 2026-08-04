@@ -4,7 +4,11 @@
 //! backend lifetimes and gix types inside this crate while exposing only owned
 //! `sourcefour-model` values.
 
+mod discover;
+
 use std::sync::atomic::AtomicBool;
+
+pub use crate::discover::{discover, display_name};
 
 use sourcefour_model::{
     CommitDetail, CommitFiles, CreateBranchRequest, FetchRequest, FileDiff, FileDiffRequest,
