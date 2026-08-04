@@ -1,0 +1,22 @@
+startup first-frame samples (ms), 10 runs, target: --demo
+167
+136
+135
+143
+129
+134
+119
+131
+133
+127
+startup first-frame samples (ms), 10 runs, target: /Users/helge/code/sourcefour
+149
+124
+122
+121
+128
+126
+130
+129
+120
+128

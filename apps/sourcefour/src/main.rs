@@ -31,7 +31,19 @@ pub(crate) struct LaunchRequest {
 
 const USAGE: &str = "usage: sourcefour [PATH] [--demo] [--width N --height N] [--scene NAME]";
 
+/// When the process entered `main`, for the startup measurement (§12.5).
+/// Dynamic-loader time before `main` is excluded; the ledger says so.
+static PROCESS_START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+
+/// Milliseconds since the process entered `main`.
+pub(crate) fn since_process_start() -> u128 {
+    PROCESS_START
+        .get()
+        .map_or(0, |start| start.elapsed().as_millis())
+}
+
 fn main() -> ExitCode {
+    PROCESS_START.set(std::time::Instant::now()).ok();
     initialize_tracing();
     match parse_args(env::args_os().skip(1)) {
         Ok(request) => run(&request),

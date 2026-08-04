@@ -71,6 +71,8 @@ pub(crate) struct SourcefourWindow {
     /// The one drag a held mouse button performs; splitters and the diff
     /// overlay's scrub controls are mutually exclusive by construction.
     drag: Option<Drag>,
+    /// Whether the first-frame startup report has fired (§12.5).
+    startup_reported: bool,
     /// Full metadata for the selected commit, when loaded (§6.10).
     detail: Option<sourcefour_model::CommitDetail>,
     /// Changed files for the selected commit, when loaded (§6.10).
@@ -304,6 +306,7 @@ impl SourcefourWindow {
             sections: SidebarSections::default(),
             panels: PanelSizes::default(),
             drag: None,
+            startup_reported: false,
             detail: None,
             files: None,
             files_for: None,
@@ -1019,11 +1022,24 @@ impl SourcefourWindow {
 
 impl Render for SourcefourWindow {
     fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+        // §12.5 startup measurement: SOURCEFOUR_STARTUP_LOG=1 prints the
+        // milliseconds from process start to the end of the first frame and
+        // quits, so a script can sample it repeatedly.
+        if !self.startup_reported {
+            self.startup_reported = true;
+            if std::env::var_os("SOURCEFOUR_STARTUP_LOG").is_some() {
+                window.on_next_frame(|_, cx| {
+                    println!("first-frame-ms {}", crate::since_process_start());
+                    cx.quit();
+                });
+            }
+        }
+        let frame_started = std::time::Instant::now();
         let columns = ColumnVisibility::for_available_width(
             window.viewport_size().width.0 - self.panels.sidebar,
         );
         let root = div().key_context("History");
-        Self::root_actions(root, cx)
+        let element = Self::root_actions(root, cx)
             .track_focus(&self.focus)
             .size_full()
             .relative()
@@ -1059,7 +1075,16 @@ impl Render for SourcefourWindow {
             .child(self.status())
             .children(self.diff_overlay(cx))
             .children(self.branch_overlay(cx))
-            .children(self.settings_overlay(cx))
+            .children(self.settings_overlay(cx));
+        // §12.5 frame instrumentation: element construction only — layout,
+        // paint, and GPU time happen inside gpui after this returns.
+        if std::env::var_os("SOURCEFOUR_FRAME_LOG").is_some() {
+            let elapsed = frame_started.elapsed();
+            if elapsed > std::time::Duration::from_micros(16_700) {
+                tracing::warn!(?elapsed, "slow frame build");
+            }
+        }
+        element
     }
 }
 

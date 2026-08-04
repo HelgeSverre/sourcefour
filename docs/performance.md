@@ -58,7 +58,29 @@ Raw output: `fixtures/stress/2026-08-04-percentiles.txt`.
 | git | 85,080 | 2 / 6 ms | 9 / 68 ms | 1,240 / 1,395 ms | within budgets |
 
 Budgets: discovery + metadata p95 < 80 ms ✓; first 256 rows p95 < 150 ms ✓.
-Rendering-side metrics (startup, frame budget) remain unmeasured.
+Startup is measured in the record below; scroll frame timing is not.
+
+## Run record — 2026-08-04 startup
+
+Same machine and toolchain as above, release build, warm caches;
+`scripts/measure-startup.sh 10 [repo]` with `SOURCEFOUR_STARTUP_LOG=1`.
+The clock starts when the process enters `main` (dynamic-loader time before
+`main` is excluded) and stops in the first frame's completion callback.
+Raw samples: `fixtures/stress/2026-08-04-startup.txt`.
+
+| Target | p50 | p95 | Budget | Verdict |
+| --- | --- | --- | --- | --- |
+| `--demo` (no repository I/O) | 133 ms | 167 ms | p50 < 100 ms; p95 < 180 ms | **p50 over budget**; p95 within |
+| `~/code/sourcefour` (real repository) | 126 ms | 149 ms | p50 < 100 ms; p95 < 180 ms | **p50 over budget**; p95 within |
+
+The first frame paints the loading shell, so repository size does not move
+this number; the cost is window creation and the first GPUI/Metal frame.
+Improving p50 needs profiling inside that path, not app-level changes.
+
+Frame instrumentation (`SOURCEFOUR_FRAME_LOG=1`) logs element-construction
+time over 16.7 ms per frame; it measures the app's share only — layout,
+paint, and GPU time happen inside gpui afterwards. Scroll frame timing
+under automation remains not yet measured.
 
 ## Result table
 
@@ -78,7 +100,7 @@ The final command set is owned by the package and performance work; record the e
 | Measurement | Exact command | Raw-result path/link |
 | --- | --- | --- |
 | Release build | not yet measured | not yet measured |
-| App startup/first frame | not yet measured | not yet measured |
+| App startup/first frame | `SOURCEFOUR_STARTUP_LOG=1 scripts/measure-startup.sh 10 [repo]` | `fixtures/stress/2026-08-04-startup.txt` |
 | Discovery and metadata | not yet measured | not yet measured |
 | Initial history and subsequent batch | not yet measured | not yet measured |
 | Filter and selection responsiveness | not yet measured | not yet measured |
