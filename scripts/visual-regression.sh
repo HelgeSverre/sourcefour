@@ -18,30 +18,26 @@ mkdir -p "$golden_dir"
 
 cargo build --release --locked >/dev/null 2>&1
 
-failures=0
+# Every capture: scene at a size. The overview repeats across sizes to catch
+# responsive regressions; each overlay scene is captured once.
+captures=()
 for size in "${sizes[@]}"; do
-  read -r width height <<<"$size"
-  ./target/release/sourcefour --demo --width "$width" --height "$height" >/dev/null 2>&1 &
-  pid=$!
-  window_id=""
-  for _ in $(seq 1 20); do
-    sleep 0.5
-    window_id="$(swift scripts/window-id.swift "$pid")" && [ -n "$window_id" ] && break
-  done
-  if [ -z "$window_id" ]; then
-    echo "FAILED   demo ${width}x${height}: window never appeared"
-    kill "$pid" 2>/dev/null || true
+  captures+=("overview $size")
+done
+captures+=("diff 1280 800" "split 1280 800" "image 1280 800" "settings 1280 800")
+
+failures=0
+for capture in "${captures[@]}"; do
+  read -r scene width height <<<"$capture"
+  name="${scene}-${width}x${height}"
+  current="$work_dir/$name.png"
+  if ! scripts/capture.sh "$scene" "$width" "$height" "$current"; then
+    echo "FAILED   $name: window never appeared"
     failures=$((failures + 1))
     continue
   fi
-  current="$work_dir/demo-${width}x${height}.png"
-  # -o omits the window shadow, whose size depends on key-window state and
-  # would make capture dimensions nondeterministic.
-  screencapture -x -o -l"$window_id" "$current"
-  kill "$pid" 2>/dev/null || true
-  wait "$pid" 2>/dev/null || true
 
-  golden="$golden_dir/demo-${width}x${height}.png"
+  golden="$golden_dir/$name.png"
   if [ "$record" = 1 ]; then
     cp "$current" "$golden"
     echo "recorded $golden"
@@ -53,10 +49,10 @@ for size in "${sizes[@]}"; do
     continue
   fi
   if python3 scripts/compare-captures.py "$golden" "$current"; then
-    echo "ok       demo ${width}x${height}"
+    echo "ok       $name"
   else
-    cp "$current" "$golden_dir/failed-${width}x${height}.png"
-    echo "DIFFERS  demo ${width}x${height} (see $golden_dir/failed-${width}x${height}.png)"
+    cp "$current" "$golden_dir/failed-$name.png"
+    echo "DIFFERS  $name (see $golden_dir/failed-$name.png)"
     failures=$((failures + 1))
   fi
 done

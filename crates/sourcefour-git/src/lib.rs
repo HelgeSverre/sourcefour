@@ -23,7 +23,7 @@ pub use crate::{
     ahead_behind::{AheadBehindCache, apply as apply_ahead_behind},
     branch::{create_branch, is_valid_branch_name},
     detail::commit_detail,
-    diff::{DiffLimits, file_diff, file_diff_with_limits},
+    diff::{DiffLimits, file_diff, file_diff_with_limits, unified},
     discover::{discover, display_name},
     fetch::fetch,
     files::commit_files,

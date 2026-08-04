@@ -10,8 +10,8 @@ use smallvec::SmallVec;
 use sourcefour_graph::GraphState;
 use sourcefour_model::{
     AheadBehindState, BranchSnapshot, ChangeKind, ChangedFile, CommitDetail, CommitFiles,
-    CommitFlags, CommitRow, DiffParent, GitTime, GraphRow, HeadSnapshot, Oid, RefKind, RefLabel,
-    RemoteBranchSnapshot, RemoteSnapshot, RepoKind, RepoLocation, RepoPath, RepoSnapshot,
+    CommitFlags, CommitRow, DiffContent, DiffParent, GitTime, GraphRow, HeadSnapshot, Oid, RefKind,
+    RefLabel, RemoteBranchSnapshot, RemoteSnapshot, RepoKind, RepoLocation, RepoPath, RepoSnapshot,
     Signature, UpstreamSnapshot, WorktreeAccessibility, WorktreeId, WorktreeSnapshot,
 };
 
@@ -295,6 +295,186 @@ pub(crate) fn files() -> CommitFiles {
         ],
     }
 }
+
+/// A capture scene: the extra state `--demo` seeds before the first frame.
+///
+/// Views that normally need a click — the diff overlay and its layouts — are
+/// unreachable from a screenshot run, so each scene names one and seeds it.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum Scene {
+    /// The window as it opens: sidebar, graph, history, details.
+    #[default]
+    Overview,
+    /// The diff overlay over a changed file, unified.
+    Diff,
+    /// The same diff, laid out side by side.
+    Split,
+    /// The image diff overlay, juxtapose slider centred.
+    Image,
+    /// The settings overlay on its first section.
+    Settings,
+}
+
+impl Scene {
+    /// Every scene name `--scene` accepts, for the usage line.
+    pub(crate) const NAMES: &'static str = "overview, diff, split, image, settings";
+
+    pub(crate) fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "overview" => Some(Self::Overview),
+            "diff" => Some(Self::Diff),
+            "split" => Some(Self::Split),
+            "image" => Some(Self::Image),
+            "settings" => Some(Self::Settings),
+            _ => None,
+        }
+    }
+
+    /// The changed file the scene's overlay is opened over. The text scenes
+    /// name the modified entry of [`files`], so the overlay and the list
+    /// behind it describe the same change.
+    pub(crate) fn file(self) -> &'static str {
+        match self {
+            Self::Image => "assets/icon.png",
+            _ => "apps/sourcefour/src/views.rs",
+        }
+    }
+
+    /// The overlay's content, formatted by the shipping diff code so a capture
+    /// can never show lines the product would not produce.
+    pub(crate) fn content(self) -> DiffContent {
+        match self {
+            Self::Image => DiffContent::Image {
+                before: Some(include_bytes!("../assets/demo/icon-before.png").to_vec()),
+                after: Some(include_bytes!("../assets/demo/icon-after.png").to_vec()),
+                format: String::from("png"),
+            },
+            _ => sourcefour_git::unified(
+                SIDEBAR_BEFORE.as_bytes(),
+                SIDEBAR_AFTER.as_bytes(),
+                sourcefour_git::DiffLimits::default(),
+            ),
+        }
+    }
+}
+
+/// The two sides of [`Scene::file`], diffed live to build the overlay's lines.
+const SIDEBAR_BEFORE: &str = r#"    /// One worktree row: its name, the branch it has checked out, its path.
+    fn worktree_row(&self, worktree: &WorktreeSnapshot) -> Div {
+        div()
+            .flex()
+            .items_center()
+            .gap(px(6.0))
+            .h(px(ROW_HEIGHT))
+            .px(px(10.0))
+            .when(worktree.is_current, |row| {
+                row.bg(self.theme.bg_selected)
+            })
+            .child(self.icon("icons/folder.svg", self.theme.text_secondary))
+            .child(
+                div()
+                    .flex_1()
+                    .text_color(self.theme.text_primary)
+                    .child(worktree.display_name.clone()),
+            )
+            .child(
+                div()
+                    .text_size(px(11.0))
+                    .text_color(self.theme.text_faint)
+                    .child(head_label(&worktree.head)),
+            )
+    }
+
+    /// The worktree section: a header carrying the count, then a row each.
+    fn worktree_section(&self, cx: &mut Context<Self>) -> Div {
+        let worktrees = self.repo.value().map(|repo| repo.worktrees.clone());
+        let count = worktrees.as_ref().map_or(0, Vec::len);
+        div()
+            .flex()
+            .flex_col()
+            .child(self.section_header("WORKTREES", count, Section::Worktrees, cx))
+            .when(!self.sections.worktrees, |section| {
+                section.children(
+                    worktrees
+                        .into_iter()
+                        .flatten()
+                        .map(|worktree| self.worktree_row(&worktree)),
+                )
+            })
+    }
+
+/// What a worktree's HEAD points at, in the shortest honest form.
+fn head_label(head: &HeadSnapshot) -> String {
+    match head {
+        HeadSnapshot::Branch { short_name, .. } => short_name.clone(),
+        HeadSnapshot::Detached { oid } => oid.to_short_hex(),
+        HeadSnapshot::Unborn { short_name } => format!("{short_name} (unborn)"),
+    }
+}
+"#;
+
+const SIDEBAR_AFTER: &str = r#"    /// One worktree row: its name, the branch it has checked out, its path,
+    /// and — when the checkout is locked or gone — why it cannot be used.
+    fn worktree_row(&self, worktree: &WorktreeSnapshot) -> Div {
+        let missing = worktree.accessibility != WorktreeAccessibility::Accessible;
+        div()
+            .flex()
+            .items_center()
+            .gap(px(6.0))
+            .h(px(ROW_HEIGHT))
+            .px(px(10.0))
+            .when(worktree.is_current, |row| {
+                row.bg(self.theme.bg_selected)
+            })
+            .child(self.icon("icons/folder.svg", self.theme.text_secondary))
+            .child(
+                div()
+                    .flex_1()
+                    .text_color(if missing {
+                        self.theme.text_faint
+                    } else {
+                        self.theme.text_primary
+                    })
+                    .child(worktree.display_name.clone()),
+            )
+            .when(worktree.is_locked, |row| {
+                row.child(self.icon("icons/lock.svg", self.theme.orange))
+            })
+            .child(
+                div()
+                    .text_size(px(11.0))
+                    .text_color(self.theme.text_faint)
+                    .child(head_label(&worktree.head)),
+            )
+    }
+
+    /// The worktree section: a header carrying the count, then a row each.
+    fn worktree_section(&self, cx: &mut Context<Self>) -> Div {
+        let worktrees = self.repo.value().map(|repo| repo.worktrees.clone());
+        let count = worktrees.as_ref().map_or(0, Vec::len);
+        div()
+            .flex()
+            .flex_col()
+            .child(self.section_header("WORKTREES", count, Section::Worktrees, cx))
+            .when(!self.sections.worktrees, |section| {
+                section.children(
+                    worktrees
+                        .into_iter()
+                        .flatten()
+                        .map(|worktree| self.worktree_row(&worktree)),
+                )
+            })
+    }
+
+/// What a worktree's HEAD points at, in the shortest honest form.
+fn head_label(head: &HeadSnapshot) -> String {
+    match head {
+        HeadSnapshot::Branch { short_name, .. } => short_name.clone(),
+        HeadSnapshot::Detached { oid } => format!("detached at {}", oid.to_short_hex()),
+        HeadSnapshot::Unborn { short_name } => format!("{short_name} (unborn)"),
+    }
+}
+"#;
 
 /// Expands a mockup hash prefix into a full deterministic object ID.
 fn oid(prefix: &str) -> Oid {

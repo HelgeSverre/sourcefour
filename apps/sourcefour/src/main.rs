@@ -6,6 +6,8 @@ mod diff_split;
 mod graph_paint;
 mod history;
 mod panels;
+mod settings;
+mod settings_ui;
 mod text_input;
 mod theme;
 mod ui_state;
@@ -15,7 +17,7 @@ use std::{env, ffi::OsString, path::PathBuf, process::ExitCode};
 
 use tracing_subscriber::EnvFilter;
 
-use crate::app::run;
+use crate::{app::run, demo::Scene};
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct LaunchRequest {
@@ -23,19 +25,24 @@ pub(crate) struct LaunchRequest {
     pub(crate) demo: bool,
     /// Window size override, used by the visual-regression captures (§12.4).
     pub(crate) window: Option<(f32, f32)>,
+    /// Which demo scene to seed; ignored without `--demo` (§12.4).
+    pub(crate) scene: Scene,
 }
+
+const USAGE: &str = "usage: sourcefour [PATH] [--demo] [--width N --height N] [--scene NAME]";
 
 fn main() -> ExitCode {
     initialize_tracing();
     match parse_args(env::args_os().skip(1)) {
         Ok(request) => run(&request),
         Err(ArgumentError::HelpRequested) => {
-            println!("usage: sourcefour [PATH] [--demo]");
+            println!("{USAGE}");
+            println!("scenes: {}", Scene::NAMES);
             ExitCode::SUCCESS
         }
         Err(error) => {
             eprintln!("sourcefour: {error}");
-            eprintln!("usage: sourcefour [PATH] [--demo]");
+            eprintln!("{USAGE}");
             ExitCode::from(2)
         }
     }
@@ -56,10 +63,16 @@ pub(crate) fn parse_args(
     let mut path = None;
     let mut width = None;
     let mut height = None;
+    let mut scene = Scene::default();
     let mut arguments = arguments.into_iter();
     while let Some(argument) = arguments.next() {
         if argument == "--demo" {
             demo = true;
+        } else if argument == "--scene" {
+            scene = arguments
+                .next()
+                .and_then(|value| Scene::from_name(&value.to_string_lossy()))
+                .ok_or_else(|| ArgumentError::Unknown(argument.clone()))?;
         } else if argument == "--width" || argument == "--height" {
             let value = arguments
                 .next()
@@ -87,6 +100,7 @@ pub(crate) fn parse_args(
         path,
         demo,
         window: width.zip(height),
+        scene,
     })
 }
 
@@ -119,7 +133,7 @@ impl std::error::Error for ArgumentError {}
 
 #[cfg(test)]
 mod tests {
-    use super::{ArgumentError, LaunchRequest, parse_args};
+    use super::{ArgumentError, LaunchRequest, Scene, parse_args};
     use std::{ffi::OsString, path::PathBuf};
 
     #[test]
@@ -131,7 +145,20 @@ mod tests {
                 path: PathBuf::from("repository"),
                 demo: true,
                 window: None,
+                scene: Scene::Overview,
             }
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn parses_a_capture_scene() -> Result<(), ArgumentError> {
+        let request = parse_args(["--demo", "--scene", "split"].map(OsString::from))?;
+        assert_eq!(request.scene, Scene::Split);
+
+        assert!(
+            parse_args(["--scene", "nonexistent"].map(OsString::from)).is_err(),
+            "an unknown scene name is rejected rather than silently ignored"
         );
         Ok(())
     }

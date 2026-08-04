@@ -1,6 +1,5 @@
 use std::{
     borrow::Cow,
-    fs,
     path::{Path, PathBuf},
     process::ExitCode,
     sync::{
@@ -39,6 +38,8 @@ pub(crate) struct WindowLaunch {
     pub(crate) path: String,
     /// Absent in demo mode, which must render without touching a repository.
     pub(crate) location: Option<RepoLocation>,
+    /// The demo scene to seed; meaningless outside demo mode (§12.4).
+    pub(crate) scene: demo::Scene,
 }
 
 /// The outcome of resolving a launch request.
@@ -62,6 +63,7 @@ impl Launch {
                 name: demo::REPOSITORY_NAME.to_owned(),
                 path: demo::REPOSITORY_PATH.to_owned(),
                 location: None,
+                scene: request.scene,
             });
         }
         match discover(&request.path) {
@@ -76,6 +78,7 @@ impl Launch {
                         .unwrap_or(&location.common_dir),
                 ),
                 location: Some(location),
+                scene: demo::Scene::Overview,
             }),
             Err(failure) => Self::Failed(failure),
         }
@@ -139,9 +142,9 @@ pub(crate) fn run(request: &LaunchRequest) -> ExitCode {
 /// History navigation keys, declared once rather than matched ad hoc (§8.5).
 fn history_keymap() -> Vec<gpui::KeyBinding> {
     use crate::views::{
-        CloseDiff, FilterEnter, FilterEscape, FocusDetails, FocusFilter, PageDown, PageUp,
-        SelectFirstCommit, SelectLastLoadedCommit, SelectNextCommit, SelectPreviousCommit,
-        ToggleDetails,
+        CloseDiff, CloseSettings, FilterEnter, FilterEscape, FocusDetails, FocusFilter,
+        OpenSettings, PageDown, PageUp, SelectFirstCommit, SelectLastLoadedCommit,
+        SelectNextCommit, SelectPreviousCommit, ToggleDetails,
     };
     vec![
         gpui::KeyBinding::new("down", SelectNextCommit, Some("History")),
@@ -157,6 +160,9 @@ fn history_keymap() -> Vec<gpui::KeyBinding> {
         gpui::KeyBinding::new("escape", CloseDiff, Some("Diff")),
         gpui::KeyBinding::new("space", ToggleDetails, Some("History")),
         gpui::KeyBinding::new("enter", FocusDetails, Some("History")),
+        // Settings, the macOS way (§ settings overlay).
+        gpui::KeyBinding::new("cmd-,", OpenSettings, None),
+        gpui::KeyBinding::new("escape", CloseSettings, Some("Settings")),
     ]
 }
 
@@ -205,55 +211,62 @@ pub(crate) fn display_path(path: &Path) -> String {
     }
 }
 
-struct SourcefourAssets {
-    base: PathBuf,
-}
+struct SourcefourAssets;
 
 impl SourcefourAssets {
     fn new() -> Self {
-        Self {
-            base: assets_base(
-                std::env::current_exe().ok().as_deref(),
-                Path::new(env!("CARGO_MANIFEST_DIR")),
-            ),
-        }
+        Self
     }
 }
 
-/// Where the SVG assets live: the app bundle's Resources when running as
-/// `Sourcefour.app`, the source tree when running from cargo.
-fn assets_base(executable: Option<&Path>, manifest_dir: &Path) -> PathBuf {
-    if let Some(executable) = executable
-        && let Some(contents) = executable.parent().and_then(Path::parent)
-    {
-        let bundled = contents.join("Resources").join("assets");
-        if bundled.is_dir() {
-            return bundled;
-        }
-    }
-    manifest_dir.join("assets")
+/// Every asset the interface can ask for, compiled into the binary.
+///
+/// Reading these from disk would mean a different layout per install channel —
+/// a macOS bundle's Resources, an installer's program directory, a bare
+/// `cargo install`ed binary with no directory at all. Embedding them means the
+/// binary is the whole app wherever it lands. Add a file here when you add one
+/// to `assets/`.
+/// `include_bytes!` needs a literal path, so this names each file once and
+/// derives both the lookup key and the bytes from it.
+macro_rules! asset {
+    ($path:literal) => {
+        (
+            $path,
+            include_bytes!(concat!("../assets/", $path)).as_slice(),
+        )
+    };
 }
+
+const ASSETS: &[(&str, &[u8])] = &[
+    asset!("icons/archive.svg"),
+    asset!("icons/arrow-down-to-line.svg"),
+    asset!("icons/arrow-up-from-line.svg"),
+    asset!("icons/chevron-down.svg"),
+    asset!("icons/chevron-right.svg"),
+    asset!("icons/cloud-download.svg"),
+    asset!("icons/git-branch.svg"),
+    asset!("icons/git-commit-horizontal.svg"),
+    asset!("icons/git-merge.svg"),
+    asset!("icons/globe.svg"),
+    asset!("icons/search.svg"),
+    asset!("icons/settings.svg"),
+];
 
 impl AssetSource for SourcefourAssets {
     fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {
-        fs::read(self.base.join(path))
-            .map(|data| Some(Cow::Owned(data)))
-            .map_err(Into::into)
+        Ok(ASSETS
+            .iter()
+            .find(|(name, _)| *name == path)
+            .map(|(_, bytes)| Cow::Borrowed(*bytes)))
     }
 
     fn list(&self, path: &str) -> Result<Vec<SharedString>> {
-        fs::read_dir(self.base.join(path))
-            .map(|entries| {
-                entries
-                    .filter_map(|entry| {
-                        entry
-                            .ok()
-                            .and_then(|entry| entry.file_name().into_string().ok())
-                            .map(SharedString::from)
-                    })
-                    .collect()
-            })
-            .map_err(Into::into)
+        let prefix = path.trim_end_matches('/');
+        Ok(ASSETS
+            .iter()
+            .filter_map(|(name, _)| name.strip_prefix(prefix)?.strip_prefix('/'))
+            .map(SharedString::from)
+            .collect())
     }
 }
 
@@ -267,7 +280,9 @@ mod tests {
     use sourcefour_model::RepoFailureKind;
     use sourcefour_test_support::TempRepo;
 
-    use super::{Launch, display_path, launch_exit_code};
+    use gpui::AssetSource;
+
+    use super::{Launch, SourcefourAssets, display_path, launch_exit_code};
     use crate::LaunchRequest;
 
     fn request(path: impl Into<PathBuf>, demo: bool) -> LaunchRequest {
@@ -275,6 +290,7 @@ mod tests {
             path: path.into(),
             demo,
             window: None,
+            scene: crate::demo::Scene::Overview,
         }
     }
 
@@ -344,34 +360,23 @@ mod tests {
     }
 
     #[test]
-    fn assets_resolve_from_the_bundle_first_then_the_source_tree()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let bundle = tempfile::TempDir::new()?;
-        let executable = bundle
-            .path()
-            .join("Contents")
-            .join("MacOS")
-            .join("sourcefour");
-        let resources = bundle
-            .path()
-            .join("Contents")
-            .join("Resources")
-            .join("assets");
-        let manifest = Path::new("/somewhere/apps/sourcefour");
+    fn every_icon_on_disk_is_embedded_in_the_binary() -> Result<(), Box<dyn std::error::Error>> {
+        let directory = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("assets")
+            .join("icons");
 
-        assert_eq!(
-            super::assets_base(Some(&executable), manifest),
-            manifest.join("assets"),
-            "without bundled resources, the source tree wins"
-        );
+        for entry in std::fs::read_dir(directory)? {
+            let name = entry?.file_name();
+            let path = format!("icons/{}", name.to_string_lossy());
 
-        std::fs::create_dir_all(&resources)?;
-        assert_eq!(
-            super::assets_base(Some(&executable), manifest),
-            resources,
-            "a real bundle serves its own resources"
-        );
-        assert_eq!(super::assets_base(None, manifest), manifest.join("assets"));
+            let loaded = SourcefourAssets.load(&path)?;
+
+            assert!(
+                loaded.is_some_and(|bytes| !bytes.is_empty()),
+                "{path} is on disk but not in ASSETS — an installed build would \
+                 render it as a blank square"
+            );
+        }
         Ok(())
     }
 

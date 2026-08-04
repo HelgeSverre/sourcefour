@@ -63,6 +63,12 @@ pub(crate) struct SourcefourWindow {
     diff_scroll: UniformListScrollHandle,
     /// Which diff-overlay control a held mouse button is dragging.
     scrubbing: Scrub,
+    /// The user's persisted configuration (settings.json).
+    settings: crate::settings::AppSettings,
+    /// The settings overlay, while open.
+    settings_view: Option<crate::settings_ui::SettingsView>,
+    /// Focus target while the settings overlay is open, so Escape closes it.
+    settings_focus: FocusHandle,
     /// Juxtapose area bounds captured at paint, for mapping mouse X.
     juxtapose_bounds: std::rc::Rc<std::cell::Cell<gpui::Bounds<gpui::Pixels>>>,
     /// The last chosen diff layout, persisted across launches.
@@ -104,6 +110,8 @@ actions!(
         CloseDiff,
         ToggleDetails,
         FocusDetails,
+        OpenSettings,
+        CloseSettings,
     ]
 );
 
@@ -710,6 +718,9 @@ impl SourcefourWindow {
             diff_focus: cx.focus_handle(),
             diff_scroll: UniformListScrollHandle::new(),
             scrubbing: Scrub::None,
+            settings: crate::settings::AppSettings::load(),
+            settings_view: None,
+            settings_focus: cx.focus_handle(),
             juxtapose_bounds: std::rc::Rc::default(),
             preferred_diff_mode: DiffMode::Unified,
             compare_parent: DiffParent::FirstParent,
@@ -762,6 +773,7 @@ impl SourcefourWindow {
             window.detail = Some(demo::detail());
             window.files = Some(demo::files());
             window.files_for = window.history.selected;
+            window.seed_scene(launch.scene);
         } else if let Some(location) = launch.location {
             window.repo = LoadState::Loading {
                 started_at: std::time::Instant::now(),
@@ -1216,6 +1228,7 @@ impl SourcefourWindow {
             .child(action("Stash", "icons/archive.svg", true))
             .child(div().flex_grow())
             .child(self.filter_box(window, cx))
+            .child(crate::settings_ui::toolbar_button(&self.theme, cx))
     }
 
     /// The toolbar's Fetch action: live, and disabled while one runs (§6.12).
@@ -2406,6 +2419,86 @@ impl SourcefourWindow {
         cx.notify();
     }
 
+    /// Opens the overlay a capture scene asks for, with its content already
+    /// loaded (§12.4). Demo mode has no repository to read a diff from, so the
+    /// content comes from the fixture — through the shipping formatter.
+    fn seed_scene(&mut self, scene: demo::Scene) {
+        let mode = match scene {
+            demo::Scene::Overview => return,
+            demo::Scene::Settings => {
+                self.settings_view = Some(crate::settings_ui::SettingsView::default());
+                return;
+            }
+            demo::Scene::Split => DiffMode::Split,
+            _ => DiffMode::Unified,
+        };
+        let mut view = DiffView {
+            title: scene.file().to_owned(),
+            status: ChangeKind::Modified,
+            content: Some(scene.content()),
+            mode,
+            split: None,
+            before_image: None,
+            after_image: None,
+            slider: 0.5,
+        };
+        view.ensure_split();
+        view.ensure_images();
+        self.diff_view = Some(view);
+    }
+
+    /// Opens the settings overlay and moves focus into it.
+    pub(crate) fn open_settings(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) {
+        if self.settings_view.is_none() {
+            self.settings_view = Some(crate::settings_ui::SettingsView::default());
+        }
+        self.settings_focus.focus(window);
+        cx.notify();
+    }
+
+    /// Closes the settings overlay, returning focus to the history.
+    pub(crate) fn close_settings(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) {
+        self.settings_view = None;
+        self.focus.focus(window);
+        cx.notify();
+    }
+
+    /// Switches the visible settings section.
+    pub(crate) fn set_settings_section(
+        &mut self,
+        section: crate::settings_ui::SettingsSection,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if let Some(view) = &mut self.settings_view {
+            view.section = section;
+            cx.notify();
+        }
+    }
+
+    /// Applies one settings mutation and writes the file immediately, the
+    /// same contract as Zed's settings controls.
+    pub(crate) fn update_settings(
+        &mut self,
+        cx: &mut gpui::Context<Self>,
+        apply: impl FnOnce(&mut crate::settings::AppSettings),
+    ) {
+        apply(&mut self.settings);
+        self.settings.save();
+        cx.notify();
+    }
+
+    /// The settings overlay, while open.
+    fn settings_overlay(&self, cx: &mut gpui::Context<Self>) -> Option<impl IntoElement + use<>> {
+        let view = self.settings_view.as_ref()?;
+        Some(crate::settings_ui::overlay(
+            &self.settings,
+            view.section,
+            &self.theme,
+            &self.settings_focus,
+            cx,
+        ))
+    }
+
     /// Opens the diff overlay for one changed file of the selection (§6.11).
     fn open_diff(&mut self, file: &ChangedFile, window: &mut Window, cx: &mut gpui::Context<Self>) {
         let Some(oid) = self.history.selected else {
@@ -2828,14 +2921,12 @@ impl SourcefourWindow {
                     .child(missing)
                     .into_any_element(),
             })
-            .child(self.image_side_chip(label, false))
+            .child(self.image_side_chips(&[label]))
     }
 
-    /// A small corner chip naming an image side.
-    fn image_side_chip(&self, label: &'static str, right: bool) -> Div {
-        let base = div()
-            .absolute()
-            .top(px(8.0))
+    /// A small chip naming an image side.
+    fn image_side_chip(&self, label: &'static str) -> Div {
+        div()
             .px(px(6.0))
             .py(px(1.0))
             .rounded(px(4.0))
@@ -2843,12 +2934,24 @@ impl SourcefourWindow {
             .text_size(px(9.5))
             .font_weight(FontWeight::SEMIBOLD)
             .text_color(self.theme.text_faint)
-            .child(label);
-        if right {
-            base.right(px(8.0))
-        } else {
-            base.left(px(8.0))
-        }
+            .child(label)
+    }
+
+    /// The chip layer over an image view.
+    ///
+    /// Chips are placed by this row rather than by their own insets: an
+    /// absolute element inherits a zero inset on every side it does not set,
+    /// so a right-anchored chip would stretch the full width and draw its
+    /// text back on the left.
+    fn image_side_chips(&self, labels: &[&'static str]) -> Div {
+        div()
+            .absolute()
+            .top(px(8.0))
+            .left(px(8.0))
+            .right(px(8.0))
+            .flex()
+            .justify_between()
+            .children(labels.iter().map(|label| self.image_side_chip(label)))
     }
 
     /// The juxtapose view: after fills the area, before overlays it clipped to
@@ -2945,8 +3048,7 @@ impl SourcefourWindow {
                     .text_color(self.theme.text_secondary)
                     .child("↔"),
             )
-            .child(self.image_side_chip("Before", false))
-            .child(self.image_side_chip("After", true))
+            .child(self.image_side_chips(&["Before", "After"]))
     }
 
     /// An absolutely positioned layer holding one centered, contained image.
@@ -3473,6 +3575,12 @@ impl SourcefourWindow {
             this.details_focus.focus(window);
             cx.notify();
         }))
+        .on_action(cx.listener(|this, _: &OpenSettings, window, cx| {
+            this.open_settings(window, cx);
+        }))
+        .on_action(cx.listener(|this, _: &CloseSettings, window, cx| {
+            this.close_settings(window, cx);
+        }))
         .map(|root| Self::root_drag_handlers(root, cx))
     }
 
@@ -3563,6 +3671,7 @@ impl Render for SourcefourWindow {
             .child(self.status())
             .children(self.diff_overlay(cx))
             .children(self.branch_overlay(cx))
+            .children(self.settings_overlay(cx))
     }
 }
 

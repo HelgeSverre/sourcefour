@@ -64,13 +64,19 @@ impl UiState {
 
 /// `~/Library/Application Support/Sourcefour/state.json` on macOS.
 fn default_path() -> Option<PathBuf> {
+    support_file("state.json")
+}
+
+/// A file in the app's per-user support directory,
+/// `~/Library/Application Support/Sourcefour/` on macOS.
+pub(crate) fn support_file(name: &str) -> Option<PathBuf> {
     let home = std::env::var_os("HOME")?;
     Some(
         PathBuf::from(home)
             .join("Library")
             .join("Application Support")
             .join("Sourcefour")
-            .join("state.json"),
+            .join(name),
     )
 }
 

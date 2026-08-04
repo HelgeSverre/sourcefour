@@ -119,20 +119,22 @@ fn image_format(path: &[u8]) -> Option<String> {
 }
 
 /// The blob bytes at `path` within a tree, when the entry exists and is a blob.
+///
+/// Walks the path as raw components rather than going through `Path`: Git
+/// stores paths as bytes and separates them with `/` on every platform, and
+/// only Unix can borrow arbitrary bytes as an `OsStr`.
 fn blob_at(tree: Option<&gix::Tree<'_>>, path: &[u8]) -> Option<Vec<u8>> {
-    let entry = tree?.lookup_entry_by_path(bytes_path(path)).ok()??;
+    let components = path.split(|byte| *byte == b'/');
+    let entry = tree?.lookup_entry(components).ok()??;
     let object = entry.object().ok()?;
     (object.kind == gix::object::Kind::Blob).then(|| object.data.clone())
 }
 
-#[cfg(unix)]
-fn bytes_path(path: &[u8]) -> &std::path::Path {
-    use std::os::unix::ffi::OsStrExt;
-    std::path::Path::new(std::ffi::OsStr::from_bytes(path))
-}
-
 /// Formats a unified diff (3 context lines) and classifies each line.
-fn unified(old: &[u8], new: &[u8], limits: DiffLimits) -> DiffContent {
+///
+/// Public so callers holding two blobs — the `--demo` fixture, tests — get
+/// their lines from the same formatter a repository read goes through.
+pub fn unified(old: &[u8], new: &[u8], limits: DiffLimits) -> DiffContent {
     let old_text = String::from_utf8_lossy(old);
     let new_text = String::from_utf8_lossy(new);
     let input = InternedInput::new(old_text.as_ref(), new_text.as_ref());
