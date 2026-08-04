@@ -3230,6 +3230,18 @@ impl SourcefourWindow {
                 .id("diff-overlay")
                 .key_context("Diff")
                 .track_focus(&self.diff_focus)
+                // Nothing behind the overlay may react to the mouse; occlusion
+                // also stops the root's handlers, so scrub drags route here.
+                .occlude()
+                .on_mouse_move(cx.listener(|this, event: &gpui::MouseMoveEvent, _, cx| {
+                    this.scrub_move(event.position.x.0, event.position.y.0, cx);
+                }))
+                .on_mouse_up(
+                    gpui::MouseButton::Left,
+                    cx.listener(|this, _, _, cx| {
+                        this.end_scrub(cx);
+                    }),
+                )
                 .absolute()
                 .inset_0()
                 .flex()
@@ -3657,6 +3669,29 @@ impl SourcefourWindow {
             }))
     }
 
+    /// Routes a held drag to whichever diff-overlay control armed it.
+    fn scrub_move(&mut self, x: f32, y: f32, cx: &mut gpui::Context<Self>) {
+        match self.scrubbing {
+            Scrub::None => {}
+            Scrub::DiffBar => {
+                self.scrub_diff(y);
+                cx.notify();
+            }
+            Scrub::ImageSlider => {
+                self.scrub_image(x);
+                cx.notify();
+            }
+        }
+    }
+
+    /// Ends any drag a released mouse button was holding.
+    fn end_scrub(&mut self, cx: &mut gpui::Context<Self>) {
+        if self.scrubbing != Scrub::None {
+            self.scrubbing = Scrub::None;
+            cx.notify();
+        }
+    }
+
     /// Maps a window-space X onto the juxtapose slider fraction.
     fn scrub_image(&mut self, x: f32) {
         let bounds = self.juxtapose_bounds.get();
@@ -3748,6 +3783,7 @@ impl SourcefourWindow {
         Some(
             div()
                 .id("branch-overlay")
+                .occlude()
                 .absolute()
                 .inset_0()
                 .flex()
@@ -4190,17 +4226,7 @@ impl SourcefourWindow {
                     );
                     cx.notify();
                 } else {
-                    match this.scrubbing {
-                        Scrub::None => {}
-                        Scrub::DiffBar => {
-                            this.scrub_diff(event.position.y.0);
-                            cx.notify();
-                        }
-                        Scrub::ImageSlider => {
-                            this.scrub_image(event.position.x.0);
-                            cx.notify();
-                        }
-                    }
+                    this.scrub_move(event.position.x.0, event.position.y.0, cx);
                 }
             }),
         )
@@ -4211,10 +4237,7 @@ impl SourcefourWindow {
                     this.persist_ui_state(cx);
                     cx.notify();
                 }
-                if this.scrubbing != Scrub::None {
-                    this.scrubbing = Scrub::None;
-                    cx.notify();
-                }
+                this.end_scrub(cx);
             }),
         )
     }

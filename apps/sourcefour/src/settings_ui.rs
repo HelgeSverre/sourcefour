@@ -61,6 +61,8 @@ pub(crate) fn overlay(
         .id("settings-overlay")
         .key_context("Settings")
         .track_focus(focus)
+        // Nothing behind the overlay may react to the mouse (§4.6 modality).
+        .occlude()
         .absolute()
         .inset_0()
         .flex()
