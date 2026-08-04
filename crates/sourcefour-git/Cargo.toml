@@ -9,6 +9,7 @@ authors.workspace = true
 
 [dependencies]
 gix.workspace = true
+smallvec.workspace = true
 sourcefour-model = { path = "../sourcefour-model" }
 
 [dev-dependencies]

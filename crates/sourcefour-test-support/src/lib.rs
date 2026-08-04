@@ -87,6 +87,26 @@ impl TempRepo {
             .join(name)
     }
 
+    /// Clones `origin`, producing a repository with a real remote and upstream.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the temporary directory or `git clone` fails.
+    #[must_use]
+    pub fn clone_of(origin: &Self) -> Self {
+        let directory = temporary_directory();
+        let root = directory.path().join("clone");
+        run_git(
+            directory.path(),
+            &[
+                "clone",
+                &origin.root.to_string_lossy(),
+                &root.to_string_lossy(),
+            ],
+        );
+        Self::new(directory, &root)
+    }
+
     /// Creates a repository with a working tree but no commit yet.
     ///
     /// # Panics

@@ -5,12 +5,14 @@
 //! `sourcefour-model` values.
 
 mod discover;
+mod refs;
 mod worktrees;
 
 use std::sync::atomic::AtomicBool;
 
 pub use crate::{
     discover::{discover, display_name},
+    refs::{References, references},
     worktrees::worktrees,
 };
 
