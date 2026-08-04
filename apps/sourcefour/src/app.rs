@@ -214,9 +214,26 @@ struct SourcefourAssets {
 impl SourcefourAssets {
     fn new() -> Self {
         Self {
-            base: PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets"),
+            base: assets_base(
+                std::env::current_exe().ok().as_deref(),
+                Path::new(env!("CARGO_MANIFEST_DIR")),
+            ),
         }
     }
+}
+
+/// Where the SVG assets live: the app bundle's Resources when running as
+/// `Sourcefour.app`, the source tree when running from cargo.
+fn assets_base(executable: Option<&Path>, manifest_dir: &Path) -> PathBuf {
+    if let Some(executable) = executable
+        && let Some(contents) = executable.parent().and_then(Path::parent)
+    {
+        let bundled = contents.join("Resources").join("assets");
+        if bundled.is_dir() {
+            return bundled;
+        }
+    }
+    manifest_dir.join("assets")
 }
 
 impl AssetSource for SourcefourAssets {
@@ -325,6 +342,38 @@ mod tests {
         assert_eq!(launch_exit_code(true, false), ExitCode::SUCCESS);
         assert_eq!(launch_exit_code(true, true), ExitCode::from(2));
         assert_eq!(launch_exit_code(false, false), ExitCode::from(1));
+    }
+
+    #[test]
+    fn assets_resolve_from_the_bundle_first_then_the_source_tree()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let bundle = tempfile::TempDir::new()?;
+        let executable = bundle
+            .path()
+            .join("Contents")
+            .join("MacOS")
+            .join("sourcefour");
+        let resources = bundle
+            .path()
+            .join("Contents")
+            .join("Resources")
+            .join("assets");
+        let manifest = Path::new("/somewhere/apps/sourcefour");
+
+        assert_eq!(
+            super::assets_base(Some(&executable), manifest),
+            manifest.join("assets"),
+            "without bundled resources, the source tree wins"
+        );
+
+        std::fs::create_dir_all(&resources)?;
+        assert_eq!(
+            super::assets_base(Some(&executable), manifest),
+            resources,
+            "a real bundle serves its own resources"
+        );
+        assert_eq!(super::assets_base(None, manifest), manifest.join("assets"));
+        Ok(())
     }
 
     #[test]

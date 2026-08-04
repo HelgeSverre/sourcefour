@@ -138,10 +138,16 @@ fn convert(repository: &gix::Repository, change: Change) -> Option<ChangedFile> 
         }
         Change::Modification {
             location,
+            previous_entry_mode,
+            entry_mode,
             previous_id,
             id,
-            ..
         } => {
+            // A changed subtree surfaces as a Modification too; a directory
+            // has no diff and never belongs in the file list.
+            if entry_mode.is_tree() || previous_entry_mode.is_tree() {
+                return None;
+            }
             let (additions, deletions, is_binary) = modification_stats(repository, previous_id, id);
             ChangedFile {
                 old_path: Some(RepoPath(location.clone().into())),
@@ -157,19 +163,25 @@ fn convert(repository: &gix::Repository, change: Change) -> Option<ChangedFile> 
             location,
             diff,
             copy,
+            entry_mode,
             ..
-        } => ChangedFile {
-            old_path: Some(RepoPath(source_location.into())),
-            new_path: Some(RepoPath(location.into())),
-            status: if copy {
-                ChangeKind::Copied
-            } else {
-                ChangeKind::Renamed
-            },
-            additions: diff.map(|diff| diff.insertions),
-            deletions: diff.map(|diff| diff.removals),
-            is_binary: false,
-        },
+        } => {
+            if entry_mode.is_tree() {
+                return None;
+            }
+            ChangedFile {
+                old_path: Some(RepoPath(source_location.into())),
+                new_path: Some(RepoPath(location.into())),
+                status: if copy {
+                    ChangeKind::Copied
+                } else {
+                    ChangeKind::Renamed
+                },
+                additions: diff.map(|diff| diff.insertions),
+                deletions: diff.map(|diff| diff.removals),
+                is_binary: false,
+            }
+        }
     };
     Some(file)
 }
@@ -346,6 +358,37 @@ mod tests {
             (by_name("b.txt").additions, by_name("b.txt").deletions),
             (Some(0), Some(1)),
             "a deleted file counts its old lines"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn directories_never_appear_as_changed_files() -> Result<(), Box<dyn std::error::Error>> {
+        let repository = TempRepo::init();
+        std::fs::create_dir(repository.path().join("src"))?;
+        std::fs::write(repository.path().join("src").join("lib.rs"), "one\n")?;
+        repository.git(&["add", "."]);
+        repository.commit("add src");
+        std::fs::write(repository.path().join("src").join("lib.rs"), "two\n")?;
+        repository.git(&["add", "."]);
+        repository.commit("change inside src");
+
+        let files = commit_files(
+            &discover(repository.path())?,
+            head(&repository)?,
+            DiffParent::FirstParent,
+        )?;
+
+        let paths: Vec<String> = files
+            .files
+            .iter()
+            .filter_map(|file| file.new_path.as_ref())
+            .map(sourcefour_model::RepoPath::display_lossy)
+            .collect();
+        assert_eq!(
+            paths,
+            ["src/lib.rs"],
+            "the directory itself must not be listed as modified"
         );
         Ok(())
     }
