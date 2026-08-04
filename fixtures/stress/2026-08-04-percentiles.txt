@@ -1,0 +1,4 @@
+crescat                    21572 rows  n=10  snapshot p50    7ms p95   56ms  first batch p50   14ms p95   30ms  full walk p50    105ms p95    130ms
+nocodb                     36437 rows  n=10  snapshot p50    4ms p95   41ms  first batch p50    7ms p95   16ms  full walk p50    172ms p95    206ms
+wordpress.git              62969 rows  n=10  snapshot p50    5ms p95   41ms  first batch p50   11ms p95   12ms  full walk p50    690ms p95    778ms
+git.git                    85080 rows  n=10  snapshot p50    2ms p95    6ms  first batch p50    9ms p95   68ms  full walk p50   1240ms p95   1395ms

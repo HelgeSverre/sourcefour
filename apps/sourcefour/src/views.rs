@@ -59,6 +59,10 @@ pub(crate) struct SourcefourWindow {
     diff_request: u64,
     /// Focus target while the diff overlay is open, so Escape closes it.
     diff_focus: FocusHandle,
+    /// Scroll position of the diff overlay's line list.
+    diff_scroll: UniformListScrollHandle,
+    /// Whether the diff scrollbar is being dragged.
+    diff_scrubbing: bool,
     /// The last chosen diff layout, persisted across launches.
     preferred_diff_mode: DiffMode,
     /// Which parent the selection's files and diffs compare against (§6.10).
@@ -371,6 +375,9 @@ const FILES_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(50)
 /// §4.6: relative dates refresh once per minute, never per frame.
 const MINUTE_TICK: u16 = 60;
 
+/// Height of one rendered diff line in either layout.
+const DIFF_ROW_HEIGHT: f32 = 20.0;
+
 /// Whether a background result still belongs to the window that asked for it.
 ///
 /// A result from a superseded generation is dropped rather than applied; this
@@ -641,6 +648,8 @@ impl SourcefourWindow {
             diff_view: None,
             diff_request: 0,
             diff_focus: cx.focus_handle(),
+            diff_scroll: UniformListScrollHandle::new(),
+            diff_scrubbing: false,
             preferred_diff_mode: DiffMode::Unified,
             compare_parent: DiffParent::FirstParent,
             details_collapsed: false,
@@ -2323,6 +2332,7 @@ impl SourcefourWindow {
         });
         self.diff_request += 1;
         let token = self.diff_request;
+        self.diff_scroll = UniformListScrollHandle::new();
         self.diff_focus.focus(window);
         cx.spawn(async move |this, cx| {
             let diff = cx
@@ -2442,6 +2452,7 @@ impl SourcefourWindow {
                         .collect()
                 },
             )
+            .track_scroll(self.diff_scroll.clone())
             .size_full()
             .into_any_element(),
             Some(DiffContent::Text { .. }) => uniform_list(
@@ -2462,6 +2473,7 @@ impl SourcefourWindow {
                         .collect()
                 },
             )
+            .track_scroll(self.diff_scroll.clone())
             .size_full()
             .into_any_element(),
             Some(DiffContent::Binary { message } | DiffContent::Unavailable { message }) => {
@@ -2507,10 +2519,12 @@ impl SourcefourWindow {
                         .child(self.diff_header(view, line_count, cx))
                         .child(
                             div()
+                                .relative()
                                 .flex_1()
                                 .min_h(px(1.0))
                                 .bg(self.theme.bg_list)
-                                .child(body),
+                                .child(body)
+                                .children(self.diff_scrollbar(cx)),
                         ),
                 ),
         )
@@ -2876,6 +2890,85 @@ impl SourcefourWindow {
                     })
                     .child(if running { "Creating…" } else { "Create" }),
             )
+    }
+
+    /// Rows currently shown by the diff overlay's list, either layout.
+    fn diff_rows_len(&self) -> usize {
+        let Some(view) = &self.diff_view else {
+            return 0;
+        };
+        match (&view.content, view.mode) {
+            (Some(DiffContent::Text { .. }), DiffMode::Split) => {
+                view.split.as_ref().map_or(0, Vec::len)
+            }
+            (Some(DiffContent::Text { lines }), DiffMode::Unified) => lines.len(),
+            _ => 0,
+        }
+    }
+
+    /// A draggable scrollbar for scrubbing through large diffs.
+    fn diff_scrollbar(&self, cx: &mut gpui::Context<Self>) -> Option<gpui::Stateful<Div>> {
+        let rows = self.diff_rows_len();
+        let handle = self.diff_scroll.0.borrow();
+        let bounds = handle.base_handle.bounds();
+        let viewport = bounds.size.height.0;
+        let content = row_count_as_f32(rows) * DIFF_ROW_HEIGHT;
+        if viewport <= 0.0 || content <= viewport {
+            return None;
+        }
+        let offset = (-handle.base_handle.offset().y.0).clamp(0.0, content - viewport);
+        drop(handle);
+        let thumb = (viewport * viewport / content).clamp(30.0, viewport);
+        let top = offset / (content - viewport) * (viewport - thumb);
+        Some(
+            div()
+                .id("diff-scrollbar")
+                .absolute()
+                .top_0()
+                .right_0()
+                .h_full()
+                .w(px(12.0))
+                .cursor_pointer()
+                .on_mouse_down(
+                    gpui::MouseButton::Left,
+                    cx.listener(|this, event: &gpui::MouseDownEvent, _, cx| {
+                        this.diff_scrubbing = true;
+                        this.scrub_diff(event.position.y.0);
+                        cx.notify();
+                    }),
+                )
+                .child(
+                    div()
+                        .absolute()
+                        .top(px(top))
+                        .right(px(2.0))
+                        .w(px(8.0))
+                        .h(px(thumb))
+                        .rounded_full()
+                        .bg(if self.diff_scrubbing {
+                            self.theme.accent
+                        } else {
+                            self.theme.border_strong
+                        }),
+                ),
+        )
+    }
+
+    /// Maps a window-space Y onto the diff list's scroll offset.
+    fn scrub_diff(&mut self, y: f32) {
+        let rows = self.diff_rows_len();
+        let handle = self.diff_scroll.0.borrow();
+        let bounds = handle.base_handle.bounds();
+        let viewport = bounds.size.height.0;
+        let content = row_count_as_f32(rows) * DIFF_ROW_HEIGHT;
+        if viewport <= 0.0 || content <= viewport {
+            return;
+        }
+        let fraction = ((y - bounds.origin.y.0) / viewport).clamp(0.0, 1.0);
+        let offset = fraction * (content - viewport);
+        handle
+            .base_handle
+            .set_offset(gpui::point(px(0.0), px(-offset)));
     }
 
     /// A centered message replacing diff lines when there are none to show.

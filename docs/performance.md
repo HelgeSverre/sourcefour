@@ -43,9 +43,27 @@ Create one entry per machine, fixture, revision, and cache condition.
 | Profiling trace path or link | none |
 | Notes, deviations, and failures | Headless harness, not the windowed app: covers discovery, metadata snapshot, history cursor, and §7.3 layout, not rendering. Real repositories replace the not-yet-built 50k reference fixture. git.git and linux.git exceed the §7.6 lane cap; overflow-lane degradations are counted in the raw file and confined to the parked lane. Cross-row graph continuity validated on every row: zero violations in 1,730,184 rows. |
 
+## Run record — 2026-08-04 percentiles
+
+Same machine, toolchain, and warm-cache conditions as the single-sample record
+below; 10 iterations per repository via
+`cargo run --release -p sourcefour-git --example stress -- --iterations 10 <repos>`.
+Raw output: `fixtures/stress/2026-08-04-percentiles.txt`.
+
+| Repository | Commits | Snapshot p50/p95 | First 256 rows p50/p95 | Full walk p50/p95 | Budget check |
+| --- | --- | --- | --- | --- | --- |
+| crescat | 21,572 | 7 / 56 ms | 14 / 30 ms | 105 / 130 ms | within budgets |
+| nocodb | 36,437 | 4 / 41 ms | 7 / 16 ms | 172 / 206 ms | within budgets |
+| wordpress | 62,969 | 5 / 41 ms | 11 / 12 ms | 690 / 778 ms | within budgets |
+| git | 85,080 | 2 / 6 ms | 9 / 68 ms | 1,240 / 1,395 ms | within budgets |
+
+Budgets: discovery + metadata p95 < 80 ms ✓; first 256 rows p95 < 150 ms ✓.
+Rendering-side metrics (startup, frame budget) remain unmeasured.
+
 ## Result table
 
-Single-sample values from the run record above; p95 requires repeated runs and stays unmeasured.
+Single-sample values from the first run record; superseded for the repositories
+measured above.
 
 | Run record | Metric | Cache condition | p50 | p95 | Budget | Raw result link/path |
 | --- | --- | --- | --- | --- | --- | --- |

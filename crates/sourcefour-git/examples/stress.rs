@@ -18,14 +18,31 @@ use sourcefour_model::{
 };
 
 fn main() {
-    let paths: Vec<String> = std::env::args().skip(1).collect();
+    let mut iterations = 1_usize;
+    let mut paths: Vec<String> = Vec::new();
+    let mut arguments = std::env::args().skip(1);
+    while let Some(argument) = arguments.next() {
+        if argument == "--iterations" {
+            iterations = arguments
+                .next()
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(1);
+        } else {
+            paths.push(argument);
+        }
+    }
     if paths.is_empty() {
-        eprintln!("usage: stress <repository>...");
+        eprintln!("usage: stress [--iterations N] <repository>...");
         std::process::exit(2);
     }
     let mut failures = 0_u32;
     for path in &paths {
-        if let Err(error) = run(Path::new(path)) {
+        let result = if iterations > 1 {
+            run_percentiles(Path::new(path), iterations)
+        } else {
+            run(Path::new(path))
+        };
+        if let Err(error) = result {
             eprintln!("{path}: {error}");
             failures += 1;
         }
@@ -33,6 +50,70 @@ fn main() {
     if failures > 0 {
         std::process::exit(1);
     }
+}
+
+/// Repeats the full pipeline, reporting p50/p95 of the timings that matter.
+fn run_percentiles(path: &Path, iterations: usize) -> Result<(), Box<dyn std::error::Error>> {
+    let mut snapshot_ms = Vec::with_capacity(iterations);
+    let mut first_batch_ms = Vec::with_capacity(iterations);
+    let mut walk_ms = Vec::with_capacity(iterations);
+    let mut rows = 0_usize;
+    for _ in 0..iterations {
+        let location = discover(path)?;
+        let started = Instant::now();
+        let snap = snapshot(&location)?;
+        snapshot_ms.push(started.elapsed().as_millis());
+
+        let mut cursor = GixHistoryCursor::start(
+            &location,
+            HistoryQuery {
+                scope: HistoryScope::AllRefs,
+            },
+            snap.labels_by_object.clone(),
+        )?;
+        let walk_started = Instant::now();
+        let mut first = true;
+        loop {
+            let requested = cursor.next_batch_size();
+            let batch_started = Instant::now();
+            let batch = cursor.next_batch(requested)?;
+            if first {
+                first_batch_ms.push(batch_started.elapsed().as_millis());
+                first = false;
+            }
+            rows += batch.rows.len();
+            if !batch.has_more {
+                break;
+            }
+        }
+        walk_ms.push(walk_started.elapsed().as_millis());
+    }
+    rows /= iterations.max(1);
+    let name = path.file_name().map_or_else(
+        || path.display().to_string(),
+        |name| name.to_string_lossy().into_owned(),
+    );
+    println!(
+        "{name:24} {rows:>7} rows  n={iterations}  snapshot p50 {:>4}ms p95 {:>4}ms  \
+         first batch p50 {:>4}ms p95 {:>4}ms  full walk p50 {:>6}ms p95 {:>6}ms",
+        percentile(&mut snapshot_ms, 50),
+        percentile(&mut snapshot_ms, 95),
+        percentile(&mut first_batch_ms, 50),
+        percentile(&mut first_batch_ms, 95),
+        percentile(&mut walk_ms, 50),
+        percentile(&mut walk_ms, 95),
+    );
+    Ok(())
+}
+
+/// Nearest-rank percentile over the collected samples.
+fn percentile(samples: &mut [u128], rank: usize) -> u128 {
+    samples.sort_unstable();
+    if samples.is_empty() {
+        return 0;
+    }
+    let index = (samples.len() * rank).div_ceil(100).max(1) - 1;
+    samples[index.min(samples.len() - 1)]
 }
 
 fn run(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
