@@ -276,6 +276,23 @@ section {
   transform: translate(-14%, -6%);
 }
 
+/* Above the stacking breakpoint, wide frames run past the container to the
+   viewport edge, so each screenshot fills its half of the viewport. The
+   outer corners lose their radius because they touch the edge. */
+@media (min-width: 901px) {
+  body {
+    overflow-x: clip; /* 100vw includes the scrollbar */
+  }
+  .row .frame:not(.tall) {
+    border-radius: var(--r-lg) 0 0 var(--r-lg);
+    margin-right: calc((min(100vw, 1120px) - 100vw) / 2 - 24px);
+  }
+  .row.flip .frame:not(.tall) {
+    border-radius: 0 var(--r-lg) var(--r-lg) 0;
+    margin-right: 0;
+    margin-left: calc((min(100vw, 1120px) - 100vw) / 2 - 24px);
+  }
+}
 
 .row {
   display: grid;
