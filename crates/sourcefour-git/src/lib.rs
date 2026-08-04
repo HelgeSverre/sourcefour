@@ -5,6 +5,7 @@
 //! `sourcefour-model` values.
 
 mod ahead_behind;
+mod branch;
 mod detail;
 mod diff;
 mod discover;
@@ -20,6 +21,7 @@ use std::sync::atomic::AtomicBool;
 
 pub use crate::{
     ahead_behind::{AheadBehindCache, apply as apply_ahead_behind},
+    branch::{create_branch, is_valid_branch_name},
     detail::commit_detail,
     diff::{DiffLimits, file_diff, file_diff_with_limits},
     discover::{discover, display_name},

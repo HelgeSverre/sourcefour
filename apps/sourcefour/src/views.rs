@@ -69,8 +69,12 @@ pub(crate) struct SourcefourWindow {
     fetching: Option<Arc<Mutex<Option<OperationProgress>>>>,
     /// Cooperative cancellation flag of the running fetch.
     fetch_cancel: Option<Arc<AtomicBool>>,
-    /// The last fetch outcome: success flag and message.
+    /// The last operation outcome: success flag and message.
     fetch_status: Option<(bool, String)>,
+    /// The §6.13 create-branch dialog, when open.
+    branch_dialog: Option<BranchDialog>,
+    /// Name field of the create-branch dialog.
+    branch_input: gpui::Entity<crate::text_input::TextInput>,
     /// Focus target of the details pane (§4.6: Enter focuses it).
     details_focus: FocusHandle,
     list_scroll: UniformListScrollHandle,
@@ -160,6 +164,13 @@ impl Render for SectionDragPreview {
             .text_color(self.theme.text_primary)
             .child(self.title)
     }
+}
+
+/// The §6.13 create-branch dialog's state; the name lives in its input.
+struct BranchDialog {
+    checkout: bool,
+    running: bool,
+    error: Option<String>,
 }
 
 /// Forwards the newest fetch progress into shared state; latest wins.
@@ -637,6 +648,9 @@ impl SourcefourWindow {
             fetching: None,
             fetch_cancel: None,
             fetch_status: None,
+            branch_dialog: None,
+            branch_input: cx
+                .new(|cx| crate::text_input::TextInput::new("new-branch-name", &Theme::dark(), cx)),
             list_scroll: UniformListScrollHandle::new(),
             focus: cx.focus_handle(),
             filter_input: cx
@@ -1103,7 +1117,31 @@ impl SourcefourWindow {
             .child(action("Pull", "icons/arrow-down-to-line.svg", true))
             .child(action("Push", "icons/arrow-up-from-line.svg", true))
             .child(action("Commit", "icons/git-commit-horizontal.svg", true))
-            .child(action("Branch", "icons/git-branch.svg", false))
+            .child(
+                div()
+                    .id("branch-action")
+                    .h_full()
+                    .flex()
+                    .flex_col()
+                    .justify_center()
+                    .items_center()
+                    .gap(px(3.0))
+                    .w(px(58.0))
+                    .text_size(px(10.0))
+                    .text_color(self.theme.text_secondary)
+                    .cursor_pointer()
+                    .hover(|style| style.bg(self.theme.bg_hover))
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.open_branch_dialog(window, cx);
+                    }))
+                    .child(
+                        svg()
+                            .path("icons/git-branch.svg")
+                            .size(px(15.0))
+                            .text_color(self.theme.accent),
+                    )
+                    .child("Branch"),
+            )
             .child(action("Merge", "icons/git-merge.svg", true))
             .child(action("Stash", "icons/archive.svg", true))
             .child(div().flex_grow())
@@ -1532,6 +1570,91 @@ impl SourcefourWindow {
                     .top_0()
                     .left(px(self.panels.graph - SPLITTER_WIDTH)),
             )
+    }
+
+    /// Opens the §6.13 create-branch dialog seeded from the selection.
+    fn open_branch_dialog(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) {
+        self.branch_dialog = Some(BranchDialog {
+            checkout: false,
+            running: false,
+            error: None,
+        });
+        self.branch_input
+            .update(cx, |input, cx| input.set_text("", cx));
+        self.branch_input
+            .read(cx)
+            .focus_handle
+            .clone()
+            .focus(window);
+        cx.notify();
+    }
+
+    /// The commit a new branch starts from: the selection, or HEAD.
+    fn branch_start(&self) -> Option<sourcefour_model::Oid> {
+        self.history.selected.or_else(|| {
+            self.snapshot().and_then(|snapshot| match &snapshot.head {
+                HeadSnapshot::Branch { oid, .. } | HeadSnapshot::Detached { oid } => Some(*oid),
+                HeadSnapshot::Unborn { .. } | HeadSnapshot::Missing => None,
+            })
+        })
+    }
+
+    /// Runs the §6.13 creation; Git failures reopen as dialog errors.
+    fn submit_branch_dialog(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) {
+        let name = self.branch_input.read(cx).content.to_string();
+        let (Some(start), Some(location)) = (self.branch_start(), self.location.clone()) else {
+            return;
+        };
+        let Some(dialog) = &mut self.branch_dialog else {
+            return;
+        };
+        if dialog.running || !sourcefour_git::is_valid_branch_name(&name) {
+            return;
+        }
+        let checkout = dialog.checkout;
+        dialog.running = true;
+        dialog.error = None;
+        let request = sourcefour_model::CreateBranchRequest {
+            worktree: self
+                .snapshot()
+                .and_then(|snapshot| snapshot.active_worktree.clone())
+                .unwrap_or_else(|| sourcefour_model::WorktreeId(String::from("active"))),
+            name,
+            start,
+            checkout,
+        };
+        self.focus.focus(window);
+        cx.spawn(async move |this, cx| {
+            let outcome = cx
+                .background_executor()
+                .spawn(async move { sourcefour_git::create_branch(&location, &request) })
+                .await;
+            this.update(cx, |this, cx| {
+                match outcome {
+                    Ok(OperationOutcome::Succeeded { summary, .. }) => {
+                        this.branch_dialog = None;
+                        this.fetch_status = Some((true, summary));
+                        this.generation = Generation(this.generation.0 + 1);
+                        if let Some(location) = this.location.clone() {
+                            this.load_metadata(location, cx);
+                        }
+                    }
+                    Ok(OperationOutcome::Failed { error, .. }) | Err(error) => {
+                        if let Some(dialog) = &mut this.branch_dialog {
+                            dialog.running = false;
+                            dialog.error = Some(error.user.message);
+                        }
+                    }
+                    Ok(OperationOutcome::Cancelled { .. }) => {
+                        this.branch_dialog = None;
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+        cx.notify();
     }
 
     /// Starts a fetch of every remote through the user's own Git (§6.12).
@@ -2578,6 +2701,183 @@ impl SourcefourWindow {
             )
     }
 
+    /// The §6.13 create-branch dialog: name, start point, checkout box.
+    fn branch_overlay(&self, cx: &mut gpui::Context<Self>) -> Option<impl IntoElement + use<>> {
+        let dialog = self.branch_dialog.as_ref()?;
+        let name = self.branch_input.read(cx).content.to_string();
+        let creatable = !dialog.running && sourcefour_git::is_valid_branch_name(&name);
+        let invalid = !name.is_empty() && !sourcefour_git::is_valid_branch_name(&name);
+        let start = self
+            .branch_start()
+            .map_or_else(|| String::from("HEAD"), |oid| oid.abbreviated(9));
+        Some(
+            div()
+                .id("branch-overlay")
+                .absolute()
+                .inset_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .bg(gpui::black().opacity(0.55))
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.branch_dialog = None;
+                    this.focus.focus(window);
+                    cx.notify();
+                }))
+                .child(
+                    div()
+                        .id("branch-panel")
+                        .w(px(400.0))
+                        .flex()
+                        .flex_col()
+                        .gap(px(10.0))
+                        .p(px(16.0))
+                        .rounded(px(10.0))
+                        .border_1()
+                        .border_color(self.theme.border_strong)
+                        .bg(self.theme.bg_panel)
+                        .shadow_lg()
+                        .on_click(|_, _, cx| cx.stop_propagation())
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(8.0))
+                                .text_size(px(13.0))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(self.theme.text_primary)
+                                .child("Create branch")
+                                .child(
+                                    div()
+                                        .font_family(MONO_FONT)
+                                        .font_weight(FontWeight::NORMAL)
+                                        .text_size(px(10.5))
+                                        .text_color(self.theme.text_faint)
+                                        .child(format!("from {start}")),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .h(px(30.0))
+                                .flex()
+                                .items_center()
+                                .px(px(10.0))
+                                .rounded(px(6.0))
+                                .border_1()
+                                .border_color(if invalid {
+                                    self.theme.red
+                                } else {
+                                    self.theme.accent
+                                })
+                                .bg(self.theme.bg_list)
+                                .text_size(px(12.0))
+                                .text_color(self.theme.text_primary)
+                                .child(self.branch_input.clone()),
+                        )
+                        .child(self.branch_checkout_row(dialog.checkout, cx))
+                        .children(dialog.error.clone().map(|error| {
+                            div()
+                                .text_size(px(11.0))
+                                .text_color(self.theme.red)
+                                .child(error)
+                        }))
+                        .child(self.branch_dialog_buttons(creatable, dialog.running, cx)),
+                ),
+        )
+    }
+
+    /// The dialog's checkout toggle row.
+    fn branch_checkout_row(
+        &self,
+        checked: bool,
+        cx: &mut gpui::Context<Self>,
+    ) -> gpui::Stateful<Div> {
+        div()
+            .id("branch-checkout")
+            .flex()
+            .items_center()
+            .gap(px(7.0))
+            .cursor_pointer()
+            .text_size(px(11.5))
+            .text_color(self.theme.text_secondary)
+            .on_click(cx.listener(|this, _, _, cx| {
+                if let Some(dialog) = &mut this.branch_dialog {
+                    dialog.checkout = !dialog.checkout;
+                }
+                cx.notify();
+            }))
+            .child(
+                div()
+                    .size(px(13.0))
+                    .rounded(px(3.0))
+                    .border_1()
+                    .border_color(self.theme.border_strong)
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .when(checked, |this| {
+                        this.bg(self.theme.accent)
+                            .text_color(gpui::white())
+                            .text_size(px(9.0))
+                            .child("✓")
+                    }),
+            )
+            .child("Check out after creating")
+    }
+
+    /// The dialog's Cancel and Create buttons.
+    fn branch_dialog_buttons(
+        &self,
+        creatable: bool,
+        running: bool,
+        cx: &mut gpui::Context<Self>,
+    ) -> Div {
+        div()
+            .flex()
+            .justify_end()
+            .gap(px(8.0))
+            .child(
+                div()
+                    .id("branch-cancel")
+                    .px(px(12.0))
+                    .py(px(5.0))
+                    .rounded(px(6.0))
+                    .border_1()
+                    .border_color(self.theme.border_strong)
+                    .cursor_pointer()
+                    .text_size(px(11.5))
+                    .text_color(self.theme.text_secondary)
+                    .hover(|style| style.bg(self.theme.bg_hover))
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.branch_dialog = None;
+                        this.focus.focus(window);
+                        cx.notify();
+                    }))
+                    .child("Cancel"),
+            )
+            .child(
+                div()
+                    .id("branch-create")
+                    .px(px(12.0))
+                    .py(px(5.0))
+                    .rounded(px(6.0))
+                    .text_size(px(11.5))
+                    .when(creatable, |this| {
+                        this.cursor_pointer()
+                            .bg(self.theme.accent)
+                            .text_color(gpui::white())
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.submit_branch_dialog(window, cx);
+                            }))
+                    })
+                    .when(!creatable, |this| {
+                        this.bg(self.theme.bg_hover)
+                            .text_color(self.theme.text_faint)
+                    })
+                    .child(if running { "Creating…" } else { "Create" }),
+            )
+    }
+
     /// A centered message replacing diff lines when there are none to show.
     fn diff_notice(&self, message: impl Into<gpui::SharedString>) -> Div {
         div()
@@ -2714,8 +3014,11 @@ impl SourcefourWindow {
             cx.notify();
         }))
         .on_action(cx.listener(|this, _: &FilterEscape, window, cx| {
-            // First Escape clears the query; a second returns to history.
-            if this.history.filter.is_empty() {
+            if this.branch_dialog.is_some() {
+                this.branch_dialog = None;
+                this.focus.focus(window);
+            } else if this.history.filter.is_empty() {
+                // First Escape clears the query; a second returns to history.
                 this.focus.focus(window);
             } else {
                 this.filter_input
@@ -2724,7 +3027,11 @@ impl SourcefourWindow {
             cx.notify();
         }))
         .on_action(cx.listener(|this, _: &FilterEnter, window, cx| {
-            this.focus.focus(window);
+            if this.branch_dialog.is_some() {
+                this.submit_branch_dialog(window, cx);
+            } else {
+                this.focus.focus(window);
+            }
             cx.notify();
         }))
         .on_action(cx.listener(|this, _: &CloseDiff, window, cx| {
@@ -2813,6 +3120,7 @@ impl Render for SourcefourWindow {
             )
             .child(self.status())
             .children(self.diff_overlay(cx))
+            .children(self.branch_overlay(cx))
     }
 }
 
