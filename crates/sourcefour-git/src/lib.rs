@@ -5,6 +5,7 @@
 //! `sourcefour-model` values.
 
 mod ahead_behind;
+mod detail;
 mod discover;
 mod files;
 mod history;
@@ -17,6 +18,7 @@ use std::sync::atomic::AtomicBool;
 
 pub use crate::{
     ahead_behind::{AheadBehindCache, apply as apply_ahead_behind},
+    detail::commit_detail,
     discover::{discover, display_name},
     files::commit_files,
     history::{FIRST_BATCH_ROWS, GixHistoryCursor, NEXT_BATCH_ROWS},

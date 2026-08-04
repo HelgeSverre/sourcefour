@@ -41,9 +41,11 @@ pub(crate) struct SourcefourWindow {
     panels: PanelSizes,
     /// The splitter a mouse drag is currently moving.
     dragging: Option<Splitter>,
+    /// Full metadata for the selected commit, when loaded (§6.10).
+    detail: Option<sourcefour_model::CommitDetail>,
     /// Changed files for the selected commit, when loaded (§6.10).
     files: Option<CommitFiles>,
-    /// The commit the current `files` load belongs to, requested or done.
+    /// The commit the current detail/files load belongs to, requested or done.
     files_for: Option<sourcefour_model::Oid>,
     list_scroll: UniformListScrollHandle,
     focus: FocusHandle,
@@ -76,6 +78,17 @@ struct SidebarSections {
     worktrees: bool,
     branches: bool,
     remotes: bool,
+}
+
+/// Assembled text for the details header (§6.10).
+struct DetailLines {
+    hash: String,
+    subject: String,
+    author: String,
+    date: Option<String>,
+    committer: Option<String>,
+    parents: Option<String>,
+    body: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -398,6 +411,7 @@ impl SourcefourWindow {
             sections: SidebarSections::default(),
             panels: PanelSizes::default(),
             dragging: None,
+            detail: None,
             files: None,
             files_for: None,
             list_scroll: UniformListScrollHandle::new(),
@@ -410,6 +424,7 @@ impl SourcefourWindow {
             window.history.reset(HistoryScope::AllRefs);
             let (rows, layout) = demo::history();
             window.history.extend(rows, layout, false);
+            window.detail = Some(demo::detail());
             window.files = Some(demo::files());
             window.files_for = window.history.selected;
         } else if let Some(location) = launch.location {
@@ -555,6 +570,7 @@ impl SourcefourWindow {
         // Dropping the previous cursor ends its worker thread.
         self.cursor = None;
         self.history.reset(scope.clone());
+        self.detail = None;
         self.files = None;
         self.files_for = None;
         match GixHistoryCursor::start(&location, HistoryQuery { scope }, labels) {
@@ -661,6 +677,7 @@ impl SourcefourWindow {
     /// result is dropped when the selection or generation moved on.
     fn load_selected_files(&mut self, cx: &mut gpui::Context<Self>) {
         let Some(oid) = self.history.selected else {
+            self.detail = None;
             self.files = None;
             self.files_for = None;
             return;
@@ -669,6 +686,7 @@ impl SourcefourWindow {
             return;
         }
         self.files_for = Some(oid);
+        self.detail = None;
         self.files = None;
         let Some(location) = self.location.clone() else {
             return;
@@ -684,13 +702,22 @@ impl SourcefourWindow {
             if !wanted {
                 return;
             }
-            let files = cx
+            let (detail, files) = cx
                 .background_executor()
-                .spawn(async move { sourcefour_git::commit_files(&location, oid) })
+                .spawn(async move {
+                    (
+                        sourcefour_git::commit_detail(&location, oid),
+                        sourcefour_git::commit_files(&location, oid),
+                    )
+                })
                 .await;
             this.update(cx, |this, cx| {
                 if this.generation != generation || this.files_for != Some(oid) {
                     return;
+                }
+                match detail {
+                    Ok(detail) => this.detail = Some(detail),
+                    Err(failure) => tracing::error!(%failure, "commit detail could not load"),
                 }
                 match files {
                     Ok(files) => this.files = Some(files),
@@ -740,6 +767,20 @@ impl SourcefourWindow {
     /// The loaded snapshot, if metadata has arrived.
     fn snapshot(&self) -> Option<&RepoSnapshot> {
         self.repo.value()
+    }
+
+    /// Seconds since the epoch, anchored in demo mode so relative dates in
+    /// §12.4 captures never drift between runs.
+    fn now_seconds(&self) -> i64 {
+        if self.demo {
+            demo::NOW_SECONDS
+        } else {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |elapsed| {
+                    i64::try_from(elapsed.as_secs()).unwrap_or(i64::MAX)
+                })
+        }
     }
 
     fn titlebar(&self) -> impl IntoElement {
@@ -1207,16 +1248,7 @@ impl SourcefourWindow {
                     String::from("No commits yet")
                 });
         }
-        // Demo captures anchor "now" so relative dates never drift between runs.
-        let now = if self.demo {
-            demo::NOW_SECONDS
-        } else {
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_or(0, |elapsed| {
-                    i64::try_from(elapsed.as_secs()).unwrap_or(i64::MAX)
-                })
-        };
+        let now = self.now_seconds();
         div().size_full().bg(self.theme.bg_list).child(
             uniform_list(
                 cx.entity(),
@@ -1377,29 +1409,72 @@ impl SourcefourWindow {
             .child(label.name.clone())
     }
 
-    fn details(&self) -> impl IntoElement {
-        // §6.10: the header is populated from the already-loaded row while
-        // the exact metadata, files, and diff arrive in M4.
-        let selected = self
+    /// The details header text, from the exact metadata when it has arrived
+    /// and from the already-loaded row until then (§6.10).
+    fn detail_lines(&self) -> DetailLines {
+        let now = self.now_seconds();
+        let row = self
             .history
             .selected_index()
             .and_then(|index| self.history.rows.get(index));
-        let (hash, subject, author) = selected.map_or_else(
-            || {
-                (
-                    String::new(),
-                    String::from("No commit selected"),
-                    String::new(),
-                )
-            },
-            |row| {
-                (
-                    row.oid.abbreviated(9),
-                    row.summary.clone(),
-                    row.author_name.clone(),
-                )
-            },
-        );
+        let detail = self.detail.as_ref();
+        DetailLines {
+            hash: row.map_or_else(String::new, |row| row.oid.abbreviated(9)),
+            subject: detail.map_or_else(
+                || {
+                    row.map_or_else(
+                        || String::from("No commit selected"),
+                        |row| row.summary.clone(),
+                    )
+                },
+                |detail| detail.subject.clone(),
+            ),
+            author: detail.map_or_else(
+                || row.map_or_else(String::new, |row| row.author_name.clone()),
+                |detail| format!("{} <{}>", detail.author.name, detail.author.email),
+            ),
+            date: detail
+                .map(|detail| detail.author.time)
+                .or_else(|| row.map(|row| row.commit_time))
+                .map(|time| relative_date(now, time)),
+            committer: detail
+                .filter(|detail| {
+                    detail.committer.name != detail.author.name
+                        || detail.committer.email != detail.author.email
+                })
+                .map(|detail| {
+                    format!(
+                        "committed by {} {}",
+                        detail.committer.name,
+                        relative_date(now, detail.committer.time)
+                    )
+                }),
+            parents: detail
+                .filter(|detail| !detail.parents.is_empty())
+                .map(|detail| {
+                    let hashes: Vec<String> = detail
+                        .parents
+                        .iter()
+                        .map(|parent| parent.abbreviated(7))
+                        .collect();
+                    format!("Parents  {}", hashes.join("  "))
+                }),
+            body: detail
+                .map(|detail| detail.body.clone())
+                .filter(|body| !body.is_empty()),
+        }
+    }
+
+    fn details(&self) -> impl IntoElement {
+        let DetailLines {
+            hash,
+            subject,
+            author,
+            date,
+            committer,
+            parents,
+            body,
+        } = self.detail_lines();
         div()
             .h(px(self.panels.details))
             .flex_none()
@@ -1411,9 +1486,18 @@ impl SourcefourWindow {
             .bg(self.theme.bg_panel)
             .child(
                 div()
+                    .flex()
+                    .items_center()
+                    .gap(px(10.0))
                     .text_size(px(12.0))
                     .text_color(self.theme.accent)
-                    .child(hash),
+                    .child(hash)
+                    .children(parents.map(|parents| {
+                        div()
+                            .text_size(px(10.5))
+                            .text_color(self.theme.text_faint)
+                            .child(parents)
+                    })),
             )
             .child(
                 div()
@@ -1424,30 +1508,52 @@ impl SourcefourWindow {
             )
             .child(
                 div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.0))
                     .text_size(px(11.5))
                     .text_color(self.theme.text_secondary)
-                    .child(author),
+                    .child(author)
+                    .children(date.map(|date| {
+                        div().text_color(self.theme.text_faint).child(date)
+                    }))
+                    .children(committer.map(|committer| {
+                        div().text_color(self.theme.text_faint).child(committer)
+                    })),
             )
             .child(
                 div()
-                    .mt(px(8.0))
-                    .pt(px(8.0))
-                    .border_t_1()
-                    .border_color(self.theme.border)
-                    .text_size(px(10.0))
-                    .font_weight(FontWeight::BOLD)
-                    .text_color(self.theme.text_faint)
-                    .child(self.files.as_ref().map_or_else(
-                        || String::from("CHANGED FILES"),
-                        |files| format!("CHANGED FILES · {}", counted(files.files.len(), "file")),
-                    )),
-            )
-            .child(
-                div()
-                    .id("changed-files")
+                    .id("details-scroll")
                     .flex_grow()
                     .min_h(px(0.0))
                     .overflow_y_scroll()
+                    .children(body.map(|body| {
+                        div()
+                            .pt(px(4.0))
+                            .pb(px(4.0))
+                            .text_size(px(11.5))
+                            .text_color(self.theme.text_secondary)
+                            .child(body)
+                    }))
+                    .child(
+                        div()
+                            .mt(px(8.0))
+                            .pt(px(8.0))
+                            .border_t_1()
+                            .border_color(self.theme.border)
+                            .text_size(px(10.0))
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(self.theme.text_faint)
+                            .child(self.files.as_ref().map_or_else(
+                                || String::from("CHANGED FILES"),
+                                |files| {
+                                    format!(
+                                        "CHANGED FILES · {}",
+                                        counted(files.files.len(), "file")
+                                    )
+                                },
+                            )),
+                    )
                     .children(
                         self.files
                             .iter()

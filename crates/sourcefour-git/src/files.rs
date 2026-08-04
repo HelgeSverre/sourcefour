@@ -138,7 +138,7 @@ fn sort_path(file: &ChangedFile) -> Vec<u8> {
         .unwrap_or_default()
 }
 
-fn missing(oid: Oid, error: &impl std::fmt::Display) -> RepoFailure {
+pub(crate) fn missing(oid: Oid, error: &impl std::fmt::Display) -> RepoFailure {
     RepoFailure::new(
         RepoFailureKind::MissingObject,
         "Commit could not be read",

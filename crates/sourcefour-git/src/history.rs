@@ -303,7 +303,7 @@ fn decode(
     })
 }
 
-fn convert_oid(id: &gix::hash::oid) -> Option<Oid> {
+pub(crate) fn convert_oid(id: &gix::hash::oid) -> Option<Oid> {
     match id.as_bytes().len() {
         20 => Some(Oid::sha1(id.as_bytes().try_into().ok()?)),
         32 => Some(Oid::sha256(id.as_bytes().try_into().ok()?)),

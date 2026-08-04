@@ -9,7 +9,8 @@ use std::{collections::BTreeMap, path::PathBuf, time::Instant};
 use smallvec::SmallVec;
 use sourcefour_graph::GraphState;
 use sourcefour_model::{
-    AheadBehindState, BranchSnapshot, ChangeKind, ChangedFile, CommitFiles, CommitFlags, CommitRow,
+    AheadBehindState, BranchSnapshot, ChangeKind, ChangedFile, CommitDetail, CommitFiles,
+    CommitFlags, CommitRow, Signature,
     DiffParent, GitTime, GraphRow, HeadSnapshot, Oid, RefKind, RefLabel, RemoteBranchSnapshot,
     RemoteSnapshot, RepoKind, RepoLocation, RepoPath, RepoSnapshot, UpstreamSnapshot,
     WorktreeAccessibility, WorktreeId, WorktreeSnapshot,
@@ -235,6 +236,28 @@ pub(crate) fn history() -> (Vec<CommitRow>, Vec<GraphRow>) {
         .map(|row| state.push(row.oid, &row.parents))
         .collect();
     (rows, layout)
+}
+
+/// Full metadata for the fixture's initially selected commit (§12.4).
+pub(crate) fn detail() -> CommitDetail {
+    let signature = Signature {
+        name: AUTHOR.to_owned(),
+        email: String::from("helge@sourcefour.dev"),
+        time: GitTime {
+            seconds_since_epoch: NOW_SECONDS - 2 * 3600,
+            offset_minutes: 0,
+        },
+    };
+    CommitDetail {
+        oid: oid("9f3e21a"),
+        subject: String::from("Merge branch 'feature/worktrees' into main"),
+        body: String::from(
+            "Brings linked-worktree enumeration into the git layer and the\nworktree section of the sidebar.",
+        ),
+        author: signature.clone(),
+        committer: signature,
+        parents: SmallVec::from_iter([oid("7c1d9b4"), oid("4b8e0f2")]),
+    }
 }
 
 /// Changed files for the fixture's initially selected commit (§12.4).
