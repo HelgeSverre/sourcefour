@@ -8,6 +8,7 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
+smallvec.workspace = true
 sourcefour-model = { path = "../sourcefour-model" }
 
 [lints]

@@ -4,9 +4,11 @@
 //! implementation will evolve `GraphState` while preserving its persistent
 //! lane-state contract.
 
+mod layout;
+
 use std::collections::HashMap;
 
-use sourcefour_model::{GRAPH_COLOR_COUNT, Oid};
+use sourcefour_model::{GRAPH_COLOR_COUNT, GRAPH_MAX_LANES, Oid};
 
 pub use sourcefour_model::{GraphFlags, GraphRow, GraphSegment};
 
@@ -64,6 +66,77 @@ impl GraphState {
     #[must_use]
     pub fn lanes(&self) -> &[Option<Lane>] {
         &self.lanes
+    }
+
+    /// Lane at `index`, if it is occupied.
+    #[must_use]
+    pub fn lane(&self, index: usize) -> Option<Lane> {
+        self.lanes.get(index).copied().flatten()
+    }
+
+    /// Every lane index awaiting `oid`, in ascending order.
+    ///
+    /// More than one lane can await the same commit when branches converge.
+    #[must_use]
+    pub fn lanes_expecting(&self, oid: Oid) -> Vec<usize> {
+        self.lanes
+            .iter()
+            .enumerate()
+            .filter(|(_, lane)| lane.is_some_and(|lane| lane.expected == oid))
+            .map(|(index, _)| index)
+            .collect()
+    }
+
+    /// Occupied lanes paired with their index, in ascending order.
+    #[must_use]
+    pub fn occupied_lanes(&self) -> Vec<(usize, Lane)> {
+        self.lanes
+            .iter()
+            .enumerate()
+            .filter_map(|(index, lane)| lane.map(|lane| (index, lane)))
+            .collect()
+    }
+
+    /// Reserves the lowest free lane, appending one only when none is free.
+    ///
+    /// Reusing the lowest free lane is what keeps the graph narrow; §7.3 forbids
+    /// renumbering live lanes, so only free slots are ever claimed.
+    pub fn claim_free_lane(&mut self) -> usize {
+        if let Some(index) = self.lanes.iter().position(Option::is_none) {
+            return index;
+        }
+        // ponytail: hard ceiling from §7.6; malformed input overloads the last
+        // lane rather than allocating unbounded geometry.
+        if self.lanes.len() >= usize::from(GRAPH_MAX_LANES) {
+            return usize::from(GRAPH_MAX_LANES) - 1;
+        }
+        self.lanes.push(None);
+        self.lanes.len() - 1
+    }
+
+    /// Places a line's expectation into a lane.
+    pub fn occupy(&mut self, index: usize, lane: Lane) {
+        if index >= self.lanes.len() {
+            self.lanes.resize(index + 1, None);
+        }
+        self.lanes[index] = Some(lane);
+    }
+
+    /// Empties a lane without disturbing the lanes around it.
+    pub fn free_lane(&mut self, index: usize) {
+        if let Some(slot) = self.lanes.get_mut(index) {
+            *slot = None;
+        }
+    }
+
+    /// Drops trailing empty lanes so the graph narrows again after a merge.
+    ///
+    /// Only trailing lanes are removed: compacting interior lanes would renumber
+    /// live lines and move rows that were already drawn (§7.3).
+    pub fn compact_trailing_lanes(&mut self) {
+        while self.lanes.last().is_some_and(Option::is_none) {
+            self.lanes.pop();
+        }
     }
 
     /// Replaces lane occupancy after a completed semantic layout step.

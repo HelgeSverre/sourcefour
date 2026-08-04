@@ -5351,6 +5351,7 @@ dependencies = [
 name = "sourcefour-graph"
 version = "0.1.0"
 dependencies = [
+ "smallvec",
  "sourcefour-model",
 ]
 
