@@ -18,6 +18,13 @@ use super::{SourcefourWindow, github::check_glyph, row_count_as_f32};
 /// Row height of one virtualized log line.
 const LOG_ROW_HEIGHT: f32 = 16.0;
 
+/// Jobs warmed by a press before the click that opens the overlay: the
+/// mouse-down starts the fetch, the mouse-up finds it in flight or done.
+pub(super) struct ActionsPrefetch {
+    pub(super) run_id: u64,
+    pub(super) jobs: Option<Result<Vec<WorkflowJob>, String>>,
+}
+
 /// One open run: its identity plus lazily arriving jobs and log.
 pub(super) struct ActionsView {
     pub(super) run: WorkflowRun,
@@ -98,6 +105,12 @@ fn default_step(job: &WorkflowJob) -> Option<usize> {
 /// Wall seconds between two boundaries when both are known.
 fn duration_of(started: Option<i64>, completed: Option<i64>) -> Option<i64> {
     Some((completed? - started?).max(0))
+}
+
+/// Like [`duration_of`], but something still running measures to `now`, so
+/// live views show elapsed time instead of `—`.
+fn elapsed_of(started: Option<i64>, completed: Option<i64>, now: i64) -> Option<i64> {
+    duration_of(started, completed.or(Some(now)))
 }
 
 /// Durations the way the mockup writes them: `3s`, `1m 58s`, `—` unknown.
@@ -297,6 +310,7 @@ impl SourcefourWindow {
     ) {
         self.actions_focus.focus(window);
         self.actions_log_scroll = UniformListScrollHandle::new();
+        let run_id = run.id;
         self.actions_view = Some(ActionsView {
             run,
             jobs: None,
@@ -305,8 +319,65 @@ impl SourcefourWindow {
             log: None,
             full_log: false,
         });
-        self.load_actions_jobs(cx);
+        match self.actions_prefetch.take_if(|warm| warm.run_id == run_id) {
+            // The press already finished the fetch: seed instantly.
+            Some(ActionsPrefetch {
+                jobs: Some(outcome),
+                ..
+            }) => self.apply_actions_jobs(run_id, outcome, cx),
+            // The press's fetch is in flight; its completion lands in the
+            // view through the same apply path.
+            Some(ActionsPrefetch { jobs: None, .. }) => {}
+            None => self.fetch_actions_jobs(run_id, cx),
+        }
         self.poll_actions(cx);
+    }
+
+    /// Starts warming a run's jobs on mouse-down, ahead of the click.
+    pub(super) fn prefetch_actions_jobs(&mut self, run_id: u64, cx: &mut gpui::Context<Self>) {
+        if self.github_remote.is_none()
+            || self
+                .actions_prefetch
+                .as_ref()
+                .is_some_and(|warm| warm.run_id == run_id)
+            || self
+                .actions_view
+                .as_ref()
+                .is_some_and(|view| view.run.id == run_id)
+        {
+            return;
+        }
+        self.actions_prefetch = Some(ActionsPrefetch { run_id, jobs: None });
+        self.fetch_actions_jobs(run_id, cx);
+    }
+
+    /// Lands one jobs outcome in the open view — or the prefetch stash when
+    /// the click has not arrived yet.
+    fn apply_actions_jobs(
+        &mut self,
+        run_id: u64,
+        outcome: Result<Vec<WorkflowJob>, String>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if let Some(view) = &mut self.actions_view
+            && view.run.id == run_id
+        {
+            let first_arrival = view.jobs.is_none();
+            // A poll refresh keeps the user's selection; a failed refresh
+            // keeps the last good jobs.
+            if first_arrival || outcome.is_ok() {
+                view.jobs = Some(outcome);
+            }
+            if first_arrival {
+                view.selected_job = default_job(view.jobs_ok());
+                self.load_actions_log(cx);
+            }
+            cx.notify();
+        } else if let Some(warm) = &mut self.actions_prefetch
+            && warm.run_id == run_id
+        {
+            warm.jobs = Some(outcome);
+        }
     }
 
     /// Closes the overlay, returning focus to the history.
@@ -368,16 +439,12 @@ impl SourcefourWindow {
         cx.notify();
     }
 
-    /// Reads the run's jobs; on the first arrival the failing job is
-    /// selected and its log fetched.
-    fn load_actions_jobs(&mut self, cx: &mut gpui::Context<Self>) {
+    /// Reads one run's jobs; the outcome lands wherever the run lives now
+    /// (the open view or the prefetch stash).
+    fn fetch_actions_jobs(&mut self, run_id: u64, cx: &mut gpui::Context<Self>) {
         let Some(remote) = self.github_remote.clone() else {
             return;
         };
-        let Some(view) = &self.actions_view else {
-            return;
-        };
-        let run_id = view.run.id;
         self.fetch_github(
             |this| &mut this.actions_request,
             move |token| {
@@ -389,23 +456,7 @@ impl SourcefourWindow {
                 )
             },
             move |this, outcome, cx| {
-                let Some(view) = &mut this.actions_view else {
-                    return;
-                };
-                if view.run.id != run_id {
-                    return;
-                }
-                let first_arrival = view.jobs.is_none();
-                // A poll refresh keeps the user's selection; a failed
-                // refresh keeps the last good jobs.
-                if first_arrival || outcome.is_ok() {
-                    view.jobs = Some(outcome);
-                }
-                if first_arrival {
-                    view.selected_job = default_job(view.jobs_ok());
-                    this.load_actions_log(cx);
-                }
-                cx.notify();
+                this.apply_actions_jobs(run_id, outcome, cx);
             },
             cx,
         );
@@ -452,7 +503,9 @@ impl SourcefourWindow {
 
     /// Re-reads jobs and log past every cache, the ↻ affordance.
     pub(super) fn refresh_actions(&mut self, cx: &mut gpui::Context<Self>) {
-        self.load_actions_jobs(cx);
+        if let Some(view) = &self.actions_view {
+            self.fetch_actions_jobs(view.run.id, cx);
+        }
         self.load_actions_log(cx);
     }
 
@@ -482,7 +535,9 @@ impl SourcefourWindow {
                         if done && view.jobs.is_some() {
                             return false;
                         }
-                        this.load_actions_jobs(cx);
+                        if let Some(view) = &this.actions_view {
+                            this.fetch_actions_jobs(view.run.id, cx);
+                        }
                         true
                     })
                     .unwrap_or(false);
@@ -581,7 +636,11 @@ impl SourcefourWindow {
     /// Title row and chip row, per the mockup's header.
     fn actions_header(&self, view: &ActionsView, cx: &mut gpui::Context<Self>) -> Div {
         let (glyph, color) = check_glyph(&self.theme, view.run.status);
-        let wall = duration_of(view.run.started_at, view.run.completed_at);
+        let wall = elapsed_of(
+            view.run.started_at,
+            view.run.completed_at,
+            self.now_seconds(),
+        );
         let url = view.run.html_url.clone();
         div()
             .flex_none()
@@ -831,7 +890,11 @@ impl SourcefourWindow {
                             .flex_none()
                             .text_size(px(10.0))
                             .text_color(self.theme.text_faint)
-                            .child(fmt_duration(duration_of(job.started_at, job.completed_at))),
+                            .child(fmt_duration(elapsed_of(
+                                job.started_at,
+                                job.completed_at,
+                                self.now_seconds(),
+                            ))),
                     )
             }))
     }
@@ -896,7 +959,11 @@ impl SourcefourWindow {
                         .flex_none()
                         .text_size(px(11.5))
                         .text_color(self.theme.text_secondary)
-                        .child(fmt_duration(duration_of(job.started_at, job.completed_at))),
+                        .child(fmt_duration(elapsed_of(
+                            job.started_at,
+                            job.completed_at,
+                            self.now_seconds(),
+                        ))),
                 ),
         )
         .child(
@@ -1022,15 +1089,26 @@ impl SourcefourWindow {
                     .child("Fetching log…")
                     .into_any_element(),
             ],
-            Some(Err(message)) => vec![
-                div()
-                    .px(px(42.0))
-                    .py(px(6.0))
-                    .text_size(px(10.5))
-                    .text_color(self.theme.text_faint)
-                    .child(message.clone())
-                    .into_any_element(),
-            ],
+            Some(Err(message)) => {
+                // GitHub withholds job logs until the job finishes.
+                let running = view
+                    .selected()
+                    .is_some_and(|job| !matches!(job.status, CheckStatus::Completed(_)));
+                let text = if running {
+                    String::from("The log appears once this job finishes.")
+                } else {
+                    message.clone()
+                };
+                vec![
+                    div()
+                        .px(px(42.0))
+                        .py(px(6.0))
+                        .text_size(px(10.5))
+                        .text_color(self.theme.text_faint)
+                        .child(text)
+                        .into_any_element(),
+                ]
+            }
             Some(Ok(lines)) => {
                 let Some((start, end, total)) = self.actions_log_window() else {
                     return Vec::new();
@@ -1170,10 +1248,13 @@ impl SourcefourWindow {
             .run
             .started_at
             .or_else(|| jobs.iter().filter_map(|job| job.started_at).min());
+        let now = self.now_seconds();
         let run_end = view
             .run
             .completed_at
-            .or_else(|| jobs.iter().filter_map(|job| job.completed_at).max());
+            .or_else(|| jobs.iter().filter_map(|job| job.completed_at).max())
+            // A live run measures to now, so bars grow as it works.
+            .or(Some(now));
         let wall = duration_of(run_start, run_end).unwrap_or(0).max(1);
         div()
             .flex_none()
@@ -1196,7 +1277,7 @@ impl SourcefourWindow {
             )
             .children(jobs.iter().map(|job| {
                 let offset = duration_of(run_start, job.started_at).unwrap_or(0);
-                let length = duration_of(job.started_at, job.completed_at).unwrap_or(0);
+                let length = elapsed_of(job.started_at, job.completed_at, now).unwrap_or(0);
                 #[expect(clippy::cast_precision_loss, reason = "display fractions")]
                 let (left, width) = (
                     (offset as f32 / wall as f32).clamp(0.0, 0.98),

@@ -85,6 +85,7 @@ impl SourcefourWindow {
     ) -> gpui::Stateful<Div> {
         let (glyph, color) = check_glyph(&self.theme, run.status);
         let clicked = run.clone();
+        let run_id = run.id;
         let subtitle = format!(
             "{} #{} · {} · {}",
             run.name,
@@ -110,6 +111,14 @@ impl SourcefourWindow {
             .px(px(15.0))
             .cursor_pointer()
             .hover(|style| style.bg(self.theme.bg_hover))
+            // The press warms the jobs fetch; the click that follows opens
+            // the overlay onto data already in flight.
+            .on_mouse_down(
+                gpui::MouseButton::Left,
+                cx.listener(move |this, _, _, cx| {
+                    this.prefetch_actions_jobs(run_id, cx);
+                }),
+            )
             .on_click(cx.listener(move |this, _, window, cx| {
                 cx.stop_propagation();
                 this.open_actions_run(clicked.clone(), window, cx);

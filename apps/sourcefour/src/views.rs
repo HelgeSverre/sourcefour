@@ -118,6 +118,8 @@ pub(crate) struct SourcefourWindow {
     >,
     /// Token for the newest rollup load, so stale results drop.
     github_states_request: u64,
+    /// Jobs warmed by a press before its click opens the overlay.
+    actions_prefetch: Option<actions::ActionsPrefetch>,
     /// The Actions run overlay, while open (§ mockup/actions.html).
     actions_view: Option<actions::ActionsView>,
     /// Token for the newest jobs read of the overlay.
@@ -355,6 +357,7 @@ impl SourcefourWindow {
             github_checks_request: 0,
             github_states: None,
             github_states_request: 0,
+            actions_prefetch: None,
             actions_view: None,
             actions_request: 0,
             actions_log_request: 0,
