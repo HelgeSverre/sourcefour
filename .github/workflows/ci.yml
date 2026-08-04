@@ -40,8 +40,10 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Lint
         run: cargo clippy --workspace --all-targets -- -D warnings
+      # Without this the run stops at whichever test fails first, which on a
+      # platform that has never been green hides every other failure behind it.
       - name: Tests
-        run: cargo nextest run --workspace --all-targets --locked
+        run: cargo nextest run --workspace --all-targets --locked --no-fail-fast
       - name: Locked debug build
         run: cargo build --workspace --locked
       - name: Locked release build
