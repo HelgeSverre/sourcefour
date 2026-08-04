@@ -7,6 +7,7 @@
 }
 
 body {
+  overflow-x: clip; /* full-bleed elements measure 100vw incl. scrollbar */
   background: var(--page);
   color: var(--ink-2);
   font-family: var(--font-ui);
@@ -311,17 +312,67 @@ section {
 .frame.zoom.focus-left img {
   transform: translate(-4%, -6%);
 }
-.frame.zoom.focus-mid img {
-  transform: translate(-14%, -6%);
+/* ── duo: unified vs split, half and half ────────────────────── */
+
+.row.duo-row {
+  display: block;
+}
+.duo-copy {
+  max-width: 62ch;
+  margin-inline: auto;
+  text-align: center;
+}
+.duo {
+  width: 100vw;
+  margin-left: calc(50% - 50vw);
+  margin-top: 44px;
+  display: flex;
+  border-block: 1px solid var(--border-strong);
+}
+.duo-half {
+  position: relative;
+  width: 50%;
+  height: min(560px, 42vw);
+  overflow: hidden;
+}
+.duo-half + .duo-half {
+  border-left: 1px solid var(--border-strong);
+}
+.duo-half img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: 50% 42%;
+  transition: filter 0.35s var(--ease);
+}
+/* Hover one layout and the other steps back. */
+.duo:has(.duo-half:first-child:hover) .duo-half:last-child img,
+.duo:has(.duo-half:last-child:hover) .duo-half:first-child img {
+  filter: blur(3px) brightness(0.75);
+}
+.duo-label {
+  position: absolute;
+  left: 50%;
+  bottom: 18px;
+  transform: translateX(-50%);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--ink-2);
+  background: rgba(11, 12, 15, 0.8);
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  padding: 4px 12px;
+  transition: color 0.2s var(--ease), border-color 0.2s var(--ease);
+}
+.duo-half:hover .duo-label {
+  color: var(--ink);
+  border-color: var(--accent);
 }
 
 /* Above the stacking breakpoint, wide frames run past the container to the
    viewport edge, so each screenshot fills its half of the viewport. The
    outer corners lose their radius because they touch the edge. */
 @media (min-width: 901px) {
-  body {
-    overflow-x: clip; /* 100vw includes the scrollbar */
-  }
   .row .frame:not(.tall) {
     border-radius: var(--r-lg) 0 0 var(--r-lg);
     margin-right: calc((min(100vw, 1120px) - 100vw) / 2 - 24px);
@@ -695,6 +746,17 @@ footer {
   }
   .bento .shot-cell img {
     max-height: 520px;
+  }
+  .duo {
+    flex-direction: column;
+  }
+  .duo-half {
+    width: 100%;
+    height: 300px;
+  }
+  .duo-half + .duo-half {
+    border-left: 0;
+    border-top: 1px solid var(--border-strong);
   }
   .release {
     gap: 16px;
