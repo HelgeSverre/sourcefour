@@ -85,10 +85,12 @@ struct ColumnVisibility {
 }
 
 impl ColumnVisibility {
-    fn for_window_width(width: f32) -> Self {
+    /// Columns hide by the width left for the history pane, not the window:
+    /// a widened sidebar must squeeze columns exactly like a narrow window.
+    fn for_available_width(width: f32) -> Self {
         Self {
-            author: width >= 1000.0,
-            hash: width >= 940.0,
+            author: width >= 764.0,
+            hash: width >= 704.0,
         }
     }
 }
@@ -1274,20 +1276,39 @@ impl SourcefourWindow {
                     // and push the fixed columns out of the header's alignment.
                     .flex_1()
                     .min_w(px(1.0))
-                    // Without clipping, a long subject runs straight through the
-                    // author column instead of stopping at it.
                     .overflow_hidden()
-                    .text_ellipsis()
-                    .whitespace_nowrap()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.0))
                     .pl(px(10.0))
                     .pr(px(10.0))
-                    .text_size(px(12.5))
-                    .text_color(if row.flags.is_merge {
-                        self.theme.text_secondary
-                    } else {
-                        self.theme.text_primary
-                    })
-                    .child(row.summary.clone()),
+                    // Ref labels for this commit, capped so a tag pile-up
+                    // cannot push the subject out of the row (§6.6).
+                    .children(row.labels.iter().take(3).map(|label| self.label_chip(label)))
+                    .children((row.labels.len() > 3).then(|| {
+                        div()
+                            .flex_none()
+                            .text_size(px(9.5))
+                            .text_color(self.theme.text_faint)
+                            .child(format!("+{}", row.labels.len() - 3))
+                    }))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(1.0))
+                            // Without clipping, a long subject runs straight
+                            // through the author column instead of stopping.
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .whitespace_nowrap()
+                            .text_size(px(12.5))
+                            .text_color(if row.flags.is_merge {
+                                self.theme.text_secondary
+                            } else {
+                                self.theme.text_primary
+                            })
+                            .child(row.summary.clone()),
+                    ),
             )
             .when(columns.author, |this| {
                 this.child(
@@ -1329,6 +1350,31 @@ impl SourcefourWindow {
                 this.load_selected_files(cx);
                 cx.notify();
             }))
+    }
+
+    /// One ref label chip: HEAD, branch, remote branch, or tag (§6.6).
+    fn label_chip(&self, label: &sourcefour_model::RefLabel) -> Div {
+        let color = if label.is_head {
+            self.theme.accent
+        } else {
+            match label.kind {
+                sourcefour_model::RefKind::Head => self.theme.accent,
+                sourcefour_model::RefKind::LocalBranch => self.theme.green,
+                sourcefour_model::RefKind::RemoteBranch => self.theme.orange,
+                sourcefour_model::RefKind::Tag => self.theme.purple,
+                sourcefour_model::RefKind::Other => self.theme.text_faint,
+            }
+        };
+        div()
+            .flex_none()
+            .px(px(5.0))
+            .rounded(px(4.0))
+            .border_1()
+            .border_color(color.opacity(0.4))
+            .bg(color.opacity(0.1))
+            .text_size(px(9.5))
+            .text_color(color)
+            .child(label.name.clone())
     }
 
     fn details(&self) -> impl IntoElement {
@@ -1487,7 +1533,9 @@ impl SourcefourWindow {
 
 impl Render for SourcefourWindow {
     fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
-        let columns = ColumnVisibility::for_window_width(window.viewport_size().width.0);
+        let columns = ColumnVisibility::for_available_width(
+            window.viewport_size().width.0 - self.panels.sidebar,
+        );
         div()
             .key_context("History")
             .track_focus(&self.focus)
@@ -1758,21 +1806,21 @@ mod tests {
     #[test]
     fn column_visibility_hides_author_before_hash() {
         assert_eq!(
-            ColumnVisibility::for_window_width(1280.0),
+            ColumnVisibility::for_available_width(1044.0),
             ColumnVisibility {
                 author: true,
                 hash: true
             }
         );
         assert_eq!(
-            ColumnVisibility::for_window_width(980.0),
+            ColumnVisibility::for_available_width(744.0),
             ColumnVisibility {
                 author: false,
                 hash: true
             }
         );
         assert_eq!(
-            ColumnVisibility::for_window_width(920.0),
+            ColumnVisibility::for_available_width(684.0),
             ColumnVisibility {
                 author: false,
                 hash: false

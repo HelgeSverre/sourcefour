@@ -210,6 +210,25 @@ pub(crate) fn history() -> (Vec<CommitRow>, Vec<GraphRow>) {
             }
         })
         .collect();
+    let mut rows = rows;
+    // Ref chips matching the snapshot's branch tips, so §12.4 captures cover
+    // every label kind: local, remote, and tag, plus the >3 overflow on row 2.
+    let chip = |name: &str, kind: RefKind| RefLabel {
+        name: name.to_owned(),
+        kind,
+        is_head: false,
+        is_current: false,
+    };
+    rows[1].labels.push(chip("origin/main", RefKind::RemoteBranch));
+    rows[2].labels.push(chip("feature/worktrees", RefKind::LocalBranch));
+    rows[2]
+        .labels
+        .push(chip("origin/feature/worktrees", RefKind::RemoteBranch));
+    rows[8].labels.push(chip("release/v1", RefKind::LocalBranch));
+    rows[9].labels.push(chip("prototype", RefKind::LocalBranch));
+    rows[10].labels.push(chip("v0.1.0", RefKind::Tag));
+    rows[11].labels.push(chip("feature/history", RefKind::LocalBranch));
+
     let mut state = GraphState::default();
     let layout = rows
         .iter()
