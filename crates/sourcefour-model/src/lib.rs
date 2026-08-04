@@ -648,6 +648,15 @@ pub enum DiffContent {
     Text { lines: Vec<DiffLine> },
     /// The compared path contains binary content.
     Binary { message: String },
+    /// The compared path is an image: encoded bytes for each present side.
+    Image {
+        /// Old-side encoded bytes; absent when the file was added.
+        before: Option<Vec<u8>>,
+        /// New-side encoded bytes; absent when the file was deleted.
+        after: Option<Vec<u8>>,
+        /// Lowercased extension that identified the format ("png", "jpg", …).
+        format: String,
+    },
     /// The formatted result exceeded configured safety limits.
     TooLarge {
         /// Formatted output byte count observed before stopping.

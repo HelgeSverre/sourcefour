@@ -112,6 +112,33 @@ commit "docs: drop the changelog experiment"
 printf 'PNG\x00\x01\x02\x03\x04binary-not-text\x00\xff' > logo.bin
 commit "assets: add a binary logo"
 
+# Two real PNGs so the image before/after diff has something to slide.
+python3 - <<'PYEOF'
+from PIL import Image, ImageDraw
+
+def art(base, accent, tag):
+    image = Image.new("RGB", (420, 260), base)
+    draw = ImageDraw.Draw(image)
+    draw.rectangle((30, 30, 390, 230), outline=accent, width=6)
+    draw.ellipse((150, 60, 270, 180), fill=accent)
+    draw.text((40, 200), tag, fill=accent)
+    return image
+
+art((24, 28, 38), (91, 157, 255), "before").save("icon.png")
+PYEOF
+commit "assets: add an icon"
+python3 - <<'PYEOF'
+from PIL import Image, ImageDraw
+
+image = Image.new("RGB", (420, 260), (38, 24, 30))
+draw = ImageDraw.Draw(image)
+draw.rectangle((30, 30, 390, 230), outline=(126, 201, 111), width=6)
+draw.polygon([(210, 50), (300, 190), (120, 190)], fill=(126, 201, 111))
+draw.text((40, 200), "after", fill=(126, 201, 111))
+image.save("icon.png")
+PYEOF
+commit "assets: rework the icon"
+
 seq 1 25000 | sed 's/^/line /' > generated.txt
 commit "chore: vendor a generated file"
 sed -i '' 's/^line 2$/line two/' generated.txt

@@ -79,14 +79,22 @@ pub fn file_diff_with_limits(
             ),
         },
         (old, new) => {
-            let old = old.unwrap_or_default();
-            let new = new.unwrap_or_default();
-            if is_binary(&old) || is_binary(&new) {
-                DiffContent::Binary {
-                    message: format!("{} is binary.", request.path.display_lossy()),
+            if let Some(format) = image_format(&request.path.0) {
+                DiffContent::Image {
+                    before: old,
+                    after: new,
+                    format,
                 }
             } else {
-                unified(&old, &new, limits)
+                let old = old.unwrap_or_default();
+                let new = new.unwrap_or_default();
+                if is_binary(&old) || is_binary(&new) {
+                    DiffContent::Binary {
+                        message: format!("{} is binary.", request.path.display_lossy()),
+                    }
+                } else {
+                    unified(&old, &new, limits)
+                }
             }
         }
     };
@@ -95,6 +103,19 @@ pub fn file_diff_with_limits(
         request: request.clone(),
         content,
     })
+}
+
+/// The lowercased image extension of `path` when the viewer can render it
+/// (the formats gpui's image element decodes), normalized to one spelling.
+fn image_format(path: &[u8]) -> Option<String> {
+    let dot = path.iter().rposition(|&byte| byte == b'.')?;
+    let extension = std::str::from_utf8(&path[dot + 1..]).ok()?.to_lowercase();
+    match extension.as_str() {
+        "png" | "gif" | "webp" | "bmp" => Some(extension),
+        "jpg" | "jpeg" => Some(String::from("jpeg")),
+        "tif" | "tiff" => Some(String::from("tiff")),
+        _ => None,
+    }
 }
 
 /// The blob bytes at `path` within a tree, when the entry exists and is a blob.
@@ -291,6 +312,62 @@ mod tests {
         )?;
 
         assert!(matches!(diff.content, DiffContent::Binary { .. }));
+        Ok(())
+    }
+
+    #[test]
+    fn a_modified_image_carries_both_sides_bytes() -> Result<(), Box<dyn std::error::Error>> {
+        let repository = TempRepo::init();
+        std::fs::write(repository.path().join("logo.png"), b"\x89PNG-old")?;
+        repository.git(&["add", "."]);
+        repository.commit("add logo");
+        std::fs::write(repository.path().join("logo.png"), b"\x89PNG-new")?;
+        repository.git(&["add", "."]);
+        repository.commit("update logo");
+
+        let diff = file_diff(
+            &discover(repository.path())?,
+            &request(head(&repository)?, "logo.png"),
+        )?;
+
+        let DiffContent::Image {
+            before,
+            after,
+            format,
+        } = diff.content
+        else {
+            panic!("a .png comparison is an image, not a binary notice");
+        };
+        assert_eq!(before.as_deref(), Some(b"\x89PNG-old".as_slice()));
+        assert_eq!(after.as_deref(), Some(b"\x89PNG-new".as_slice()));
+        assert_eq!(format, "png");
+        Ok(())
+    }
+
+    #[test]
+    fn an_added_image_has_no_before_side() -> Result<(), Box<dyn std::error::Error>> {
+        let repository = TempRepo::init();
+        repository.commit("empty");
+        std::fs::write(repository.path().join("photo.JPEG"), b"\xFF\xD8fake")?;
+        repository.git(&["add", "."]);
+        repository.commit("add photo");
+
+        let diff = file_diff(
+            &discover(repository.path())?,
+            &request(head(&repository)?, "photo.JPEG"),
+        )?;
+
+        let DiffContent::Image {
+            before,
+            after,
+            format,
+        } = diff.content
+        else {
+            panic!("extension matching is case-insensitive");
+        };
+        assert_eq!(before, None);
+        assert_eq!(after.as_deref(), Some(b"\xFF\xD8fake".as_slice()));
+        assert_eq!(format, "jpeg");
         Ok(())
     }
 

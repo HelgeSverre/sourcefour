@@ -22,7 +22,7 @@ jobs:
       - uses: taiki-e/install-action@nextest
       - name: Install Linux native build prerequisites
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libclang-dev libfontconfig1-dev libxkbcommon-dev libwayland-dev libvulkan1 pkg-config
+        run: sudo apt-get update && sudo apt-get install -y libclang-dev libfontconfig1-dev libxcb1-dev libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libvulkan1 pkg-config
       - name: Verify lockfile
         run: cargo metadata --locked --format-version 1 --no-deps
       - name: Format
