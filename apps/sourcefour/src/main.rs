@@ -20,7 +20,7 @@ pub(crate) struct LaunchRequest {
 fn main() -> ExitCode {
     initialize_tracing();
     match parse_args(env::args_os().skip(1)) {
-        Ok(request) => run(request),
+        Ok(request) => run(&request),
         Err(ArgumentError::HelpRequested) => {
             println!("usage: sourcefour [PATH] [--demo]");
             ExitCode::SUCCESS

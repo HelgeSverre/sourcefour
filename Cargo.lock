@@ -5330,7 +5330,9 @@ name = "sourcefour"
 version = "0.1.0"
 dependencies = [
  "gpui",
+ "sourcefour-git",
  "sourcefour-model",
+ "sourcefour-test-support",
  "tracing",
  "tracing-subscriber",
 ]

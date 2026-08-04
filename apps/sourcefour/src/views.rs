@@ -1,12 +1,10 @@
-use std::path::{Path, PathBuf};
-
 use gpui::{
     Div, FontWeight, IntoElement, Render, ScrollHandle, StatefulInteractiveElement, Window, div,
     point, prelude::*, px, svg,
 };
+use sourcefour_model::RepoFailure;
 
 use crate::{
-    app::display_path,
     demo::COMMITS,
     theme::{
         DETAILS_HEIGHT, GRAPH_WIDTH, HEADER_HEIGHT, HISTORY_ROW_HEIGHT, SIDEBAR_WIDTH,
@@ -15,7 +13,10 @@ use crate::{
 };
 
 pub(crate) struct SourcefourWindow {
-    path: PathBuf,
+    /// Repository name, stable across the repository's worktrees.
+    name: String,
+    /// Display-friendly active worktree path.
+    path: String,
     demo: bool,
     theme: Theme,
     sections: SidebarSections,
@@ -78,24 +79,6 @@ fn scrollbar_metrics(
         thumb_top,
         maximum_offset,
     })
-}
-
-fn repository_name(path: &Path) -> String {
-    let requested_name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .filter(|name| !name.is_empty())
-        .filter(|name| *name != ".");
-    requested_name
-        .map(str::to_owned)
-        .or_else(|| {
-            std::env::current_dir().ok().and_then(|path| {
-                path.file_name()
-                    .and_then(|name| name.to_str())
-                    .map(str::to_owned)
-            })
-        })
-        .unwrap_or_else(|| "repository".to_owned())
 }
 
 impl Default for SidebarSections {
@@ -248,8 +231,9 @@ fn lane_marker(theme: &Theme, lane: usize, merge: bool) -> Div {
 }
 
 impl SourcefourWindow {
-    pub(crate) fn new(path: PathBuf, demo: bool) -> Self {
+    pub(crate) fn new(demo: bool, name: String, path: String) -> Self {
         Self {
+            name,
             path,
             demo,
             theme: Theme::dark(),
@@ -259,16 +243,8 @@ impl SourcefourWindow {
     }
 
     fn titlebar(&self) -> impl IntoElement {
-        let repository = if self.demo {
-            "sourcefour".to_owned()
-        } else {
-            repository_name(&self.path)
-        };
-        let path = if self.demo {
-            "~/code/sourcefour".to_owned()
-        } else {
-            display_path(&self.path)
-        };
+        let repository = &self.name;
+        let path = &self.path;
         div()
             .h(px(TITLEBAR_HEIGHT))
             .flex_none()
@@ -580,10 +556,7 @@ impl SourcefourWindow {
                 .bg(self.theme.bg_list)
                 .text_size(px(12.0))
                 .text_color(self.theme.text_faint)
-                .child(format!(
-                    "Loading history from {}...",
-                    display_path(&self.path)
-                ));
+                .child(format!("Loading history from {}...", self.path));
         }
         let rows = &COMMITS[..];
         div()
@@ -723,10 +696,7 @@ impl SourcefourWindow {
                 .bg(self.theme.bg_panel)
                 .text_size(px(12.0))
                 .text_color(self.theme.text_faint)
-                .child(format!(
-                    "Loading repository metadata for {}...",
-                    display_path(&self.path)
-                ));
+                .child(format!("Loading repository metadata for {}...", self.path));
         }
         let hash = COMMITS[0].hash;
         let title = COMMITS[0].subject;
@@ -734,11 +704,7 @@ impl SourcefourWindow {
     }
 
     fn status(&self) -> impl IntoElement {
-        let path = if self.demo {
-            "~/code/sourcefour".to_owned()
-        } else {
-            display_path(&self.path)
-        };
+        let path = self.path.clone();
         div()
             .h(px(STATUS_HEIGHT))
             .flex_none()
@@ -794,12 +760,56 @@ impl Render for SourcefourWindow {
     }
 }
 
+/// The window shown instead of the shell when discovery fails.
+pub(crate) struct ErrorWindow {
+    theme: Theme,
+    title: String,
+    message: String,
+}
+
+impl ErrorWindow {
+    pub(crate) fn new(failure: &RepoFailure) -> Self {
+        Self {
+            theme: Theme::dark(),
+            title: failure.user.title.clone(),
+            message: failure.user.message.clone(),
+        }
+    }
+}
+
+impl Render for ErrorWindow {
+    fn render(&mut self, _window: &mut Window, _cx: &mut gpui::Context<Self>) -> impl IntoElement {
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .justify_center()
+            .gap(px(8.0))
+            .px(px(24.0))
+            .pt(px(TITLEBAR_HEIGHT))
+            .bg(self.theme.bg_page)
+            .child(
+                div()
+                    .text_size(px(14.0))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(self.theme.text_primary)
+                    .child(self.title.clone()),
+            )
+            .child(
+                div()
+                    .text_size(px(12.0))
+                    .text_color(self.theme.text_secondary)
+                    .child(self.message.clone()),
+            )
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
+    use sourcefour_model::{RepoFailure, RepoFailureKind};
 
     use super::{
-        ColumnVisibility, SidebarSection, SidebarSections, repository_name, scrollbar_metrics,
+        ColumnVisibility, ErrorWindow, SidebarSection, SidebarSections, scrollbar_metrics,
     };
 
     #[test]
@@ -849,7 +859,17 @@ mod tests {
     }
 
     #[test]
-    fn repository_name_uses_the_requested_path_tail() {
-        assert_eq!(repository_name(Path::new("/tmp/sourcefour")), "sourcefour");
+    fn the_error_window_shows_the_user_facing_failure_text() {
+        let failure = RepoFailure::new(
+            RepoFailureKind::NotARepository,
+            "Not a Git repository",
+            "No Git repository contains /opt.",
+        )
+        .with_details("internal diagnostics");
+
+        let window = ErrorWindow::new(&failure);
+
+        assert_eq!(window.title, "Not a Git repository");
+        assert_eq!(window.message, "No Git repository contains /opt.");
     }
 }

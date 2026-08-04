@@ -155,6 +155,10 @@ pub(crate) const COMMITS: [DemoCommit; 18] = [
     },
 ];
 
+/// Repository identity shown by `--demo`, matching the screenshot fixture.
+pub(crate) const REPOSITORY_NAME: &str = "sourcefour";
+pub(crate) const REPOSITORY_PATH: &str = "~/code/sourcefour";
+
 #[cfg(test)]
 mod tests {
     use super::*;
