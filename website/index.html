@@ -77,8 +77,11 @@
       </div>
     </div>
 
-    <div class="row flip">
-      <div>
+    <div class="row bento">
+      <div class="cell shot-cell">
+        <img src="screenshots/sidebar.png" alt="The sidebar: three worktrees with their checked-out branches, then remotes, then five local branches.">
+      </div>
+      <div class="cell">
         <p class="eyebrow">The sidebar</p>
         <h2>Worktrees are not an afterthought</h2>
         <p>Linked worktrees sit at the top of the sidebar with the branch each one has
@@ -86,8 +89,15 @@
         carry their ahead/behind counts; remotes carry their tracking branches.</p>
         <p>Click a branch to scope history to it. Click again to widen back out.</p>
       </div>
-      <div class="frame tall">
-        <img src="screenshots/sidebar.png" alt="The sidebar: three worktrees with their checked-out branches, then remotes, then five local branches.">
+      <div class="cell term-cell">
+        <div class="term" aria-hidden="true">
+          <div class="term-bar"><span></span><span></span><span></span></div>
+          <pre><span class="cmd-line">$ git worktree add ../scratch prototype</span>
+Preparing worktree (checking out 'prototype')
+HEAD is now at 3d88c70 Add graph colour continuity goldens</pre>
+        </div>
+        <p class="term-note">Made in the terminal, already in the sidebar. Sourcefour
+        watches the repository itself — there is nothing to refresh.</p>
       </div>
     </div>
 

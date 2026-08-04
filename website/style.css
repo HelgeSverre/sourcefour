@@ -359,14 +359,75 @@ section {
 .row.flip .frame {
   order: -1;
 }
-/* A tall, narrow crop gets a frame that hugs it instead of a wide empty card. */
-.row .frame.tall {
-  width: fit-content;
-  margin-inline: auto;
+/* ── bento: the sidebar section ──────────────────────────────── */
+
+/* A tall screenshot beside two stacked cells, so the crop renders at
+   real size instead of shrinking into a half-column thumbnail. */
+.row.bento {
+  grid-template-columns: 0.8fr 1.2fr;
+  grid-template-rows: auto 1fr;
+  gap: 20px;
+  align-items: stretch;
 }
-.row .frame.tall img {
-  max-height: 460px;
+.bento .cell {
+  border: 1px solid var(--border-strong);
+  background: var(--panel);
+  border-radius: var(--r-lg);
+  padding: 30px;
+}
+.bento .shot-cell {
+  grid-row: 1 / 3;
+  padding: 24px;
+  background: var(--chrome);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.bento .term-cell {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+.bento .shot-cell img {
+  max-height: 620px;
   width: auto;
+  border-radius: var(--r-md);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.45);
+}
+.term {
+  background: var(--page);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+}
+.term-bar {
+  display: flex;
+  gap: 6px;
+  padding: 9px 10px;
+  border-bottom: 1px solid var(--border);
+}
+.term-bar span {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--border-strong);
+}
+.term pre {
+  margin: 0;
+  padding: 14px 16px;
+  color: var(--ink-3);
+  line-height: 1.7;
+  overflow-x: auto;
+}
+.term .cmd-line {
+  color: var(--ink);
+}
+.term-note {
+  margin-top: 16px;
+  font-size: var(--text-sm);
+  color: var(--ink-3);
 }
 
 .note {
@@ -600,6 +661,15 @@ footer {
   }
   .row.flip .frame {
     order: 0;
+  }
+  .row.bento {
+    grid-template-columns: 1fr;
+  }
+  .bento .shot-cell {
+    grid-row: auto;
+  }
+  .bento .shot-cell img {
+    max-height: 520px;
   }
   .release {
     gap: 16px;
