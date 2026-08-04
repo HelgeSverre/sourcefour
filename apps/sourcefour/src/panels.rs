@@ -35,6 +35,20 @@ impl Default for PanelSizes {
 }
 
 impl PanelSizes {
+    /// Applies persisted sizes, clamped exactly like a live drag so a stale
+    /// or hand-edited state file cannot produce an unusable layout.
+    pub(crate) fn apply(&mut self, state: &crate::ui_state::UiState) {
+        if let Some(sidebar) = state.sidebar_width {
+            self.sidebar = sidebar.clamp(170.0, 480.0);
+        }
+        if let Some(graph) = state.graph_width {
+            self.graph = graph.clamp(40.0, 720.0);
+        }
+        if let Some(details) = state.details_height {
+            self.details = details.clamp(100.0, 560.0);
+        }
+    }
+
     /// Applies a pointer position to the panel a splitter controls.
     ///
     /// Every size is clamped so no panel can vanish or swallow the window;

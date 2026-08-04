@@ -76,11 +76,59 @@ enum SidebarSection {
     Remotes,
 }
 
+impl SidebarSection {
+    /// Stable name used in the persisted state file.
+    fn name(self) -> &'static str {
+        match self {
+            Self::Worktrees => "worktrees",
+            Self::Branches => "branches",
+            Self::Remotes => "remotes",
+        }
+    }
+
+    fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "worktrees" => Some(Self::Worktrees),
+            "branches" => Some(Self::Branches),
+            "remotes" => Some(Self::Remotes),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct SidebarSections {
     worktrees: bool,
     branches: bool,
     remotes: bool,
+    /// Render order, user-adjustable by dragging section headers.
+    order: [SidebarSection; 3],
+}
+
+/// The payload carried while a section header is dragged.
+#[derive(Clone)]
+struct SectionDrag(SidebarSection);
+
+/// The floating chip shown under the pointer while dragging a section.
+struct SectionDragPreview {
+    title: &'static str,
+    theme: Theme,
+}
+
+impl Render for SectionDragPreview {
+    fn render(&mut self, _window: &mut Window, _cx: &mut gpui::Context<Self>) -> impl IntoElement {
+        div()
+            .px(px(10.0))
+            .py(px(4.0))
+            .rounded(px(5.0))
+            .border_1()
+            .border_color(self.theme.accent)
+            .bg(self.theme.bg_selected)
+            .text_size(px(10.0))
+            .font_weight(FontWeight::BOLD)
+            .text_color(self.theme.text_primary)
+            .child(self.title)
+    }
 }
 
 /// Assembled text for the details header (§6.10).
@@ -117,6 +165,11 @@ impl Default for SidebarSections {
             worktrees: true,
             branches: true,
             remotes: true,
+            order: [
+                SidebarSection::Worktrees,
+                SidebarSection::Branches,
+                SidebarSection::Remotes,
+            ],
         }
     }
 }
@@ -134,6 +187,71 @@ impl SidebarSections {
             SidebarSection::Worktrees => self.worktrees = !self.worktrees,
             SidebarSection::Branches => self.branches = !self.branches,
             SidebarSection::Remotes => self.remotes = !self.remotes,
+        }
+    }
+    /// The sections in their current display order.
+    fn ordered(self) -> [SidebarSection; 3] {
+        self.order
+    }
+    /// Applies persisted order and collapse state, ignoring anything that
+    /// no longer names a section.
+    fn apply(&mut self, state: &crate::ui_state::UiState) {
+        if let Some(saved) = &state.section_order {
+            let mapped: Vec<SidebarSection> = saved
+                .iter()
+                .filter_map(|name| SidebarSection::from_name(name))
+                .collect();
+            if let Ok(order) = <[SidebarSection; 3]>::try_from(mapped)
+                && order[0] != order[1]
+                && order[1] != order[2]
+                && order[0] != order[2]
+            {
+                self.order = order;
+            }
+        }
+        for name in &state.collapsed_sections {
+            match SidebarSection::from_name(name) {
+                Some(SidebarSection::Worktrees) => self.worktrees = false,
+                Some(SidebarSection::Branches) => self.branches = false,
+                Some(SidebarSection::Remotes) => self.remotes = false,
+                None => {}
+            }
+        }
+    }
+
+    /// The names persisted for the collapse state.
+    fn collapsed_names(self) -> Vec<String> {
+        self.order
+            .iter()
+            .filter(|&&section| !self.expanded(section))
+            .map(|section| section.name().to_owned())
+            .collect()
+    }
+
+    /// Moves `moved` to `target`'s position, shifting the rest along.
+    fn reorder(&mut self, moved: SidebarSection, target: SidebarSection) {
+        if moved == target {
+            return;
+        }
+        let mut order: Vec<SidebarSection> =
+            self.order.iter().copied().filter(|&s| s != moved).collect();
+        let Some(position) = order.iter().position(|&s| s == target) else {
+            return;
+        };
+        // Dropping below the removal point reads as "after the target".
+        let from = self
+            .order
+            .iter()
+            .position(|&s| s == moved)
+            .unwrap_or_default();
+        let to = self
+            .order
+            .iter()
+            .position(|&s| s == target)
+            .unwrap_or_default();
+        order.insert(if from < to { position + 1 } else { position }, moved);
+        if let Ok(order) = <[SidebarSection; 3]>::try_from(order) {
+            self.order = order;
         }
     }
 }
@@ -420,6 +538,9 @@ impl SourcefourWindow {
             focus: cx.focus_handle(),
             filter_focus: cx.focus_handle(),
         };
+        let state = crate::ui_state::UiState::load();
+        window.sections.apply(&state);
+        window.panels.apply(&state);
         if launch.demo {
             // The fixture is seeded as if a traversal had already completed, so
             // every capture goes through the real rendering path (§12.4).
@@ -955,6 +1076,8 @@ impl SourcefourWindow {
     ) -> impl IntoElement {
         let count = count.into();
         let expanded = self.sections.expanded(section);
+        let theme = self.theme;
+        let accent = self.theme.accent;
         div()
             .id(title)
             .h(px(27.0))
@@ -965,7 +1088,7 @@ impl SourcefourWindow {
             .pb(px(4.0))
             // A subtle divider between the sidebar's sections; the first sits
             // under the toolbar's own border and needs none.
-            .when(section != SidebarSection::Worktrees, |this| {
+            .when(self.sections.ordered()[0] != section, |this| {
                 this.border_t_1().border_color(self.theme.border)
             })
             .text_size(px(10.0))
@@ -983,6 +1106,17 @@ impl SourcefourWindow {
             .child(count)
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.sections.toggle(section);
+                this.persist_ui_state(cx);
+                cx.notify();
+            }))
+            // Sections reorder by dragging a header onto another header.
+            .on_drag(SectionDrag(section), move |_, _, _, cx| {
+                cx.new(|_| SectionDragPreview { title, theme })
+            })
+            .drag_over::<SectionDrag>(move |style, _, _, _| style.border_t_2().border_color(accent))
+            .on_drop(cx.listener(move |this, dragged: &SectionDrag, _, cx| {
+                this.sections.reorder(dragged.0, section);
+                this.persist_ui_state(cx);
                 cx.notify();
             }))
     }
@@ -994,60 +1128,64 @@ impl SourcefourWindow {
         }
     }
 
-    /// The sidebar built from real repository metadata.
+    /// The sidebar built from real repository metadata, sections in the
+    /// user's order.
     fn repository_sidebar(&self, snapshot: &RepoSnapshot, cx: &mut gpui::Context<Self>) -> Div {
-        div()
+        let mut root = div()
             .w(px(self.panels.sidebar))
             .flex_none()
             .flex()
             .flex_col()
             .overflow_hidden()
-            .bg(self.theme.bg_panel)
-            .child(self.section(
-                "WORKTREES",
-                snapshot.worktrees.len().to_string(),
-                SidebarSection::Worktrees,
-                cx,
-            ))
-            .when(self.sections.worktrees, |this| {
-                this.children(
-                    snapshot
-                        .worktrees
-                        .iter()
-                        .map(|tree| self.worktree_row(tree)),
-                )
-            })
-            .child(self.section(
-                "BRANCHES",
-                snapshot.local_branches.len().to_string(),
-                SidebarSection::Branches,
-                cx,
-            ))
-            .when(self.sections.branches, |this| {
-                this.children(
-                    snapshot
-                        .local_branches
-                        .iter()
-                        .map(|branch| self.branch_row(branch, cx)),
-                )
-            })
-            // The prototype counts remotes here, not their branches.
-            .child(self.section(
-                "REMOTES",
-                snapshot.remotes.len().to_string(),
-                SidebarSection::Remotes,
-                cx,
-            ))
-            .when(self.sections.remotes, |this| {
-                this.children(snapshot.remotes.iter().flat_map(|remote| {
-                    std::iter::once(self.remote_row(remote)).chain(
-                        remote
-                            .branches
-                            .iter()
-                            .map(|branch| self.remote_branch_row(&branch.short_name)),
-                    )
-                }))
-            })
+            .bg(self.theme.bg_panel);
+        for section in self.sections.ordered() {
+            root = match section {
+                SidebarSection::Worktrees => root
+                    .child(self.section(
+                        "WORKTREES",
+                        snapshot.worktrees.len().to_string(),
+                        section,
+                        cx,
+                    ))
+                    .when(self.sections.worktrees, |this| {
+                        this.children(
+                            snapshot
+                                .worktrees
+                                .iter()
+                                .map(|tree| self.worktree_row(tree)),
+                        )
+                    }),
+                SidebarSection::Branches => root
+                    .child(self.section(
+                        "BRANCHES",
+                        snapshot.local_branches.len().to_string(),
+                        section,
+                        cx,
+                    ))
+                    .when(self.sections.branches, |this| {
+                        this.children(
+                            snapshot
+                                .local_branches
+                                .iter()
+                                .map(|branch| self.branch_row(branch, cx)),
+                        )
+                    }),
+                // The prototype counts remotes here, not their branches.
+                SidebarSection::Remotes => root
+                    .child(self.section("REMOTES", snapshot.remotes.len().to_string(), section, cx))
+                    .when(self.sections.remotes, |this| {
+                        this.children(snapshot.remotes.iter().flat_map(|remote| {
+                            std::iter::once(self.remote_row(remote)).chain(
+                                remote
+                                    .branches
+                                    .iter()
+                                    .map(|branch| self.remote_branch_row(&branch.short_name)),
+                            )
+                        }))
+                    }),
+            };
+        }
+        root
     }
 
     fn worktree_row(&self, tree: &sourcefour_model::WorktreeSnapshot) -> Div {
@@ -1195,19 +1333,26 @@ impl SourcefourWindow {
                 .text_color(self.theme.text_faint)
                 .child("Loading repository metadata...")
         };
-        div()
+        let mut root = div()
             .w(px(self.panels.sidebar))
             .flex_none()
             .flex()
             .flex_col()
             .overflow_hidden()
-            .bg(self.theme.bg_panel)
-            .child(self.section("WORKTREES", "", SidebarSection::Worktrees, cx))
-            .when(self.sections.worktrees, |this| this.child(loading()))
-            .child(self.section("BRANCHES", "", SidebarSection::Branches, cx))
-            .when(self.sections.branches, |this| this.child(loading()))
-            .child(self.section("REMOTES", "", SidebarSection::Remotes, cx))
-            .when(self.sections.remotes, |this| this.child(loading()))
+            .bg(self.theme.bg_panel);
+        for section in self.sections.ordered() {
+            let title = match section {
+                SidebarSection::Worktrees => "WORKTREES",
+                SidebarSection::Branches => "BRANCHES",
+                SidebarSection::Remotes => "REMOTES",
+            };
+            root = root
+                .child(self.section(title, "", section, cx))
+                .when(self.sections.expanded(section), |this| {
+                    this.child(loading())
+                });
+        }
+        root
     }
 
     fn header(&self, columns: ColumnVisibility) -> impl IntoElement {
@@ -1253,6 +1398,26 @@ impl SourcefourWindow {
                     .top_0()
                     .left(px(self.panels.graph - SPLITTER_WIDTH)),
             )
+    }
+
+    /// Saves panel sizes, section order, and collapse state off-thread.
+    fn persist_ui_state(&self, cx: &gpui::Context<Self>) {
+        let state = crate::ui_state::UiState {
+            sidebar_width: Some(self.panels.sidebar),
+            graph_width: Some(self.panels.graph),
+            details_height: Some(self.panels.details),
+            section_order: Some(
+                self.sections
+                    .ordered()
+                    .iter()
+                    .map(|section| section.name().to_owned())
+                    .collect(),
+            ),
+            collapsed_sections: self.sections.collapsed_names(),
+        };
+        cx.background_executor()
+            .spawn(async move { state.save() })
+            .detach();
     }
 
     /// A draggable divider; the window's mouse handlers do the actual moving.
@@ -1775,6 +1940,7 @@ impl Render for SourcefourWindow {
                 gpui::MouseButton::Left,
                 cx.listener(|this, _, _, cx| {
                     if this.dragging.take().is_some() {
+                        this.persist_ui_state(cx);
                         cx.notify();
                     }
                 }),
@@ -1999,6 +2165,57 @@ mod tests {
         assert!(sections.expanded(SidebarSection::Worktrees));
         assert!(!sections.expanded(SidebarSection::Branches));
         assert!(sections.expanded(SidebarSection::Remotes));
+    }
+
+    #[test]
+    fn persisted_section_state_round_trips() {
+        use SidebarSection::{Branches, Remotes, Worktrees};
+        let mut sections = SidebarSections::default();
+        sections.reorder(Remotes, Worktrees);
+        sections.toggle(Branches);
+
+        let state = crate::ui_state::UiState {
+            section_order: Some(
+                sections
+                    .ordered()
+                    .iter()
+                    .map(|section| section.name().to_owned())
+                    .collect(),
+            ),
+            collapsed_sections: sections.collapsed_names(),
+            ..Default::default()
+        };
+        let mut restored = SidebarSections::default();
+        restored.apply(&state);
+
+        assert_eq!(restored, sections);
+
+        // Garbage in the state file must not corrupt the layout.
+        let mut untouched = SidebarSections::default();
+        untouched.apply(&crate::ui_state::UiState {
+            section_order: Some(vec![String::from("worktrees"), String::from("worktrees")]),
+            collapsed_sections: vec![String::from("hologram")],
+            ..Default::default()
+        });
+        assert_eq!(untouched, SidebarSections::default());
+    }
+
+    #[test]
+    fn sidebar_sections_reorder_by_dropping_onto_a_target() {
+        use SidebarSection::{Branches, Remotes, Worktrees};
+        let mut sections = SidebarSections::default();
+        assert_eq!(sections.ordered(), [Worktrees, Branches, Remotes]);
+
+        // Dragging a section onto another takes that section's position.
+        sections.reorder(Remotes, Worktrees);
+        assert_eq!(sections.ordered(), [Remotes, Worktrees, Branches]);
+
+        sections.reorder(Remotes, Branches);
+        assert_eq!(sections.ordered(), [Worktrees, Branches, Remotes]);
+
+        // Dropping a section onto itself changes nothing.
+        sections.reorder(Branches, Branches);
+        assert_eq!(sections.ordered(), [Worktrees, Branches, Remotes]);
     }
 
     #[test]

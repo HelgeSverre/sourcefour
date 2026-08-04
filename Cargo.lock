@@ -5330,11 +5330,14 @@ name = "sourcefour"
 version = "0.1.0"
 dependencies = [
  "gpui",
+ "serde",
+ "serde_json",
  "smallvec",
  "sourcefour-git",
  "sourcefour-graph",
  "sourcefour-model",
  "sourcefour-test-support",
+ "tempfile",
  "tracing",
  "tracing-subscriber",
 ]

@@ -6,6 +6,7 @@ mod graph_paint;
 mod history;
 mod panels;
 mod theme;
+mod ui_state;
 mod views;
 
 use std::{env, ffi::OsString, path::PathBuf, process::ExitCode};

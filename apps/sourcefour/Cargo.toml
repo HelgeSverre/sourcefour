@@ -13,6 +13,8 @@ path = "src/main.rs"
 
 [dependencies]
 gpui = { git = "https://github.com/zed-industries/zed", package = "gpui", rev = "d637307bd75389f63adbb7d86bc66174ee817d0d" }
+serde.workspace = true
+serde_json.workspace = true
 smallvec.workspace = true
 sourcefour-git = { path = "../../crates/sourcefour-git" }
 sourcefour-graph = { path = "../../crates/sourcefour-graph" }
@@ -22,6 +24,7 @@ tracing-subscriber.workspace = true
 
 [dev-dependencies]
 sourcefour-test-support = { path = "../../crates/sourcefour-test-support" }
+tempfile.workspace = true
 
 [lints]
 workspace = true
