@@ -22,28 +22,42 @@ pub(crate) struct UiState {
     pub(crate) details_collapsed: bool,
 }
 
+/// Reads a tolerant JSON file: a missing or corrupt file must never block
+/// the window, so any failure yields the default.
+pub(crate) fn load_json_or_default<T: serde::de::DeserializeOwned + Default>(path: &Path) -> T {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|contents| serde_json::from_str(&contents).ok())
+        .unwrap_or_default()
+}
+
+/// Writes pretty JSON, creating the directory on first save.
+///
+/// # Errors
+///
+/// Returns the underlying error when the file cannot be written; callers log
+/// it, because a failed save must never interrupt the user.
+pub(crate) fn save_json_pretty<T: serde::Serialize>(path: &Path, value: &T) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let json = serde_json::to_string_pretty(value).map_err(std::io::Error::other)?;
+    std::fs::write(path, json)
+}
+
 impl UiState {
-    /// Reads persisted state, falling back to defaults on any failure: a
-    /// missing or corrupt state file must never block the window.
+    /// Reads persisted state; see [`load_json_or_default`] for the contract.
     pub(crate) fn load_from(path: &Path) -> Self {
-        std::fs::read_to_string(path)
-            .ok()
-            .and_then(|contents| serde_json::from_str(&contents).ok())
-            .unwrap_or_default()
+        load_json_or_default(path)
     }
 
-    /// Writes the state, creating the directory on first save.
+    /// Writes the state; see [`save_json_pretty`].
     ///
     /// # Errors
     ///
-    /// Returns the underlying error when the file cannot be written; callers
-    /// log it, because losing interface state must never interrupt the user.
+    /// See [`save_json_pretty`].
     pub(crate) fn save_to(&self, path: &Path) -> std::io::Result<()> {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        let json = serde_json::to_string_pretty(self).map_err(std::io::Error::other)?;
-        std::fs::write(path, json)
+        save_json_pretty(path, self)
     }
 
     /// Loads from the default per-user location.

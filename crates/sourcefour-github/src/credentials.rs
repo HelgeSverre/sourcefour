@@ -61,27 +61,51 @@ pub fn delete_token(path: &Path, host: &str) -> std::io::Result<()> {
     )
 }
 
+/// The token of an installed, signed-in `gh` CLI, fetched at use time so a
+/// rotated token is never stale. Arguments are discrete, never a shell line.
+///
+/// # Errors
+///
+/// Returns the words to show when gh is missing, not signed in, or fails.
+pub fn gh_cli_token() -> Result<String, String> {
+    let output = std::process::Command::new("gh")
+        .args(["auth", "token"])
+        .output()
+        .map_err(|error| format!("The gh CLI could not be run: {error}"))?;
+    let token = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if !output.status.success() {
+        Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+    } else if token.is_empty() {
+        Err(String::from("gh returned no token; run `gh auth login`."))
+    } else {
+        Ok(token)
+    }
+}
+
 /// Writes with owner-only permissions, creating parents as needed.
 fn write_private(path: &Path, contents: &str) -> std::io::Result<()> {
     use std::io::Write as _;
-    use std::os::unix::fs::OpenOptionsExt as _;
 
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o600)
-        .open(path)?;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.mode(0o600);
+    }
+    // ponytail: on Windows the token inherits the ACL of the per-user
+    // application data directory it lives in, which is already owner-only.
+    // Setting an explicit DACL needs the Win32 security APIs; do that if the
+    // file ever moves somewhere shared.
+    let mut file = options.open(path)?;
     file.write_all(contents.as_bytes())
 }
 
 #[cfg(test)]
 mod tests {
-    use std::os::unix::fs::PermissionsExt as _;
-
     use super::{delete_token, load_token, store_token};
 
     #[test]
@@ -104,8 +128,13 @@ mod tests {
         Ok(())
     }
 
+    /// Unix-only: Windows has no mode bits, and the file's protection there
+    /// comes from the per-user directory it sits in.
+    #[cfg(unix)]
     #[test]
     fn the_file_is_owner_only() -> Result<(), Box<dyn std::error::Error>> {
+        use std::os::unix::fs::PermissionsExt as _;
+
         let directory = tempfile::TempDir::new()?;
         let path = directory.path().join("credentials.json");
 

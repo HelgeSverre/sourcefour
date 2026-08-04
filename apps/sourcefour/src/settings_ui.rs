@@ -28,12 +28,6 @@ impl SettingsSection {
     }
 }
 
-/// The overlay's open state, held by the window while it shows.
-#[derive(Debug, Default)]
-pub(crate) struct SettingsView {
-    pub(crate) section: SettingsSection,
-}
-
 /// Where the GitHub connection stands, shown in the GitHub section.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) enum GithubConnection {
@@ -52,7 +46,8 @@ pub(crate) enum GithubConnection {
 pub(crate) fn overlay(
     settings: &AppSettings,
     section: SettingsSection,
-    github: &GithubSectionState<'_>,
+    connection: &GithubConnection,
+    token_input: &gpui::Entity<crate::text_input::TextInput>,
     theme: &Theme,
     focus: &gpui::FocusHandle,
     cx: &mut gpui::Context<SourcefourWindow>,
@@ -86,7 +81,14 @@ pub(crate) fn overlay(
                 .overflow_hidden()
                 .on_click(|_, _, cx| cx.stop_propagation())
                 .child(nav(section, theme, cx))
-                .child(content(settings, section, github, theme, cx)),
+                .child(content(
+                    settings,
+                    section,
+                    connection,
+                    token_input,
+                    theme,
+                    cx,
+                )),
         )
 }
 
@@ -146,7 +148,8 @@ fn nav(active: SettingsSection, theme: &Theme, cx: &mut gpui::Context<Sourcefour
 fn content(
     settings: &AppSettings,
     section: SettingsSection,
-    github: &GithubSectionState<'_>,
+    connection: &GithubConnection,
+    token_input: &gpui::Entity<crate::text_input::TextInput>,
     theme: &Theme,
     cx: &mut gpui::Context<SourcefourWindow>,
 ) -> Div {
@@ -211,21 +214,18 @@ fn content(
                 .flex_col()
                 .gap(px(14.0))
                 .children(match section {
-                    SettingsSection::GitHub => github_cards(settings, github, theme, cx),
+                    SettingsSection::GitHub => {
+                        github_cards(settings, connection, token_input, theme, cx)
+                    }
                     SettingsSection::About => about_cards(theme, cx),
                 }),
         )
 }
 
-/// What the GitHub section renders beyond the settings file.
-pub(crate) struct GithubSectionState<'a> {
-    pub(crate) connection: &'a GithubConnection,
-    pub(crate) token_input: &'a gpui::Entity<crate::text_input::TextInput>,
-}
-
 fn github_cards(
     settings: &AppSettings,
-    github: &GithubSectionState<'_>,
+    connection: &GithubConnection,
+    token_input: &gpui::Entity<crate::text_input::TextInput>,
     theme: &Theme,
     cx: &mut gpui::Context<SourcefourWindow>,
 ) -> Vec<Div> {
@@ -236,9 +236,14 @@ fn github_cards(
             theme,
             "Enable GitHub integration",
             "Show pull requests and checks for github.com remotes.",
-            toggle(theme, "github-enabled", enabled, cx, move |settings, on| {
-                settings.github.enabled = on;
-            }),
+            segmented(
+                theme,
+                "github-enabled",
+                &[("Off", false), ("On", true)],
+                enabled,
+                cx,
+                |settings, on| settings.github.enabled = on,
+            ),
         ),
         row(
             theme,
@@ -246,6 +251,7 @@ fn github_cards(
             "How API requests identify you.",
             segmented(
                 theme,
+                "github-auth",
                 &[
                     ("Off", AuthMethod::Off),
                     ("Access token", AuthMethod::Token),
@@ -253,6 +259,7 @@ fn github_cards(
                 ],
                 method,
                 cx,
+                |settings, method| settings.github.auth_method = method,
             ),
         ),
     ];
@@ -278,7 +285,7 @@ fn github_cards(
                         .border_color(theme.border_strong)
                         .bg(theme.bg_page)
                         .text_size(px(11.0))
-                        .child(github.token_input.clone()),
+                        .child(token_input.clone()),
                 )
                 .child(button(
                     theme,
@@ -301,25 +308,26 @@ fn github_cards(
             }),
         ));
     }
-    if enabled && *github.connection != GithubConnection::Idle {
-        rows.push(status_row(github.connection, theme, cx));
+    if enabled && let Some(status) = status_row(connection, theme, cx) {
+        rows.push(status);
     }
     vec![card(theme, rows)]
 }
 
-/// The connection outcome, with Disconnect once one exists.
+/// The connection outcome, with Disconnect once one exists; nothing shows
+/// before the first check.
 fn status_row(
     connection: &GithubConnection,
     theme: &Theme,
     cx: &mut gpui::Context<SourcefourWindow>,
-) -> Div {
+) -> Option<Div> {
     let (text, color) = match connection {
-        GithubConnection::Idle => (String::new(), theme.text_faint),
+        GithubConnection::Idle => return None,
         GithubConnection::Checking => (String::from("Checking connection…"), theme.text_faint),
         GithubConnection::Connected { login } => (format!("Connected as {login}"), theme.green),
         GithubConnection::Failed { message } => (message.clone(), theme.red),
     };
-    div()
+    let row = div()
         .flex()
         .items_center()
         .justify_between()
@@ -333,7 +341,8 @@ fn status_row(
                     this.disconnect_github(cx);
                 })
             }),
-        )
+        );
+    Some(row)
 }
 
 /// A bordered chip button.
@@ -446,15 +455,16 @@ fn row(
         .child(control)
 }
 
-/// An On/Off toggle rendered as the app's segmented chip.
-fn toggle(
+/// A segmented chip control: one segment per choice, the active one lit.
+/// Selecting a segment applies its value through `update_settings`.
+fn segmented<T: Copy + PartialEq + 'static>(
     theme: &Theme,
     id: &'static str,
-    on: bool,
+    choices: &'static [(&'static str, T)],
+    active: T,
     cx: &mut gpui::Context<SourcefourWindow>,
-    apply: impl Fn(&mut AppSettings, bool) + 'static,
+    apply: fn(&mut AppSettings, T),
 ) -> Div {
-    let apply = std::rc::Rc::new(apply);
     div()
         .flex_none()
         .flex()
@@ -462,11 +472,10 @@ fn toggle(
         .border_1()
         .border_color(theme.border_strong)
         .overflow_hidden()
-        .children([false, true].map(|value| {
-            let selected = on == value;
-            let apply = apply.clone();
+        .children(choices.iter().enumerate().map(|(index, &(label, value))| {
+            let selected = value == active;
             div()
-                .id((id, u64::from(value)))
+                .id((id, index))
                 .px(px(9.0))
                 .py(px(2.0))
                 .cursor_pointer()
@@ -482,49 +491,7 @@ fn toggle(
                     theme.text_faint
                 })
                 .on_click(cx.listener(move |this, _, _, cx| {
-                    let apply = apply.clone();
                     this.update_settings(cx, move |settings| apply(settings, value));
-                }))
-                .child(if value { "On" } else { "Off" })
-        }))
-}
-
-/// The auth-method selector, one segment per choice.
-fn segmented(
-    theme: &Theme,
-    choices: &[(&'static str, AuthMethod)],
-    active: AuthMethod,
-    cx: &mut gpui::Context<SourcefourWindow>,
-) -> Div {
-    div()
-        .flex_none()
-        .flex()
-        .rounded(px(5.0))
-        .border_1()
-        .border_color(theme.border_strong)
-        .overflow_hidden()
-        .children(choices.iter().map(|&(label, method)| {
-            let selected = method == active;
-            div()
-                .id(label)
-                .px(px(9.0))
-                .py(px(2.0))
-                .cursor_pointer()
-                .text_size(px(10.5))
-                .bg(if selected {
-                    theme.bg_selected
-                } else {
-                    theme.bg_list
-                })
-                .text_color(if selected {
-                    theme.text_primary
-                } else {
-                    theme.text_faint
-                })
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.update_settings(cx, move |settings| {
-                        settings.github.auth_method = method;
-                    });
                 }))
                 .child(label)
         }))

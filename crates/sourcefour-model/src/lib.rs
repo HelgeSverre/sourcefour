@@ -964,12 +964,9 @@ pub struct GithubAccount {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PrSummary {
     pub number: u64,
-    pub title: String,
     pub draft: bool,
     /// The branch the PR merges from (`head.ref`).
     pub head_branch: String,
-    /// The head commit at last fetch.
-    pub head_sha: String,
     /// The PR page, for click-through.
     pub html_url: String,
 }

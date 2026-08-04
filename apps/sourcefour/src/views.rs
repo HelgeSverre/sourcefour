@@ -65,8 +65,8 @@ pub(crate) struct SourcefourWindow {
     scrubbing: Scrub,
     /// The user's persisted configuration (settings.json).
     settings: crate::settings::AppSettings,
-    /// The settings overlay, while open.
-    settings_view: Option<crate::settings_ui::SettingsView>,
+    /// The settings overlay's visible section, while open.
+    settings_view: Option<crate::settings_ui::SettingsSection>,
     /// Focus target while the settings overlay is open, so Escape closes it.
     settings_focus: FocusHandle,
     /// Where the GitHub connection stands (§ settings, GitHub).
@@ -78,19 +78,15 @@ pub(crate) struct SourcefourWindow {
     /// The GitHub repository behind the remotes, when the integration is on.
     github_remote: Option<sourcefour_github::GithubRemote>,
     /// Open pull requests with their fetch time, for branch chips.
-    github_pulls: Option<(Vec<sourcefour_model::PrSummary>, std::time::Instant)>,
+    github_pulls: Option<Cached<Vec<sourcefour_model::PrSummary>>>,
     /// Token for the newest pull-request load, so stale results drop.
     github_pulls_request: u64,
     /// The selected commit's check runs: commit, outcome, fetch time.
-    github_checks: Option<(
-        sourcefour_model::Oid,
-        Result<Vec<sourcefour_model::CheckRun>, String>,
-        std::time::Instant,
-    )>,
+    github_checks: Option<Cached<(sourcefour_model::Oid, GithubChecks)>>,
     /// Token for the newest check-run load, so stale results drop.
     github_checks_request: u64,
     /// Recent Actions workflow runs with their fetch time.
-    github_runs: Option<(Vec<sourcefour_model::WorkflowRun>, std::time::Instant)>,
+    github_runs: Option<Cached<Vec<sourcefour_model::WorkflowRun>>>,
     /// Token for the newest workflow-run load, so stale results drop.
     github_runs_request: u64,
     /// Juxtapose area bounds captured at paint, for mapping mouse X.
@@ -619,21 +615,43 @@ fn initial_settings(demo: bool) -> crate::settings::AppSettings {
     }
 }
 
-/// How long fetched GitHub data serves before a refresh, bounding API use
-/// well under the 5,000/hour limit.
-const GITHUB_TTL: std::time::Duration = std::time::Duration::from_mins(1);
-
-/// Whether data fetched at `fetched` still serves at `now`.
-fn github_cache_fresh(fetched: std::time::Instant, now: std::time::Instant) -> bool {
-    now.duration_since(fetched) < GITHUB_TTL
+/// The status color of one changed file, shared by list and diff header.
+fn change_color(theme: &Theme, status: ChangeKind) -> gpui::Hsla {
+    match status {
+        ChangeKind::Added => theme.green,
+        ChangeKind::Deleted => theme.red,
+        ChangeKind::Modified => theme.orange,
+        ChangeKind::Renamed | ChangeKind::Copied => theme.purple,
+        ChangeKind::Unknown => theme.text_faint,
+    }
 }
 
-/// The open pull request whose head is `branch`, for the sidebar chip.
-fn pr_for_branch<'a>(
-    pulls: Option<&'a (Vec<sourcefour_model::PrSummary>, std::time::Instant)>,
-    branch: &str,
-) -> Option<&'a sourcefour_model::PrSummary> {
-    pulls?.0.iter().find(|pull| pull.head_branch == branch)
+/// A fetched GitHub payload and when it arrived. Data older than a minute
+/// refetches on the next request, bounding API use far under the rate limit.
+struct Cached<T> {
+    value: T,
+    fetched_at: std::time::Instant,
+}
+
+impl<T> Cached<T> {
+    fn now(value: T) -> Self {
+        Self {
+            value,
+            fetched_at: std::time::Instant::now(),
+        }
+    }
+
+    fn fresh(&self) -> bool {
+        self.fetched_at.elapsed() < std::time::Duration::from_mins(1)
+    }
+}
+
+/// A commit's check runs, or the words for why they could not load.
+type GithubChecks = Result<Vec<sourcefour_model::CheckRun>, String>;
+
+/// The 0600 token file, next to the other per-user files.
+fn credentials_path() -> Option<std::path::PathBuf> {
+    crate::ui_state::support_file("credentials.json")
 }
 
 /// The glyph and color a check status renders as.
@@ -660,29 +678,15 @@ fn check_glyph(theme: &Theme, status: sourcefour_model::CheckStatus) -> (&'stati
 /// show for why it cannot.
 fn resolve_github_token(
     method: crate::settings::AuthMethod,
-    host: &str,
     credentials: Option<&std::path::Path>,
 ) -> Result<String, String> {
     use crate::settings::AuthMethod;
     match method {
         AuthMethod::Off => Err(String::from("GitHub authentication is off.")),
         AuthMethod::Token => credentials
-            .and_then(|path| sourcefour_github::load_token(path, host))
+            .and_then(|path| sourcefour_github::load_token(path, sourcefour_github::GITHUB_HOST))
             .ok_or_else(|| String::from("No token is stored.")),
-        AuthMethod::GhCli => {
-            let output = std::process::Command::new("gh")
-                .args(["auth", "token"])
-                .output()
-                .map_err(|error| format!("The gh CLI could not be run: {error}"))?;
-            let token = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !output.status.success() {
-                Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
-            } else if token.is_empty() {
-                Err(String::from("gh returned no token; run `gh auth login`."))
-            } else {
-                Ok(token)
-            }
-        }
+        AuthMethod::GhCli => sourcefour_github::gh_cli_token(),
     }
 }
 
@@ -1579,7 +1583,7 @@ impl SourcefourWindow {
                     let runs = self
                         .github_runs
                         .as_ref()
-                        .map_or(&[][..], |(runs, _)| runs.as_slice());
+                        .map_or(&[][..], |cache| cache.value.as_slice());
                     root.child(self.section("ACTIONS", runs.len().to_string(), section, cx))
                         .when(self.sections.actions, |this| {
                             this.children(
@@ -1754,30 +1758,38 @@ impl SourcefourWindow {
             .child(branch_marker(&self.theme))
             .child(branch.short_name.clone())
             .children(
-                pr_for_branch(self.github_pulls.as_ref(), &branch.short_name).map(|pull| {
-                    let color = if pull.draft {
-                        self.theme.text_faint
-                    } else {
-                        self.theme.green
-                    };
-                    let url = pull.html_url.clone();
-                    div()
-                        .id(("pr-chip", pull.number))
-                        .flex_none()
-                        .px(px(4.0))
-                        .rounded(px(3.0))
-                        .border_1()
-                        .border_color(color.opacity(0.45))
-                        .text_size(px(9.0))
-                        .text_color(color)
-                        .cursor_pointer()
-                        .hover(|style| style.bg(self.theme.bg_hover))
-                        .on_click(move |_, _, cx| {
-                            cx.stop_propagation();
-                            cx.open_url(&url);
-                        })
-                        .child(format!("#{}", pull.number))
-                }),
+                self.github_pulls
+                    .as_ref()
+                    .and_then(|cache| {
+                        cache
+                            .value
+                            .iter()
+                            .find(|pull| pull.head_branch == branch.short_name)
+                    })
+                    .map(|pull| {
+                        let color = if pull.draft {
+                            self.theme.text_faint
+                        } else {
+                            self.theme.green
+                        };
+                        let url = pull.html_url.clone();
+                        div()
+                            .id(("pr-chip", pull.number))
+                            .flex_none()
+                            .px(px(4.0))
+                            .rounded(px(3.0))
+                            .border_1()
+                            .border_color(color.opacity(0.45))
+                            .text_size(px(9.0))
+                            .text_color(color)
+                            .cursor_pointer()
+                            .hover(|style| style.bg(self.theme.bg_hover))
+                            .on_click(move |_, _, cx| {
+                                cx.stop_propagation();
+                                cx.open_url(&url);
+                            })
+                            .child(format!("#{}", pull.number))
+                    }),
             )
             .child(div().flex_grow())
             .children(ahead_behind_text(branch.ahead_behind).map(|text| {
@@ -2604,7 +2616,7 @@ impl SourcefourWindow {
     /// for exactly this commit exists, so the block never flickers.
     fn checks_block(&self, cx: &mut gpui::Context<Self>) -> Option<Div> {
         let selected = self.history.selected?;
-        let (cached, outcome, _) = self.github_checks.as_ref()?;
+        let (cached, outcome) = &self.github_checks.as_ref()?.value;
         if *cached != selected {
             return None;
         }
@@ -2747,7 +2759,7 @@ impl SourcefourWindow {
         let mode = match scene {
             demo::Scene::Overview => return,
             demo::Scene::Settings => {
-                self.settings_view = Some(crate::settings_ui::SettingsView::default());
+                self.settings_view = Some(crate::settings_ui::SettingsSection::default());
                 return;
             }
             demo::Scene::Split => DiffMode::Split,
@@ -2783,7 +2795,7 @@ impl SourcefourWindow {
     /// Opens the settings overlay and moves focus into it.
     pub(crate) fn open_settings(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) {
         if self.settings_view.is_none() {
-            self.settings_view = Some(crate::settings_ui::SettingsView::default());
+            self.settings_view = Some(crate::settings_ui::SettingsSection::default());
         }
         self.settings_focus.focus(window);
         cx.notify();
@@ -2796,14 +2808,32 @@ impl SourcefourWindow {
         cx.notify();
     }
 
+    /// Closes the diff overlay, returning focus to the history.
+    pub(crate) fn close_diff(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) {
+        self.diff_view = None;
+        self.focus.focus(window);
+        cx.notify();
+    }
+
+    /// Closes the create-branch dialog, returning focus to the history.
+    pub(crate) fn close_branch_dialog(
+        &mut self,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.branch_dialog = None;
+        self.focus.focus(window);
+        cx.notify();
+    }
+
     /// Switches the visible settings section.
     pub(crate) fn set_settings_section(
         &mut self,
         section: crate::settings_ui::SettingsSection,
         cx: &mut gpui::Context<Self>,
     ) {
-        if let Some(view) = &mut self.settings_view {
-            view.section = section;
+        if self.settings_view.is_some() {
+            self.settings_view = Some(section);
             cx.notify();
         }
     }
@@ -2828,17 +2858,14 @@ impl SourcefourWindow {
         use crate::settings::AuthMethod;
         use crate::settings_ui::GithubConnection;
 
-        let method = self.settings.github.auth_method;
-        let host = self.settings.github.host.clone();
-        let credentials = crate::ui_state::support_file("credentials.json");
         let pasted = self.token_input.read(cx).content.trim().to_string();
-
-        if method == AuthMethod::Token {
-            let Some(path) = credentials.as_deref() else {
+        if self.settings.github.auth_method == AuthMethod::Token {
+            let Some(path) = credentials_path() else {
                 return;
             };
             if !pasted.is_empty()
-                && let Err(error) = sourcefour_github::store_token(path, &host, &pasted)
+                && let Err(error) =
+                    sourcefour_github::store_token(&path, sourcefour_github::GITHUB_HOST, &pasted)
             {
                 self.github_connection = GithubConnection::Failed {
                     message: format!("The token could not be stored: {error}"),
@@ -2846,7 +2873,9 @@ impl SourcefourWindow {
                 cx.notify();
                 return;
             }
-            if pasted.is_empty() && sourcefour_github::load_token(path, &host).is_none() {
+            if pasted.is_empty()
+                && sourcefour_github::load_token(&path, sourcefour_github::GITHUB_HOST).is_none()
+            {
                 self.github_connection = GithubConnection::Failed {
                     message: String::from("Paste a personal access token first."),
                 };
@@ -2856,22 +2885,11 @@ impl SourcefourWindow {
         }
 
         self.github_connection = GithubConnection::Checking;
-        self.github_request += 1;
-        let request = self.github_request;
         cx.notify();
-        cx.spawn(async move |this, cx| {
-            let outcome = cx
-                .background_executor()
-                .spawn(async move {
-                    let token = resolve_github_token(method, &host, credentials.as_deref())?;
-                    sourcefour_github::whoami(&sourcefour_github::UreqTransport, &host, &token)
-                        .map_err(|failure| failure.message)
-                })
-                .await;
-            this.update(cx, |this, cx| {
-                if this.github_request != request {
-                    return;
-                }
+        self.fetch_github(
+            |this| &mut this.github_request,
+            |token| sourcefour_github::whoami(&sourcefour_github::UreqTransport, &token),
+            |this, outcome, cx| {
                 this.github_connection = match outcome {
                     Ok(account) => GithubConnection::Connected {
                         login: account.login,
@@ -2879,6 +2897,39 @@ impl SourcefourWindow {
                     Err(message) => GithubConnection::Failed { message },
                 };
                 cx.notify();
+            },
+            cx,
+        );
+    }
+
+    /// Runs one GitHub read on the background executor: bumps the surface's
+    /// request counter, resolves the token there, and drops stale results.
+    /// Every read surface shares this skeleton so staleness has exactly one
+    /// implementation.
+    fn fetch_github<T: Send + 'static>(
+        &mut self,
+        counter: fn(&mut Self) -> &mut u64,
+        call: impl FnOnce(String) -> Result<T, String> + Send + 'static,
+        apply: impl FnOnce(&mut Self, Result<T, String>, &mut gpui::Context<Self>) + 'static,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let method = self.settings.github.auth_method;
+        let credentials = credentials_path();
+        *counter(self) += 1;
+        let request = *counter(self);
+        cx.spawn(async move |this, cx| {
+            let outcome = cx
+                .background_executor()
+                .spawn(async move {
+                    let token = resolve_github_token(method, credentials.as_deref())?;
+                    call(token)
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                if *counter(this) != request {
+                    return;
+                }
+                apply(this, outcome, cx);
             })
             .ok();
         })
@@ -2892,6 +2943,7 @@ impl SourcefourWindow {
         if !self.settings.github.enabled {
             self.github_pulls = None;
             self.github_checks = None;
+            self.github_runs = None;
             cx.notify();
             return;
         }
@@ -2919,49 +2971,29 @@ impl SourcefourWindow {
         let Some(remote) = self.github_remote.clone() else {
             return;
         };
-        if !force
-            && self
-                .github_runs
-                .as_ref()
-                .is_some_and(|(_, at)| github_cache_fresh(*at, std::time::Instant::now()))
-        {
+        if !force && self.github_runs.as_ref().is_some_and(Cached::fresh) {
             return;
         }
-        let method = self.settings.github.auth_method;
-        let host = self.settings.github.host.clone();
-        let credentials = crate::ui_state::support_file("credentials.json");
-        self.github_runs_request += 1;
-        let request = self.github_runs_request;
-        cx.spawn(async move |this, cx| {
-            let outcome = cx
-                .background_executor()
-                .spawn(async move {
-                    let token = resolve_github_token(method, &host, credentials.as_deref())?;
-                    sourcefour_github::workflow_runs(
-                        &sourcefour_github::UreqTransport,
-                        &remote,
-                        &token,
-                        20,
-                    )
-                    .map_err(|failure| failure.message)
-                })
-                .await;
-            this.update(cx, |this, cx| {
-                if this.github_runs_request != request {
-                    return;
+        self.fetch_github(
+            |this| &mut this.github_runs_request,
+            move |token| {
+                sourcefour_github::workflow_runs(
+                    &sourcefour_github::UreqTransport,
+                    &remote,
+                    &token,
+                    20,
+                )
+            },
+            |this, outcome, cx| match outcome {
+                Ok(runs) => {
+                    this.github_runs = Some(Cached::now(runs));
+                    cx.notify();
                 }
-                match outcome {
-                    Ok(runs) => {
-                        this.github_runs = Some((runs, std::time::Instant::now()));
-                        cx.notify();
-                    }
-                    // A stale list beats a section that flickers empty.
-                    Err(message) => tracing::warn!(message, "workflow runs could not load"),
-                }
-            })
-            .ok();
-        })
-        .detach();
+                // A stale list beats a section that flickers empty.
+                Err(message) => tracing::warn!(message, "workflow runs could not load"),
+            },
+            cx,
+        );
     }
 
     /// Fetches the open pull requests unless the cache is still fresh.
@@ -2969,49 +3001,25 @@ impl SourcefourWindow {
         let Some(remote) = self.github_remote.clone() else {
             return;
         };
-        if !force
-            && self
-                .github_pulls
-                .as_ref()
-                .is_some_and(|(_, at)| github_cache_fresh(*at, std::time::Instant::now()))
-        {
+        if !force && self.github_pulls.as_ref().is_some_and(Cached::fresh) {
             return;
         }
-        let method = self.settings.github.auth_method;
-        let host = self.settings.github.host.clone();
-        let credentials = crate::ui_state::support_file("credentials.json");
-        self.github_pulls_request += 1;
-        let request = self.github_pulls_request;
-        cx.spawn(async move |this, cx| {
-            let outcome = cx
-                .background_executor()
-                .spawn(async move {
-                    let token = resolve_github_token(method, &host, credentials.as_deref())?;
-                    sourcefour_github::open_pulls(
-                        &sourcefour_github::UreqTransport,
-                        &remote,
-                        &token,
-                    )
-                    .map_err(|failure| failure.message)
-                })
-                .await;
-            this.update(cx, |this, cx| {
-                if this.github_pulls_request != request {
-                    return;
+        self.fetch_github(
+            |this| &mut this.github_pulls_request,
+            move |token| {
+                sourcefour_github::open_pulls(&sourcefour_github::UreqTransport, &remote, &token)
+            },
+            |this, outcome, cx| match outcome {
+                Ok(pulls) => {
+                    this.github_pulls = Some(Cached::now(pulls));
+                    cx.notify();
                 }
-                match outcome {
-                    Ok(pulls) => {
-                        this.github_pulls = Some((pulls, std::time::Instant::now()));
-                        cx.notify();
-                    }
-                    // Stale chips beat a sidebar that flickers on every
-                    // network hiccup; the message lands in the log.
-                    Err(message) => tracing::warn!(message, "pull requests could not load"),
-                }
-            })
-            .ok();
-        })
-        .detach();
+                // Stale chips beat a sidebar that flickers on every
+                // network hiccup; the message lands in the log.
+                Err(message) => tracing::warn!(message, "pull requests could not load"),
+            },
+            cx,
+        );
     }
 
     /// Fetches the selected commit's check runs unless the cache is fresh.
@@ -3024,48 +3032,36 @@ impl SourcefourWindow {
             return;
         };
         if !force
-            && self.github_checks.as_ref().is_some_and(|(cached, _, at)| {
-                *cached == oid && github_cache_fresh(*at, std::time::Instant::now())
-            })
+            && self
+                .github_checks
+                .as_ref()
+                .is_some_and(|cache| cache.value.0 == oid && cache.fresh())
         {
             return;
         }
-        let method = self.settings.github.auth_method;
-        let host = self.settings.github.host.clone();
-        let credentials = crate::ui_state::support_file("credentials.json");
-        self.github_checks_request += 1;
-        let request = self.github_checks_request;
-        cx.spawn(async move |this, cx| {
-            let outcome = cx
-                .background_executor()
-                .spawn(async move {
-                    let token = resolve_github_token(method, &host, credentials.as_deref())?;
-                    sourcefour_github::check_runs(
-                        &sourcefour_github::UreqTransport,
-                        &remote,
-                        &token,
-                        &oid.to_hex(),
-                    )
-                    .map_err(|failure| failure.message)
-                })
-                .await;
-            this.update(cx, |this, cx| {
-                if this.github_checks_request != request {
-                    return;
-                }
-                this.github_checks = Some((oid, outcome, std::time::Instant::now()));
+        self.fetch_github(
+            |this| &mut this.github_checks_request,
+            move |token| {
+                sourcefour_github::check_runs(
+                    &sourcefour_github::UreqTransport,
+                    &remote,
+                    &token,
+                    &oid.to_hex(),
+                )
+            },
+            move |this, outcome, cx| {
+                // Failures render in the block, so they cache like results.
+                this.github_checks = Some(Cached::now((oid, outcome)));
                 cx.notify();
-            })
-            .ok();
-        })
-        .detach();
+            },
+            cx,
+        );
     }
 
     /// Deletes the stored token and forgets the connection.
     pub(crate) fn disconnect_github(&mut self, cx: &mut gpui::Context<Self>) {
-        let host = &self.settings.github.host;
-        if let Some(path) = crate::ui_state::support_file("credentials.json") {
-            sourcefour_github::delete_token(&path, host).ok();
+        if let Some(path) = credentials_path() {
+            sourcefour_github::delete_token(&path, sourcefour_github::GITHUB_HOST).ok();
         }
         self.token_input
             .update(cx, |input, cx| input.set_text("", cx));
@@ -3076,14 +3072,12 @@ impl SourcefourWindow {
 
     /// The settings overlay, while open.
     fn settings_overlay(&self, cx: &mut gpui::Context<Self>) -> Option<impl IntoElement + use<>> {
-        let view = self.settings_view.as_ref()?;
+        let section = self.settings_view?;
         Some(crate::settings_ui::overlay(
             &self.settings,
-            view.section,
-            &crate::settings_ui::GithubSectionState {
-                connection: &self.github_connection,
-                token_input: &self.token_input,
-            },
+            section,
+            &self.github_connection,
+            &self.token_input,
             &self.theme,
             &self.settings_focus,
             cx,
@@ -3160,13 +3154,7 @@ impl SourcefourWindow {
         file: &ChangedFile,
         cx: &mut gpui::Context<Self>,
     ) -> gpui::Stateful<Div> {
-        let color = match file.status {
-            ChangeKind::Added => self.theme.green,
-            ChangeKind::Deleted => self.theme.red,
-            ChangeKind::Modified => self.theme.orange,
-            ChangeKind::Renamed | ChangeKind::Copied => self.theme.purple,
-            ChangeKind::Unknown => self.theme.text_faint,
-        };
+        let color = change_color(&self.theme, file.status);
         let path = file
             .new_path
             .as_ref()
@@ -3254,9 +3242,7 @@ impl SourcefourWindow {
                     if (down.x.0 - up.x.0).abs() > 3.0 || (down.y.0 - up.y.0).abs() > 3.0 {
                         return;
                     }
-                    this.diff_view = None;
-                    this.focus.focus(window);
-                    cx.notify();
+                    this.close_diff(window, cx);
                 }))
                 .child(
                     div()
@@ -3356,13 +3342,7 @@ impl SourcefourWindow {
 
     /// The diff overlay's title bar: status, path, counts, and close.
     fn diff_header(&self, view: &DiffView, line_count: usize, cx: &mut gpui::Context<Self>) -> Div {
-        let status_color = match view.status {
-            ChangeKind::Added => self.theme.green,
-            ChangeKind::Deleted => self.theme.red,
-            ChangeKind::Modified => self.theme.orange,
-            ChangeKind::Renamed | ChangeKind::Copied => self.theme.purple,
-            ChangeKind::Unknown => self.theme.text_faint,
-        };
+        let status_color = change_color(&self.theme, view.status);
         div()
             .h(px(40.0))
             .flex_none()
@@ -3442,9 +3422,7 @@ impl SourcefourWindow {
                     .text_color(self.theme.text_secondary)
                     .hover(|style| style.bg(self.theme.bg_hover))
                     .on_click(cx.listener(|this, _, window, cx| {
-                        this.diff_view = None;
-                        this.focus.focus(window);
-                        cx.notify();
+                        this.close_diff(window, cx);
                     }))
                     .child("✕"),
             )
@@ -3791,9 +3769,7 @@ impl SourcefourWindow {
                 .justify_center()
                 .bg(gpui::black().opacity(0.55))
                 .on_click(cx.listener(|this, _, window, cx| {
-                    this.branch_dialog = None;
-                    this.focus.focus(window);
-                    cx.notify();
+                    this.close_branch_dialog(window, cx);
                 }))
                 .child(
                     div()
@@ -3920,9 +3896,7 @@ impl SourcefourWindow {
                     .text_color(self.theme.text_secondary)
                     .hover(|style| style.bg(self.theme.bg_hover))
                     .on_click(cx.listener(|this, _, window, cx| {
-                        this.branch_dialog = None;
-                        this.focus.focus(window);
-                        cx.notify();
+                        this.close_branch_dialog(window, cx);
                     }))
                     .child("Cancel"),
             )
@@ -4185,9 +4159,7 @@ impl SourcefourWindow {
             cx.notify();
         }))
         .on_action(cx.listener(|this, _: &CloseDiff, window, cx| {
-            this.diff_view = None;
-            this.focus.focus(window);
-            cx.notify();
+            this.close_diff(window, cx);
         }))
         .on_action(cx.listener(|this, _: &ToggleDetails, _, cx| {
             this.details_collapsed = !this.details_collapsed;
@@ -4586,43 +4558,6 @@ mod tests {
 
         assert_eq!(window.title, "Not a Git repository");
         assert_eq!(window.message, "No Git repository contains /opt.");
-    }
-
-    #[test]
-    fn github_caches_expire_at_the_ttl() {
-        let fetched = std::time::Instant::now();
-
-        assert!(super::github_cache_fresh(
-            fetched,
-            fetched + std::time::Duration::from_secs(59)
-        ));
-        assert!(!super::github_cache_fresh(
-            fetched,
-            fetched + std::time::Duration::from_secs(61)
-        ));
-    }
-
-    #[test]
-    fn branch_chips_find_their_pull_request_by_head() {
-        let pull = |number: u64, head: &str| sourcefour_model::PrSummary {
-            number,
-            title: String::from("t"),
-            draft: false,
-            head_branch: head.to_owned(),
-            head_sha: String::from("abc"),
-            html_url: String::from("https://example.invalid"),
-        };
-        let pulls = Some((
-            vec![pull(1, "feature/a"), pull(2, "feature/b")],
-            std::time::Instant::now(),
-        ));
-
-        assert_eq!(
-            super::pr_for_branch(pulls.as_ref(), "feature/b").map(|pull| pull.number),
-            Some(2)
-        );
-        assert_eq!(super::pr_for_branch(pulls.as_ref(), "main"), None);
-        assert_eq!(super::pr_for_branch(None, "main"), None);
     }
 
     #[test]

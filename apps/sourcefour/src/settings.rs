@@ -16,24 +16,14 @@ pub(crate) struct AppSettings {
 }
 
 /// The GitHub integration's configuration (§ post-v1 integrations).
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+///
+/// github.com only: a host setting would be dead weight until Enterprise
+/// support actually plumbs its own API base and credentials through.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 #[serde(default)]
 pub(crate) struct GithubSettings {
     pub(crate) enabled: bool,
     pub(crate) auth_method: AuthMethod,
-    /// The repository host; the REST endpoint derives from it. Reserved for
-    /// GitHub Enterprise later.
-    pub(crate) host: String,
-}
-
-impl Default for GithubSettings {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            auth_method: AuthMethod::Off,
-            host: String::from("github.com"),
-        }
-    }
 }
 
 /// How the GitHub client authenticates.
@@ -54,10 +44,7 @@ impl AppSettings {
     /// Reads settings, falling back to defaults on any failure: a missing or
     /// corrupt file must never block the window.
     pub(crate) fn load_from(path: &Path) -> Self {
-        std::fs::read_to_string(path)
-            .ok()
-            .and_then(|contents| serde_json::from_str(&contents).ok())
-            .unwrap_or_default()
+        crate::ui_state::load_json_or_default(path)
     }
 
     /// Writes the settings, creating the directory on first save.
@@ -67,11 +54,7 @@ impl AppSettings {
     /// Returns the underlying error when the file cannot be written; callers
     /// log it, because a failed save must never interrupt the user.
     pub(crate) fn save_to(&self, path: &Path) -> std::io::Result<()> {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        let json = serde_json::to_string_pretty(self).map_err(std::io::Error::other)?;
-        std::fs::write(path, json)
+        crate::ui_state::save_json_pretty(path, self)
     }
 
     /// Loads from the default per-user location.
@@ -103,7 +86,6 @@ mod tests {
             github: GithubSettings {
                 enabled: true,
                 auth_method: AuthMethod::Token,
-                host: String::from("github.example.com"),
             },
         };
 
@@ -123,7 +105,6 @@ mod tests {
 
         let absent = AppSettings::load_from(&directory.path().join("nowhere.json"));
         assert_eq!(absent, AppSettings::default());
-        assert_eq!(absent.github.host, "github.com");
 
         let broken = directory.path().join("broken.json");
         std::fs::write(&broken, "{ not json")?;
@@ -151,7 +132,6 @@ mod tests {
             AuthMethod::Off,
             "a future auth method reads as Off, not a parse failure"
         );
-        assert_eq!(loaded.github.host, "github.com", "missing fields default");
         Ok(())
     }
 }

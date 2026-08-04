@@ -5,25 +5,14 @@ use sourcefour_model::{
     CheckConclusion, CheckRun, CheckStatus, GithubAccount, PrSummary, WorkflowRun,
 };
 
-use crate::{
-    remote::GithubRemote,
-    transport::{ApiFailure, ApiFailureKind, GithubTransport},
-};
+use crate::{remote::GithubRemote, transport::GithubTransport};
 
-/// The REST endpoint host for a repository host; github.com is special-cased
-/// the way GitHub itself does it.
-fn api_base(host: &str) -> String {
-    if host == "github.com" {
-        String::from("https://api.github.com")
-    } else {
-        // The GitHub Enterprise convention, unused until GHES support lands.
-        format!("https://{host}/api/v3")
-    }
-}
+/// The github.com REST endpoint. A GitHub Enterprise host would derive its
+/// own (`https://{host}/api/v3`) if support ever lands.
+const API_BASE: &str = "https://api.github.com";
 
-fn parse<T: serde::de::DeserializeOwned>(body: &[u8]) -> Result<T, ApiFailure> {
-    serde_json::from_slice(body)
-        .map_err(|error| ApiFailure::new(ApiFailureKind::Protocol, error.to_string()))
+fn parse<T: serde::de::DeserializeOwned>(body: &[u8]) -> Result<T, String> {
+    serde_json::from_slice(body).map_err(|error| error.to_string())
 }
 
 /// Who the token authenticates as (`GET /user`), which is also the
@@ -31,18 +20,14 @@ fn parse<T: serde::de::DeserializeOwned>(body: &[u8]) -> Result<T, ApiFailure> {
 ///
 /// # Errors
 ///
-/// Returns the transport's classified failure, or `Protocol` when the
+/// Returns the transport's phrased failure, or the parse error when the
 /// response shape is foreign.
-pub fn whoami(
-    transport: &dyn GithubTransport,
-    host: &str,
-    token: &str,
-) -> Result<GithubAccount, ApiFailure> {
+pub fn whoami(transport: &dyn GithubTransport, token: &str) -> Result<GithubAccount, String> {
     #[derive(Deserialize)]
     struct User {
         login: String,
     }
-    let body = transport.get(&format!("{}/user", api_base(host)), Some(token))?;
+    let body = transport.get(&format!("{API_BASE}/user"), Some(token))?;
     let user: User = parse(&body)?;
     Ok(GithubAccount { login: user.login })
 }
@@ -57,37 +42,31 @@ pub fn open_pulls(
     transport: &dyn GithubTransport,
     remote: &GithubRemote,
     token: &str,
-) -> Result<Vec<PrSummary>, ApiFailure> {
+) -> Result<Vec<PrSummary>, String> {
     #[derive(Deserialize)]
     struct Head {
         #[serde(rename = "ref")]
         branch: String,
-        sha: String,
     }
     #[derive(Deserialize)]
     struct Pull {
         number: u64,
-        title: String,
         #[serde(default)]
         draft: bool,
         html_url: String,
         head: Head,
     }
     let url = format!(
-        "{}/repos/{}/{}/pulls?state=open&per_page=100",
-        api_base(&remote.host),
-        remote.owner,
-        remote.repo
+        "{API_BASE}/repos/{}/{}/pulls?state=open&per_page=100",
+        remote.owner, remote.repo
     );
     let pulls: Vec<Pull> = parse(&transport.get(&url, Some(token))?)?;
     Ok(pulls
         .into_iter()
         .map(|pull| PrSummary {
             number: pull.number,
-            title: pull.title,
             draft: pull.draft,
             head_branch: pull.head.branch,
-            head_sha: pull.head.sha,
             html_url: pull.html_url,
         })
         .collect())
@@ -104,7 +83,7 @@ pub fn check_runs(
     remote: &GithubRemote,
     token: &str,
     sha: &str,
-) -> Result<Vec<CheckRun>, ApiFailure> {
+) -> Result<Vec<CheckRun>, String> {
     #[derive(Deserialize)]
     struct Run {
         name: String,
@@ -117,11 +96,8 @@ pub fn check_runs(
         check_runs: Vec<Run>,
     }
     let url = format!(
-        "{}/repos/{}/{}/commits/{}/check-runs?per_page=100",
-        api_base(&remote.host),
-        remote.owner,
-        remote.repo,
-        sha
+        "{API_BASE}/repos/{}/{}/commits/{sha}/check-runs?per_page=100",
+        remote.owner, remote.repo
     );
     let page: Page = parse(&transport.get(&url, Some(token))?)?;
     Ok(page
@@ -146,7 +122,7 @@ pub fn workflow_runs(
     remote: &GithubRemote,
     token: &str,
     count: u8,
-) -> Result<Vec<WorkflowRun>, ApiFailure> {
+) -> Result<Vec<WorkflowRun>, String> {
     #[derive(Deserialize)]
     #[expect(
         clippy::struct_field_names,
@@ -166,11 +142,8 @@ pub fn workflow_runs(
         workflow_runs: Vec<Run>,
     }
     let url = format!(
-        "{}/repos/{}/{}/actions/runs?per_page={}",
-        api_base(&remote.host),
-        remote.owner,
-        remote.repo,
-        count
+        "{API_BASE}/repos/{}/{}/actions/runs?per_page={count}",
+        remote.owner, remote.repo
     );
     let page: Page = parse(&transport.get(&url, Some(token))?)?;
     Ok(page
@@ -212,10 +185,7 @@ mod tests {
     use sourcefour_model::{CheckConclusion, CheckStatus};
 
     use super::{check_runs, open_pulls, whoami, workflow_runs};
-    use crate::{
-        remote::GithubRemote,
-        transport::{ApiFailure, GithubTransport},
-    };
+    use crate::{remote::GithubRemote, transport::GithubTransport};
 
     /// Answers every GET with one canned body, recording the request.
     struct Fake {
@@ -233,7 +203,7 @@ mod tests {
     }
 
     impl GithubTransport for Fake {
-        fn get(&self, url: &str, token: Option<&str>) -> Result<Vec<u8>, ApiFailure> {
+        fn get(&self, url: &str, token: Option<&str>) -> Result<Vec<u8>, String> {
             self.seen
                 .borrow_mut()
                 .push((url.to_owned(), token.map(str::to_owned)));
@@ -243,17 +213,16 @@ mod tests {
 
     fn remote() -> GithubRemote {
         GithubRemote {
-            host: String::from("github.com"),
             owner: String::from("HelgeSverre"),
             repo: String::from("sourcefour"),
         }
     }
 
     #[test]
-    fn whoami_reads_the_login_and_authenticates() -> Result<(), ApiFailure> {
+    fn whoami_reads_the_login_and_authenticates() -> Result<(), String> {
         let fake = Fake::new(r#"{"login": "HelgeSverre", "id": 1, "type": "User"}"#);
 
-        let account = whoami(&fake, "github.com", "ghp_token")?;
+        let account = whoami(&fake, "ghp_token")?;
 
         assert_eq!(account.login, "HelgeSverre");
         let seen = fake.seen.borrow();
@@ -263,7 +232,7 @@ mod tests {
     }
 
     #[test]
-    fn open_pulls_map_by_head_branch() -> Result<(), ApiFailure> {
+    fn open_pulls_map_by_head_branch() -> Result<(), String> {
         // Trimmed from a real GET /repos/{o}/{r}/pulls response.
         let fake = Fake::new(
             r#"[
@@ -304,7 +273,7 @@ mod tests {
     }
 
     #[test]
-    fn check_runs_fold_status_and_conclusion() -> Result<(), ApiFailure> {
+    fn check_runs_fold_status_and_conclusion() -> Result<(), String> {
         let fake = Fake::new(
             r#"{
                 "total_count": 3,
@@ -341,7 +310,7 @@ mod tests {
     }
 
     #[test]
-    fn workflow_runs_carry_branch_and_number() -> Result<(), ApiFailure> {
+    fn workflow_runs_carry_branch_and_number() -> Result<(), String> {
         let fake = Fake::new(
             r#"{
                 "total_count": 1,
@@ -368,17 +337,11 @@ mod tests {
     }
 
     #[test]
-    fn a_foreign_response_shape_is_a_protocol_failure() {
+    fn a_foreign_response_shape_is_a_parse_failure() {
         let fake = Fake::new(r#"{"message": "Bad credentials"}"#);
 
         let result = open_pulls(&fake, &remote(), "ghp_token");
 
-        assert!(matches!(
-            result,
-            Err(ApiFailure {
-                kind: crate::transport::ApiFailureKind::Protocol,
-                ..
-            })
-        ));
+        assert!(result.is_err(), "an object where a list belongs must fail");
     }
 }

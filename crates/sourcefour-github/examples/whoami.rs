@@ -17,10 +17,10 @@ fn main() {
         "pipe a token in, e.g. `gh auth token | …`"
     );
 
-    match sourcefour_github::whoami(&sourcefour_github::UreqTransport, "github.com", token) {
+    match sourcefour_github::whoami(&sourcefour_github::UreqTransport, token) {
         Ok(account) => println!("connected as {}", account.login),
         Err(failure) => {
-            eprintln!("{:?}: {}", failure.kind, failure.message);
+            eprintln!("{failure}");
             std::process::exit(1);
         }
     }

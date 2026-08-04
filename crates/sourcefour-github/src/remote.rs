@@ -1,10 +1,11 @@
 //! Mapping a git remote URL onto a GitHub repository identity.
 
-/// The GitHub repository a remote points at.
+/// The github.com repository a remote points at.
+///
+/// Only github.com parses for now; GitHub Enterprise hosts would need their
+/// own API base and credential entries before accepting them here.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct GithubRemote {
-    /// The web host, `github.com` for now.
-    pub host: String,
     pub owner: String,
     pub repo: String,
 }
@@ -29,7 +30,7 @@ impl GithubRemote {
     }
 
     fn from_parts(host: &str, path: &str) -> Option<Self> {
-        if host != "github.com" {
+        if host != crate::GITHUB_HOST {
             return None;
         }
         let path = path.trim_end_matches('/');
@@ -41,7 +42,6 @@ impl GithubRemote {
             return None;
         }
         Some(Self {
-            host: host.to_owned(),
             owner: owner.to_owned(),
             repo: repo.to_owned(),
         })
@@ -54,7 +54,6 @@ mod tests {
 
     fn remote(owner: &str, repo: &str) -> GithubRemote {
         GithubRemote {
-            host: String::from("github.com"),
             owner: owner.to_owned(),
             repo: repo.to_owned(),
         }
