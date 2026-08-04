@@ -6,6 +6,7 @@
 
 mod discover;
 mod refs;
+mod session;
 mod worktrees;
 
 use std::sync::atomic::AtomicBool;
@@ -13,6 +14,7 @@ use std::sync::atomic::AtomicBool;
 pub use crate::{
     discover::{discover, display_name},
     refs::{References, references},
+    session::snapshot,
     worktrees::worktrees,
 };
 
