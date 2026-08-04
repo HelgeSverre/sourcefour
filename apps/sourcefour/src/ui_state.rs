@@ -17,6 +17,8 @@ pub(crate) struct UiState {
     /// Section names in display order; ignored unless it names all sections.
     pub(crate) section_order: Option<Vec<String>>,
     pub(crate) collapsed_sections: Vec<String>,
+    /// "unified" or "split".
+    pub(crate) diff_mode: Option<String>,
 }
 
 impl UiState {
@@ -89,6 +91,7 @@ mod tests {
                 String::from("branches"),
             ]),
             collapsed_sections: vec![String::from("branches")],
+            diff_mode: Some(String::from("split")),
         };
 
         state.save_to(&path)?;

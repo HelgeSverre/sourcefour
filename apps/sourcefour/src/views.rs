@@ -17,8 +17,8 @@ use crate::{
     history::{HistoryState, is_scoped_to, refreshed_scope, relative_date, toggled_scope},
     panels::{PanelSizes, Splitter},
     theme::{
-        HEADER_HEIGHT, HISTORY_ROW_HEIGHT, SPLITTER_WIDTH, STATUS_HEIGHT, TITLEBAR_HEIGHT,
-        TOOLBAR_HEIGHT, Theme,
+        HEADER_HEIGHT, HISTORY_ROW_HEIGHT, MONO_FONT, SPLITTER_WIDTH, STATUS_HEIGHT,
+        TITLEBAR_HEIGHT, TOOLBAR_HEIGHT, Theme,
     },
 };
 
@@ -56,6 +56,8 @@ pub(crate) struct SourcefourWindow {
     diff_request: u64,
     /// Focus target while the diff overlay is open, so Escape closes it.
     diff_focus: FocusHandle,
+    /// The last chosen diff layout, persisted across launches.
+    preferred_diff_mode: DiffMode,
     list_scroll: UniformListScrollHandle,
     focus: FocusHandle,
     /// The §4.7 filter field.
@@ -143,12 +145,50 @@ impl Render for SectionDragPreview {
     }
 }
 
+/// How the diff overlay lays out its lines.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DiffMode {
+    Unified,
+    Split,
+}
+
+impl DiffMode {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Unified => "unified",
+            Self::Split => "split",
+        }
+    }
+
+    fn from_name(name: Option<&str>) -> Self {
+        match name {
+            Some("split") => Self::Split,
+            _ => Self::Unified,
+        }
+    }
+}
+
 /// One open file diff: header info plus content once loaded (§6.11).
 struct DiffView {
     title: String,
     status: ChangeKind,
     /// `None` while the read is in flight.
     content: Option<DiffContent>,
+    mode: DiffMode,
+    /// Side-by-side rows, computed once per content when split is shown.
+    split: Option<Vec<crate::diff_split::SplitRow>>,
+}
+
+impl DiffView {
+    /// Builds the split pairing when it is needed and not yet cached.
+    fn ensure_split(&mut self) {
+        if self.split.is_some() || self.mode != DiffMode::Split {
+            return;
+        }
+        if let Some(DiffContent::Text { lines }) = &self.content {
+            self.split = Some(crate::diff_split::split_rows(lines));
+        }
+    }
 }
 
 /// Assembled text for the details header (§6.10).
@@ -558,6 +598,7 @@ impl SourcefourWindow {
             diff_view: None,
             diff_request: 0,
             diff_focus: cx.focus_handle(),
+            preferred_diff_mode: DiffMode::Unified,
             list_scroll: UniformListScrollHandle::new(),
             focus: cx.focus_handle(),
             filter_input: cx
@@ -575,6 +616,7 @@ impl SourcefourWindow {
         let state = crate::ui_state::UiState::load();
         window.sections.apply(&state);
         window.panels.apply(&state);
+        window.preferred_diff_mode = DiffMode::from_name(state.diff_mode.as_deref());
         if launch.demo {
             // The fixture is seeded as if a traversal had already completed, so
             // every capture goes through the real rendering path (§12.4).
@@ -1412,6 +1454,7 @@ impl SourcefourWindow {
                     .collect(),
             ),
             collapsed_sections: self.sections.collapsed_names(),
+            diff_mode: Some(self.preferred_diff_mode.name().to_owned()),
         };
         cx.background_executor()
             .spawn(async move { state.save() })
@@ -1839,6 +1882,8 @@ impl SourcefourWindow {
             title: request.path.display_lossy(),
             status: file.status,
             content: None,
+            mode: self.preferred_diff_mode,
+            split: None,
         });
         self.diff_request += 1;
         let token = self.diff_request;
@@ -1859,6 +1904,8 @@ impl SourcefourWindow {
                             message: failure.user.message,
                         },
                     });
+                    view.split = None;
+                    view.ensure_split();
                 }
                 cx.notify();
             })
@@ -1944,6 +1991,23 @@ impl SourcefourWindow {
             Some(DiffContent::Text { lines }) if lines.is_empty() => {
                 self.diff_notice("No textual changes.").into_any_element()
             }
+            Some(DiffContent::Text { .. }) if view.mode == DiffMode::Split => uniform_list(
+                cx.entity(),
+                "diff-split-rows",
+                view.split.as_ref().map_or(0, Vec::len),
+                move |this, range, _window, _cx| {
+                    let Some(rows) = this.diff_view.as_ref().and_then(|view| view.split.as_ref())
+                    else {
+                        return Vec::new();
+                    };
+                    range
+                        .filter_map(|index| rows.get(index).cloned())
+                        .map(|row| this.split_row_view(&row))
+                        .collect()
+                },
+            )
+            .size_full()
+            .into_any_element(),
             Some(DiffContent::Text { .. }) => uniform_list(
                 cx.entity(),
                 "diff-lines",
@@ -2054,6 +2118,17 @@ impl SourcefourWindow {
                     .text_color(self.theme.text_primary)
                     .child(view.title.clone()),
             )
+            .child(
+                div()
+                    .flex_none()
+                    .flex()
+                    .rounded(px(5.0))
+                    .border_1()
+                    .border_color(self.theme.border_strong)
+                    .overflow_hidden()
+                    .child(self.diff_mode_button("Unified", DiffMode::Unified, view.mode, cx))
+                    .child(self.diff_mode_button("Split", DiffMode::Split, view.mode, cx)),
+            )
             .children((line_count > 0).then(|| {
                 div()
                     .flex_none()
@@ -2087,6 +2162,109 @@ impl SourcefourWindow {
             )
     }
 
+    /// One segment of the unified/split toggle.
+    fn diff_mode_button(
+        &self,
+        label: &'static str,
+        mode: DiffMode,
+        active: DiffMode,
+        cx: &mut gpui::Context<Self>,
+    ) -> gpui::Stateful<Div> {
+        let selected = mode == active;
+        div()
+            .id(label)
+            .px(px(9.0))
+            .py(px(2.0))
+            .cursor_pointer()
+            .text_size(px(10.5))
+            .bg(if selected {
+                self.theme.bg_selected
+            } else {
+                self.theme.bg_list
+            })
+            .text_color(if selected {
+                self.theme.text_primary
+            } else {
+                self.theme.text_faint
+            })
+            .on_click(cx.listener(move |this, _, _, cx| {
+                if let Some(view) = &mut this.diff_view {
+                    view.mode = mode;
+                    view.ensure_split();
+                }
+                this.preferred_diff_mode = mode;
+                this.persist_ui_state(cx);
+                cx.notify();
+            }))
+            .child(label)
+    }
+
+    /// One visual row of the side-by-side view.
+    fn split_row_view(&self, row: &crate::diff_split::SplitRow) -> Div {
+        if let Some(hunk) = &row.hunk {
+            return div()
+                .h(px(20.0))
+                .w_full()
+                .flex()
+                .items_center()
+                .px(px(10.0))
+                .bg(self.theme.bg_hover)
+                .font_family(MONO_FONT)
+                .text_size(px(11.0))
+                .text_color(self.theme.accent)
+                .child(hunk.clone());
+        }
+        div()
+            .h(px(20.0))
+            .w_full()
+            .flex()
+            .child(self.split_half(row.left.as_ref(), false))
+            .child(div().w(px(1.0)).flex_none().h_full().bg(self.theme.border))
+            .child(self.split_half(row.right.as_ref(), true))
+    }
+
+    /// One half of a split row: number, marker tint, and content.
+    fn split_half(&self, side: Option<&crate::diff_split::SplitSide>, right: bool) -> Div {
+        let base = div().flex_1().min_w(px(1.0)).h_full().flex().items_center();
+        let Some(side) = side else {
+            return base.bg(self.theme.bg_panel.opacity(0.4));
+        };
+        let (text_color, background) = match side.kind {
+            DiffLineKind::Addition if right => {
+                (self.theme.green, Some(self.theme.green.opacity(0.08)))
+            }
+            DiffLineKind::Deletion if !right => {
+                (self.theme.red, Some(self.theme.red.opacity(0.08)))
+            }
+            _ => (self.theme.text_secondary, None),
+        };
+        base.when_some(background, gpui::Styled::bg)
+            .child(
+                div()
+                    .w(px(44.0))
+                    .flex_none()
+                    .pr(px(6.0))
+                    .font_family(MONO_FONT)
+                    .text_size(px(10.5))
+                    .text_color(self.theme.text_faint)
+                    .child(
+                        side.number
+                            .map_or_else(String::new, |number| number.to_string()),
+                    ),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(1.0))
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .font_family(MONO_FONT)
+                    .text_size(px(11.0))
+                    .text_color(text_color)
+                    .child(side.text.clone()),
+            )
+    }
+
     /// A centered message replacing diff lines when there are none to show.
     fn diff_notice(&self, message: impl Into<gpui::SharedString>) -> Div {
         div()
@@ -2114,6 +2292,7 @@ impl SourcefourWindow {
                 .w(px(44.0))
                 .flex_none()
                 .pr(px(6.0))
+                .font_family(MONO_FONT)
                 .text_size(px(10.5))
                 .text_color(self.theme.text_faint)
                 .child(value.map_or_else(String::new, |value| value.to_string()))
@@ -2130,7 +2309,8 @@ impl SourcefourWindow {
                 div()
                     .w(px(14.0))
                     .flex_none()
-                    .text_size(px(11.5))
+                    .font_family(MONO_FONT)
+                    .text_size(px(11.0))
                     .text_color(text_color)
                     .child(marker),
             )
@@ -2140,7 +2320,8 @@ impl SourcefourWindow {
                     .min_w(px(1.0))
                     .overflow_hidden()
                     .whitespace_nowrap()
-                    .text_size(px(11.5))
+                    .font_family(MONO_FONT)
+                    .text_size(px(11.0))
                     .text_color(text_color)
                     .child(line.text.clone()),
             )
