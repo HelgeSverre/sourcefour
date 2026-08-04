@@ -745,37 +745,55 @@ pub enum OperationOutcome {
     },
 }
 
+/// Number of distinct graph line colors a renderer must provide.
+///
+/// Colors are carried by a continuing graph line rather than derived from a
+/// lane index, so a line keeps its color when it shifts lanes.
+pub const GRAPH_COLOR_COUNT: u8 = 6;
+
+/// Highest lane index the renderer will lay out before degrading.
+///
+/// Malformed or pathological input must not translate into unbounded geometry.
+pub const GRAPH_MAX_LANES: u16 = 128;
+
 /// Semantic graph row emitted atomically with its commit row.
+///
+/// Rows are positional: a batch's `graph_rows` parallel its `rows`, so the
+/// commit identity lives on the commit row rather than being duplicated here.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct GraphRow {
-    /// Commit associated with this row.
-    pub oid: Oid,
     /// Stable lane containing the commit node.
-    pub lane: u32,
+    pub node_lane: u16,
+    /// Color index of the line owning the node, below `GRAPH_COLOR_COUNT`.
+    pub node_color: u8,
     /// Per-row lane segments without UI coordinates.
     pub segments: SmallVec<[GraphSegment; 4]>,
+    /// Row properties a painter needs but cannot infer from segments alone.
+    pub flags: GraphFlags,
 }
 
-/// A graph edge or node expressed in stable lane indices.
+/// A graph primitive expressed in stable lane indices, never pixels.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct GraphSegment {
-    /// Lane at the row's upper boundary.
-    pub from_lane: u32,
-    /// Lane at the row's lower boundary.
-    pub to_lane: u32,
-    /// Semantic segment type.
-    pub kind: GraphSegmentKind,
+pub enum GraphSegment {
+    /// A line passing straight through the row.
+    Vertical { lane: u16, color: u8 },
+    /// A line leaving the node's lane toward an additional parent.
+    Fork { from: u16, to: u16, color: u8 },
+    /// A merge-parent edge arriving in the node's lane.
+    Merge { from: u16, to: u16, color: u8 },
+    /// A line that ends at this row, including a filtered-out parent stub.
+    Terminate { lane: u16, color: u8 },
 }
 
-/// Semantic graph primitive that a renderer later converts to geometry.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum GraphSegmentKind {
-    /// A continuing parent edge.
-    Parent,
-    /// The visible commit node.
-    Node,
-    /// A merge-parent edge.
-    Merge,
+/// Row properties that affect painting but are not edges.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct GraphFlags {
+    /// The commit has more than one parent.
+    pub is_merge: bool,
+    /// The commit has no parents.
+    pub is_root: bool,
+    /// Traversal stopped here because the repository is shallow.
+    pub is_shallow_boundary: bool,
 }
 
 /// Incremental output from a persistent history cursor.

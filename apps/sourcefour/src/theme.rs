@@ -1,4 +1,5 @@
 use gpui::{Hsla, rgb};
+use sourcefour_model::GRAPH_COLOR_COUNT;
 
 pub(crate) const INITIAL_WIDTH: f32 = 1280.0;
 pub(crate) const INITIAL_HEIGHT: f32 = 800.0;
@@ -34,7 +35,8 @@ pub(crate) struct Theme {
     pub(crate) purple: Hsla,
     pub(crate) red: Hsla,
     pub(crate) cyan: Hsla,
-    pub(crate) graph_lanes: [Hsla; 6],
+    /// Sized by the model so a graph color index can never fall outside it.
+    pub(crate) graph_lanes: [Hsla; GRAPH_COLOR_COUNT as usize],
 }
 
 impl Theme {
