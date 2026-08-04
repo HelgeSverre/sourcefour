@@ -19,6 +19,15 @@ pub trait GithubTransport {
     ///
     /// See [`GithubTransport::get`].
     fn post(&self, url: &str, token: Option<&str>, body: &str) -> Result<Vec<u8>, String>;
+
+    /// Fetches a resource that answers with a redirect to a signed URL —
+    /// the log-download shape. The signed target is fetched bare, because
+    /// forwarding Authorization makes the blob store reject the request.
+    ///
+    /// # Errors
+    ///
+    /// See [`GithubTransport::get`].
+    fn download(&self, url: &str, token: Option<&str>) -> Result<Vec<u8>, String>;
 }
 
 /// The shipping transport. Blocking by design: callers run it on the
@@ -32,6 +41,19 @@ impl GithubTransport for UreqTransport {
 
     fn post(&self, url: &str, token: Option<&str>, body: &str) -> Result<Vec<u8>, String> {
         read_response(prepared(ureq::post(url), token).send_string(body))
+    }
+
+    fn download(&self, url: &str, token: Option<&str>) -> Result<Vec<u8>, String> {
+        let agent = ureq::AgentBuilder::new().redirects(0).build();
+        match prepared(agent.get(url), token).call() {
+            Ok(response) if (300..400).contains(&response.status()) => {
+                let Some(target) = response.header("location").map(str::to_owned) else {
+                    return Err(String::from("GitHub redirected without a target."));
+                };
+                read_response(agent.get(&target).call())
+            }
+            other => read_response(other),
+        }
     }
 }
 

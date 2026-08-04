@@ -1009,15 +1009,54 @@ pub struct CheckRun {
 /// One GitHub Actions workflow run.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WorkflowRun {
+    /// The run's API identity, for fetching its jobs.
+    pub id: u64,
     /// The workflow's name, e.g. `CI`.
     pub name: String,
+    /// The commit subject or PR title GitHub displays for the run.
+    pub display_title: String,
     pub run_number: u64,
+    /// What triggered the run, e.g. `push`.
+    pub event: String,
+    /// Who triggered the run.
+    pub actor: String,
     /// The branch the run was triggered on.
     pub branch: String,
     pub sha: String,
     pub status: CheckStatus,
+    /// When the run started, epoch seconds.
+    pub started_at: Option<i64>,
+    /// When the run finished, epoch seconds; `None` while it runs.
+    pub completed_at: Option<i64>,
     /// The run's page, for click-through.
     pub html_url: String,
+}
+
+/// One job of a workflow run.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WorkflowJob {
+    /// The job's API identity, for fetching its log.
+    pub id: u64,
+    pub name: String,
+    pub status: CheckStatus,
+    /// When the job started, epoch seconds.
+    pub started_at: Option<i64>,
+    /// When the job finished, epoch seconds; `None` while it runs.
+    pub completed_at: Option<i64>,
+    pub steps: Vec<WorkflowStep>,
+    /// The job's page, for click-through.
+    pub html_url: String,
+}
+
+/// One step of a job.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WorkflowStep {
+    pub name: String,
+    pub status: CheckStatus,
+    /// When the step started, epoch seconds.
+    pub started_at: Option<i64>,
+    /// When the step finished, epoch seconds.
+    pub completed_at: Option<i64>,
 }
 
 #[cfg(test)]

@@ -7,11 +7,14 @@
 
 mod api;
 mod credentials;
+mod log;
 mod remote;
+mod time;
 mod transport;
 
-pub use api::{check_runs, commit_states, open_pulls, whoami, workflow_runs};
+pub use api::{check_runs, commit_states, job_log, open_pulls, run_jobs, whoami, workflow_runs};
 pub use credentials::{delete_token, gh_cli_token, load_token, store_token};
+pub use log::{first_error, split_timestamp, step_slice};
 pub use remote::GithubRemote;
 pub use transport::{GithubTransport, UreqTransport};
 

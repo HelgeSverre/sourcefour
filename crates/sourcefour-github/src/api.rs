@@ -4,8 +4,11 @@ use serde::Deserialize;
 use std::collections::HashMap;
 
 use sourcefour_model::{
-    CheckConclusion, CheckRun, CheckStatus, GithubAccount, Oid, PrSummary, WorkflowRun,
+    CheckConclusion, CheckRun, CheckStatus, GithubAccount, Oid, PrSummary, WorkflowJob,
+    WorkflowRun, WorkflowStep,
 };
+
+use crate::time::parse_iso8601;
 
 use crate::{remote::GithubRemote, transport::GithubTransport};
 
@@ -126,17 +129,27 @@ pub fn workflow_runs(
     count: u8,
 ) -> Result<Vec<WorkflowRun>, String> {
     #[derive(Deserialize)]
+    struct Actor {
+        login: String,
+    }
+    #[derive(Deserialize)]
     #[expect(
         clippy::struct_field_names,
         reason = "field names mirror GitHub's JSON exactly"
     )]
     struct Run {
+        id: u64,
         name: String,
+        display_title: String,
         run_number: u64,
+        event: String,
+        actor: Option<Actor>,
         head_branch: String,
         head_sha: String,
         status: String,
         conclusion: Option<String>,
+        run_started_at: Option<String>,
+        updated_at: Option<String>,
         html_url: String,
     }
     #[derive(Deserialize)]
@@ -151,13 +164,26 @@ pub fn workflow_runs(
     Ok(page
         .workflow_runs
         .into_iter()
-        .map(|run| WorkflowRun {
-            name: run.name,
-            run_number: run.run_number,
-            branch: run.head_branch,
-            sha: run.head_sha,
-            status: status(&run.status, run.conclusion.as_deref()),
-            html_url: run.html_url,
+        .map(|run| {
+            let state = status(&run.status, run.conclusion.as_deref());
+            WorkflowRun {
+                id: run.id,
+                name: run.name,
+                display_title: run.display_title,
+                run_number: run.run_number,
+                event: run.event,
+                actor: run.actor.map(|actor| actor.login).unwrap_or_default(),
+                branch: run.head_branch,
+                sha: run.head_sha,
+                status: state,
+                started_at: run.run_started_at.as_deref().and_then(parse_iso8601),
+                // Runs have no completion field; the last update is it once
+                // the run has completed.
+                completed_at: matches!(state, CheckStatus::Completed(_))
+                    .then(|| run.updated_at.as_deref().and_then(parse_iso8601))
+                    .flatten(),
+                html_url: run.html_url,
+            }
         })
         .collect())
 }
@@ -246,6 +272,91 @@ pub fn commit_states(
     Ok(states)
 }
 
+/// The jobs of one run, with their steps and timing
+/// (`GET /repos/{owner}/{repo}/actions/runs/{run_id}/jobs`).
+///
+/// # Errors
+///
+/// See [`whoami`].
+pub fn run_jobs(
+    transport: &dyn GithubTransport,
+    remote: &GithubRemote,
+    token: &str,
+    run_id: u64,
+) -> Result<Vec<WorkflowJob>, String> {
+    #[derive(Deserialize)]
+    struct Step {
+        name: String,
+        status: String,
+        conclusion: Option<String>,
+        started_at: Option<String>,
+        completed_at: Option<String>,
+    }
+    #[derive(Deserialize)]
+    struct Job {
+        id: u64,
+        name: String,
+        status: String,
+        conclusion: Option<String>,
+        started_at: Option<String>,
+        completed_at: Option<String>,
+        steps: Option<Vec<Step>>,
+        html_url: String,
+    }
+    #[derive(Deserialize)]
+    struct Page {
+        jobs: Vec<Job>,
+    }
+    let url = format!(
+        "{API_BASE}/repos/{}/{}/actions/runs/{run_id}/jobs?per_page=100",
+        remote.owner, remote.repo
+    );
+    let page: Page = parse(&transport.get(&url, Some(token))?)?;
+    Ok(page
+        .jobs
+        .into_iter()
+        .map(|job| WorkflowJob {
+            id: job.id,
+            name: job.name,
+            status: status(&job.status, job.conclusion.as_deref()),
+            started_at: job.started_at.as_deref().and_then(parse_iso8601),
+            completed_at: job.completed_at.as_deref().and_then(parse_iso8601),
+            steps: job
+                .steps
+                .unwrap_or_default()
+                .into_iter()
+                .map(|step| WorkflowStep {
+                    name: step.name,
+                    status: status(&step.status, step.conclusion.as_deref()),
+                    started_at: step.started_at.as_deref().and_then(parse_iso8601),
+                    completed_at: step.completed_at.as_deref().and_then(parse_iso8601),
+                })
+                .collect(),
+            html_url: job.html_url,
+        })
+        .collect())
+}
+
+/// One job's complete plaintext log, timestamps included
+/// (`GET /repos/{owner}/{repo}/actions/jobs/{job_id}/logs`, via redirect).
+///
+/// # Errors
+///
+/// See [`whoami`].
+pub fn job_log(
+    transport: &dyn GithubTransport,
+    remote: &GithubRemote,
+    token: &str,
+    job_id: u64,
+) -> Result<String, String> {
+    let url = format!(
+        "{API_BASE}/repos/{}/{}/actions/jobs/{job_id}/logs",
+        remote.owner, remote.repo
+    );
+    let bytes = transport.download(&url, Some(token))?;
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
+
 /// GitHub's two-field status/conclusion pair as one typed state.
 fn status(status: &str, conclusion: Option<&str>) -> CheckStatus {
     match status {
@@ -300,6 +411,13 @@ mod tests {
             self.seen
                 .borrow_mut()
                 .push((format!("{url} {body}"), token.map(str::to_owned)));
+            Ok(self.body.as_bytes().to_vec())
+        }
+
+        fn download(&self, url: &str, token: Option<&str>) -> Result<Vec<u8>, String> {
+            self.seen
+                .borrow_mut()
+                .push((url.to_owned(), token.map(str::to_owned)));
             Ok(self.body.as_bytes().to_vec())
         }
     }
@@ -403,14 +521,18 @@ mod tests {
     }
 
     #[test]
-    fn workflow_runs_carry_branch_and_number() -> Result<(), String> {
+    fn workflow_runs_carry_identity_title_and_timing() -> Result<(), String> {
         let fake = Fake::new(
             r#"{
                 "total_count": 1,
                 "workflow_runs": [
-                    {"name": "CI", "run_number": 128, "head_branch": "main",
-                     "head_sha": "abc123", "status": "completed", "conclusion": "failure",
-                     "html_url": "https://github.com/HelgeSverre/sourcefour/actions/runs/9"}
+                    {"id": 9001, "name": "CI", "display_title": "fix: Windows paths",
+                     "run_number": 128, "event": "push", "actor": {"login": "HelgeSverre"},
+                     "head_branch": "main", "head_sha": "abc123",
+                     "status": "completed", "conclusion": "failure",
+                     "run_started_at": "2026-08-04T14:30:00Z",
+                     "updated_at": "2026-08-04T14:33:42Z",
+                     "html_url": "https://github.com/HelgeSverre/sourcefour/actions/runs/9001"}
                 ]
             }"#,
         );
@@ -418,14 +540,66 @@ mod tests {
         let runs = workflow_runs(&fake, &remote(), "ghp_token", 25)?;
 
         assert_eq!(runs.len(), 1);
-        assert_eq!(runs[0].name, "CI");
+        assert_eq!(runs[0].id, 9001);
+        assert_eq!(runs[0].display_title, "fix: Windows paths");
+        assert_eq!(runs[0].event, "push");
+        assert_eq!(runs[0].actor, "HelgeSverre");
         assert_eq!(runs[0].run_number, 128);
-        assert_eq!(runs[0].branch, "main");
         assert_eq!(
             runs[0].status,
             CheckStatus::Completed(CheckConclusion::Failure)
         );
+        assert_eq!(
+            runs[0].completed_at.unwrap() - runs[0].started_at.unwrap(),
+            222,
+            "run wall time comes from started/updated"
+        );
         assert!(fake.seen.borrow()[0].0.ends_with("per_page=25"));
+        Ok(())
+    }
+
+    #[test]
+    fn run_jobs_carry_steps_and_timing() -> Result<(), String> {
+        let fake = Fake::new(
+            r#"{
+                "total_count": 2,
+                "jobs": [
+                    {"id": 71, "name": "quality (windows-latest)", "status": "completed",
+                     "conclusion": "failure",
+                     "started_at": "2026-08-04T14:30:03Z", "completed_at": "2026-08-04T14:32:01Z",
+                     "html_url": "https://github.com/HelgeSverre/sourcefour/runs/71",
+                     "steps": [
+                        {"name": "Checkout", "status": "completed", "conclusion": "success",
+                         "started_at": "2026-08-04T14:30:04Z", "completed_at": "2026-08-04T14:30:08Z"},
+                        {"name": "cargo clippy", "status": "completed", "conclusion": "failure",
+                         "started_at": "2026-08-04T14:30:59Z", "completed_at": "2026-08-04T14:32:01Z"}
+                     ]},
+                    {"id": 72, "name": "package", "status": "completed", "conclusion": "skipped",
+                     "started_at": null, "completed_at": null,
+                     "html_url": "https://github.com/HelgeSverre/sourcefour/runs/72",
+                     "steps": null}
+                ]
+            }"#,
+        );
+
+        let jobs = super::run_jobs(&fake, &remote(), "ghp_token", 9001)?;
+
+        assert_eq!(jobs.len(), 2);
+        assert_eq!(jobs[0].name, "quality (windows-latest)");
+        assert_eq!(
+            jobs[0].status,
+            CheckStatus::Completed(CheckConclusion::Failure)
+        );
+        assert_eq!(jobs[0].steps.len(), 2);
+        assert_eq!(
+            jobs[0].steps[1].completed_at.unwrap() - jobs[0].steps[1].started_at.unwrap(),
+            62
+        );
+        assert!(jobs[1].steps.is_empty(), "null steps read as none");
+        assert!(
+            fake.seen.borrow()[0].0.contains("/actions/runs/9001/jobs"),
+            "the run id names the jobs endpoint"
+        );
         Ok(())
     }
 
@@ -460,6 +634,21 @@ mod tests {
         assert!(
             seen[0].0.contains(&oids[3].to_hex()),
             "every oid is asked for"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn job_logs_download_from_the_jobs_endpoint() -> Result<(), String> {
+        let fake = Fake::new("2026-08-04T14:32:41.0000000Z error: it broke\n");
+
+        let log = super::job_log(&fake, &remote(), "ghp_token", 71)?;
+
+        assert!(log.contains("error: it broke"));
+        assert!(
+            fake.seen.borrow()[0]
+                .0
+                .ends_with("/repos/HelgeSverre/sourcefour/actions/jobs/71/logs")
         );
         Ok(())
     }
