@@ -122,32 +122,19 @@ impl SourcefourWindow {
             .branch_start()
             .map_or_else(|| String::from("HEAD"), |oid| oid.abbreviated(9));
         Some(
-            div()
-                .id("branch-overlay")
-                .occlude()
-                .absolute()
-                .inset_0()
-                .flex()
+            super::modal_backdrop("branch-overlay", &self.theme)
                 .items_center()
                 .justify_center()
-                .bg(self.theme.scrim())
                 .on_click(cx.listener(|this, _, window, cx| {
                     this.close_branch_dialog(window, cx);
                 }))
                 .child(
-                    div()
-                        .id("branch-panel")
+                    super::modal_panel("branch-panel", &self.theme)
                         .w(px(400.0))
                         .flex()
                         .flex_col()
                         .gap(px(10.0))
                         .p(px(16.0))
-                        .rounded(px(10.0))
-                        .border_1()
-                        .border_color(self.theme.border_strong)
-                        .bg(self.theme.bg_panel)
-                        .shadow_lg()
-                        .on_click(|_, _, cx| cx.stop_propagation())
                         .child(
                             div()
                                 .flex()
@@ -227,7 +214,7 @@ impl SourcefourWindow {
                     .justify_center()
                     .when(checked, |this| {
                         this.bg(self.theme.accent)
-                            .text_color(gpui::white())
+                            .text_color(self.theme.text_on_accent)
                             .text_size(px(9.0))
                             .child("✓")
                     }),
@@ -273,7 +260,7 @@ impl SourcefourWindow {
                     .when(creatable, |this| {
                         this.cursor_pointer()
                             .bg(self.theme.accent)
-                            .text_color(gpui::white())
+                            .text_color(self.theme.text_on_accent)
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.submit_branch_dialog(window, cx);
                             }))

@@ -161,6 +161,17 @@ fn bar_fraction(step_seconds: i64, longest_seconds: i64) -> f32 {
     fraction.clamp(0.02, 1.0)
 }
 
+/// Fill of a status meter — step duration bars and the timeline share
+/// one set of softened status colors, so bars read as data, not alarms.
+fn meter_fill(theme: &crate::theme::Theme, status: CheckStatus) -> gpui::Hsla {
+    match status {
+        CheckStatus::Completed(CheckConclusion::Failure) => theme.red.opacity(0.75),
+        CheckStatus::Completed(CheckConclusion::Success) => theme.green.opacity(0.55),
+        CheckStatus::InProgress => theme.orange.opacity(0.7),
+        _ => theme.border_strong,
+    }
+}
+
 /// How one log line tints.
 fn line_tint(text: &str) -> LineTint {
     if text.starts_with("error") || text.contains("##[error]") {
@@ -676,36 +687,21 @@ impl SourcefourWindow {
     ) -> Option<impl IntoElement + use<>> {
         let view = self.actions_view.as_ref()?;
         Some(
-            div()
-                .id("actions-overlay")
+            super::modal_backdrop("actions-overlay", &self.theme)
                 .key_context("Actions")
                 .track_focus(&self.actions_focus)
-                .occlude()
-                .absolute()
-                .inset_0()
-                .flex()
                 .p(px(26.0))
-                .bg(self.theme.scrim())
                 .on_click(cx.listener(|this, event: &gpui::ClickEvent, window, cx| {
-                    let (down, up) = (event.down.position, event.up.position);
-                    if (down.x.0 - up.x.0).abs() > 3.0 || (down.y.0 - up.y.0).abs() > 3.0 {
-                        return;
+                    if super::is_true_click(event) {
+                        this.close_actions(window, cx);
                     }
-                    this.close_actions(window, cx);
                 }))
                 .child(
-                    div()
-                        .id("actions-panel")
+                    super::modal_panel("actions-panel", &self.theme)
                         .flex_1()
                         .flex()
                         .flex_col()
-                        .rounded(px(10.0))
-                        .border_1()
-                        .border_color(self.theme.border_strong)
-                        .bg(self.theme.bg_panel)
-                        .shadow_lg()
                         .overflow_hidden()
-                        .on_click(|_, _, cx| cx.stop_propagation())
                         .child(self.actions_header(view, cx))
                         .child(
                             div()
@@ -1153,15 +1149,7 @@ impl SourcefourWindow {
                             .h(px(4.0))
                             .rounded(px(2.0))
                             .w(gpui::relative(bar_fraction(seconds, longest)))
-                            .bg(match step.status {
-                                CheckStatus::Completed(CheckConclusion::Failure) => {
-                                    self.theme.red.opacity(0.75)
-                                }
-                                CheckStatus::Completed(CheckConclusion::Success) => {
-                                    self.theme.green.opacity(0.55)
-                                }
-                                _ => self.theme.border_strong,
-                            })
+                            .bg(meter_fill(&self.theme, step.status))
                     })),
             )
             .child(
@@ -1435,14 +1423,7 @@ impl SourcefourWindow {
                 .w(gpui::relative(width))
                 .h(px(6.0))
                 .rounded(px(3.0))
-                .bg(match job.status {
-                    CheckStatus::Completed(CheckConclusion::Failure) => self.theme.red.opacity(0.7),
-                    CheckStatus::Completed(CheckConclusion::Success) => {
-                        self.theme.green.opacity(0.6)
-                    }
-                    CheckStatus::InProgress => self.theme.orange.opacity(0.7),
-                    _ => self.theme.border_strong,
-                }),
+                .bg(meter_fill(&self.theme, job.status)),
         )
     }
 }

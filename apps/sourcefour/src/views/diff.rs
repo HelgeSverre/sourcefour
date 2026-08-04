@@ -202,13 +202,11 @@ impl SourcefourWindow {
         };
         let body = self.diff_body(view, line_count, cx);
         Some(
-            div()
-                .id("diff-overlay")
+            super::modal_backdrop("diff-overlay", &self.theme)
                 .key_context("Diff")
                 .track_focus(&self.diff_focus)
-                // Nothing behind the overlay may react to the mouse; occlusion
-                // also stops the root's handlers, so scrub drags route here.
-                .occlude()
+                // Occlusion also stops the root's handlers, so scrub drags
+                // route here.
                 .on_mouse_move(
                     cx.listener(|this, event: &gpui::MouseMoveEvent, window, cx| {
                         this.drag_move(event.position.x.0, event.position.y.0, window, cx);
@@ -220,31 +218,17 @@ impl SourcefourWindow {
                         this.end_drag(cx);
                     }),
                 )
-                .absolute()
-                .inset_0()
-                .flex()
                 .p(px(26.0))
-                .bg(self.theme.scrim())
                 .on_click(cx.listener(|this, event: &gpui::ClickEvent, window, cx| {
-                    // A slider or scrollbar drag released over the backdrop
-                    // is the end of a drag, not a request to close.
-                    let (down, up) = (event.down.position, event.up.position);
-                    if (down.x.0 - up.x.0).abs() > 3.0 || (down.y.0 - up.y.0).abs() > 3.0 {
-                        return;
+                    if super::is_true_click(event) {
+                        this.close_diff(window, cx);
                     }
-                    this.close_diff(window, cx);
                 }))
                 .child(
-                    div()
-                        .id("diff-panel")
+                    super::modal_panel("diff-panel", &self.theme)
                         .flex_1()
                         .flex()
                         .flex_col()
-                        .rounded(px(10.0))
-                        .border_1()
-                        .border_color(self.theme.border_strong)
-                        .bg(self.theme.bg_panel)
-                        .shadow_lg()
                         .overflow_hidden()
                         // Clicks inside the panel must not fall through to the
                         // backdrop's close handler.

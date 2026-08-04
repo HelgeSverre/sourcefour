@@ -38,7 +38,8 @@
 //! must carry the separation (input outlines, the diff gutter rule).
 //!
 //! Ink: `text_primary` for what the user came to read, `text_secondary`
-//! for supporting matter, `text_faint` for furniture (line numbers, hints).
+//! for supporting matter, `text_faint` for furniture (line numbers, hints),
+//! `text_on_accent` on accent-filled controls.
 //!
 //! Status colors: `green` success/additions · `red` failure/deletions ·
 //! `orange` in-progress/warnings · `purple` tags/detached · `accent`
@@ -54,6 +55,10 @@
 //! | `chip_border()`/`chip_fill()` | tinted badges: CURRENT, refs, PRs, chips |
 //! | `hud()`                     | floating labels over media                |
 //! | `grab_active()`/`grab_hover()` | splitters under drag / pointer         |
+//!
+//! The modal shell itself — backdrop, panel, and the true-click guard —
+//! lives in `views::modal_backdrop` / `views::modal_panel` /
+//! `views::is_true_click`, so every overlay closes and occludes the same way.
 
 use gpui::{Hsla, rgb};
 use sourcefour_model::GRAPH_COLOR_COUNT;
@@ -90,6 +95,9 @@ pub(crate) struct Theme {
     pub(crate) text_primary: Hsla,
     pub(crate) text_secondary: Hsla,
     pub(crate) text_faint: Hsla,
+    /// Ink on accent-filled controls. Dark, like the website's buttons —
+    /// white on the accent blue fails contrast.
+    pub(crate) text_on_accent: Hsla,
     pub(crate) accent: Hsla,
     pub(crate) green: Hsla,
     pub(crate) orange: Hsla,
@@ -172,6 +180,7 @@ impl Theme {
             text_primary: rgb(0xdf_e3_ec).into(),
             text_secondary: rgb(0x9a_a2_b3).into(),
             text_faint: rgb(0x5f_67_7a).into(),
+            text_on_accent: rgb(0x08_10_1f).into(),
             accent,
             green,
             orange,

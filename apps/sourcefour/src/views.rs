@@ -1159,6 +1159,39 @@ impl Render for SourcefourWindow {
     }
 }
 
+/// True when a click stayed put — a slider or scrollbar drag released
+/// over a backdrop is the end of a drag, not a request to close.
+pub(crate) fn is_true_click(event: &gpui::ClickEvent) -> bool {
+    let (down, up) = (event.down.position, event.up.position);
+    (down.x.0 - up.x.0).abs() <= 3.0 && (down.y.0 - up.y.0).abs() <= 3.0
+}
+
+/// The shared modal shell (§4.6 modality): a scrim that occludes
+/// everything behind it. Callers add key context, focus, layout, and a
+/// close-on-click gated by [`is_true_click`].
+pub(crate) fn modal_backdrop(id: &'static str, theme: &Theme) -> gpui::Stateful<Div> {
+    div()
+        .id(id)
+        .occlude()
+        .absolute()
+        .inset_0()
+        .flex()
+        .bg(theme.scrim())
+}
+
+/// The framed panel every modal floats: raised, bordered, and swallowing
+/// clicks so they never reach the backdrop's close handler.
+pub(crate) fn modal_panel(id: &'static str, theme: &Theme) -> gpui::Stateful<Div> {
+    div()
+        .id(id)
+        .rounded(px(10.0))
+        .border_1()
+        .border_color(theme.border_strong)
+        .bg(theme.bg_panel)
+        .shadow_lg()
+        .on_click(|_, _, cx| cx.stop_propagation())
+}
+
 /// The window shown instead of the shell when discovery fails.
 pub(crate) struct ErrorWindow {
     theme: Theme,

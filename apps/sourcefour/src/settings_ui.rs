@@ -52,18 +52,11 @@ pub(crate) fn overlay(
     focus: &gpui::FocusHandle,
     cx: &mut gpui::Context<SourcefourWindow>,
 ) -> FocusableWrapper<gpui::Stateful<Div>> {
-    div()
-        .id("settings-overlay")
+    crate::views::modal_backdrop("settings-overlay", theme)
         .key_context("Settings")
         .track_focus(focus)
-        // Nothing behind the overlay may react to the mouse (§4.6 modality).
-        .occlude()
-        .absolute()
-        .inset_0()
-        .flex()
         .items_center()
         .justify_center()
-        .bg(theme.scrim())
         .on_click(cx.listener(|this, _, window, cx| {
             this.close_settings(window, cx);
         }))
