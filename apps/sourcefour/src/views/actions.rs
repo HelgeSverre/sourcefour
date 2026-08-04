@@ -33,6 +33,9 @@ pub(super) struct ActionsView {
     pub(super) selected_job: usize,
     /// The step whose log slice shows; `None` means the failing step.
     pub(super) selected_step: Option<usize>,
+    /// Every step folded shut: clicking the open step collapses it, and
+    /// arrows or another click reopen one.
+    pub(super) collapsed: bool,
     /// Every job's complete log, fetched in parallel as jobs complete so
     /// expanding any of them is instant.
     pub(super) logs: std::collections::HashMap<u64, Result<Vec<String>, String>>,
@@ -55,6 +58,9 @@ impl ActionsView {
     /// The step whose log shows: the chosen one, else the failing one,
     /// else the longest.
     fn focused_step(&self) -> Option<usize> {
+        if self.collapsed {
+            return None;
+        }
         let job = self.selected()?;
         if let Some(chosen) = self.selected_step {
             return Some(chosen.min(job.steps.len().saturating_sub(1)));
@@ -180,6 +186,7 @@ pub(super) fn demo_view() -> ActionsView {
         jobs: Some(Ok(demo_jobs())),
         selected_job: 1,
         selected_step: None,
+        collapsed: false,
         logs: std::collections::HashMap::from([(2, Ok(demo_log()))]),
         full_log: false,
     }
@@ -340,6 +347,7 @@ impl SourcefourWindow {
             jobs: None,
             selected_job: 0,
             selected_step: None,
+            collapsed: false,
             logs: std::collections::HashMap::new(),
             full_log: false,
         });
@@ -443,6 +451,7 @@ impl SourcefourWindow {
         }
         view.selected_job = index;
         view.selected_step = None;
+        view.collapsed = false;
         view.full_log = false;
         self.scroll_actions_log_to_slice();
         cx.notify();
@@ -460,9 +469,13 @@ impl SourcefourWindow {
         if count == 0 {
             return;
         }
-        let current = view.focused_step().unwrap_or(0);
-        let next = current.saturating_add_signed(delta).min(count - 1);
-        view.selected_step = Some(next);
+        if view.collapsed {
+            view.collapsed = false;
+        } else {
+            let current = view.focused_step().unwrap_or(0);
+            let next = current.saturating_add_signed(delta).min(count - 1);
+            view.selected_step = Some(next);
+        }
         view.full_log = false;
         self.scroll_actions_log_to_slice();
         cx.notify();
@@ -1063,13 +1076,29 @@ impl SourcefourWindow {
             .when(is_focused, |this| this.bg(self.theme.bg_hover))
             .hover(|style| style.bg(self.theme.bg_hover))
             .on_click(cx.listener(move |this, _, _, cx| {
-                if let Some(view) = &mut this.actions_view {
+                let Some(view) = &mut this.actions_view else {
+                    return;
+                };
+                if is_focused {
+                    view.collapsed = true;
+                } else {
                     view.selected_step = Some(index);
-                    view.full_log = false;
-                    this.scroll_actions_log_to_slice();
-                    cx.notify();
+                    view.collapsed = false;
                 }
+                view.full_log = false;
+                if !is_focused {
+                    this.scroll_actions_log_to_slice();
+                }
+                cx.notify();
             }))
+            .child(
+                div()
+                    .w(px(10.0))
+                    .flex_none()
+                    .text_size(px(8.0))
+                    .text_color(self.theme.text_faint)
+                    .child(if is_focused { "▾" } else { "▸" }),
+            )
             .child(
                 div()
                     .w(px(14.0))
@@ -1404,7 +1433,15 @@ impl SourcefourWindow {
 mod tests {
     use sourcefour_model::{CheckConclusion, CheckStatus, WorkflowJob, WorkflowStep};
 
-    use super::{bar_fraction, default_job, default_step, fmt_duration};
+    use super::{bar_fraction, default_job, default_step, demo_view, fmt_duration};
+
+    #[test]
+    fn collapsing_hides_the_focused_step() {
+        let mut view = demo_view();
+        assert!(view.focused_step().is_some());
+        view.collapsed = true;
+        assert_eq!(view.focused_step(), None);
+    }
 
     fn job(name: &str, status: CheckStatus, started: i64, completed: i64) -> WorkflowJob {
         WorkflowJob {
