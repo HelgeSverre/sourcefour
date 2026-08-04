@@ -36,7 +36,10 @@ fn credentials_path() -> Option<std::path::PathBuf> {
 }
 
 /// The glyph and color a check status renders as.
-fn check_glyph(theme: &Theme, status: sourcefour_model::CheckStatus) -> (&'static str, gpui::Hsla) {
+pub(super) fn check_glyph(
+    theme: &Theme,
+    status: sourcefour_model::CheckStatus,
+) -> (&'static str, gpui::Hsla) {
     use sourcefour_model::{CheckConclusion, CheckStatus};
     match status {
         CheckStatus::Queued => ("○", theme.text_faint),
@@ -78,47 +81,74 @@ impl SourcefourWindow {
         &self,
         index: usize,
         run: &sourcefour_model::WorkflowRun,
+        cx: &mut gpui::Context<Self>,
     ) -> gpui::Stateful<Div> {
         let (glyph, color) = check_glyph(&self.theme, run.status);
-        let url = run.html_url.clone();
+        let clicked = run.clone();
+        let subtitle = format!(
+            "{} #{} · {} · {}",
+            run.name,
+            run.run_number,
+            run.branch,
+            run.started_at.map_or_else(String::new, |started| {
+                crate::history::relative_date(
+                    self.now_seconds(),
+                    sourcefour_model::GitTime {
+                        seconds_since_epoch: started,
+                        offset_minutes: 0,
+                    },
+                )
+            }),
+        );
         div()
             .id(("workflow-run", index))
-            .h(px(24.0))
+            .h(px(38.0))
             .flex()
-            .items_center()
-            .gap(px(7.0))
+            .flex_col()
+            .justify_center()
+            .gap(px(1.0))
             .px(px(15.0))
             .cursor_pointer()
             .hover(|style| style.bg(self.theme.bg_hover))
-            .on_click(move |_, _, cx| {
+            .on_click(cx.listener(move |this, _, window, cx| {
                 cx.stop_propagation();
-                cx.open_url(&url);
-            })
+                this.open_actions_run(clicked.clone(), window, cx);
+            }))
             .child(
                 div()
-                    .w(px(12.0))
-                    .flex_none()
-                    .font_weight(FontWeight::BOLD)
-                    .text_color(color)
-                    .child(glyph),
+                    .flex()
+                    .items_center()
+                    .gap(px(7.0))
+                    .child(
+                        div()
+                            .w(px(12.0))
+                            .flex_none()
+                            .font_weight(FontWeight::BOLD)
+                            .text_size(px(11.0))
+                            .text_color(color)
+                            .child(glyph),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(1.0))
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .whitespace_nowrap()
+                            .text_size(px(11.5))
+                            .text_color(self.theme.text_primary)
+                            .child(run.display_title.clone()),
+                    ),
             )
             .child(
                 div()
-                    .flex_1()
-                    .min_w(px(1.0))
+                    .pl(px(19.0))
                     .overflow_hidden()
                     .text_ellipsis()
                     .whitespace_nowrap()
-                    .text_size(px(11.5))
-                    .text_color(self.theme.text_secondary)
-                    .child(format!("{} #{}", run.name, run.run_number)),
-            )
-            .child(
-                div()
-                    .flex_none()
-                    .text_size(px(10.0))
+                    .text_size(px(9.5))
                     .text_color(self.theme.text_faint)
-                    .child(run.branch.clone()),
+                    .child(subtitle),
             )
     }
 

@@ -313,11 +313,13 @@ pub(crate) enum Scene {
     Image,
     /// The settings overlay on its first section.
     Settings,
+    /// The Actions run detail overlay on a failed run.
+    Actions,
 }
 
 impl Scene {
     /// Every scene name `--scene` accepts, for the usage line.
-    pub(crate) const NAMES: &'static str = "overview, diff, split, image, settings";
+    pub(crate) const NAMES: &'static str = "overview, diff, split, image, settings, actions";
 
     pub(crate) fn from_name(name: &str) -> Option<Self> {
         match name {
@@ -326,6 +328,7 @@ impl Scene {
             "split" => Some(Self::Split),
             "image" => Some(Self::Image),
             "settings" => Some(Self::Settings),
+            "actions" => Some(Self::Actions),
             _ => None,
         }
     }

@@ -36,6 +36,7 @@ use crate::{
     theme::{TITLEBAR_HEIGHT, Theme},
 };
 
+mod actions;
 mod branch_dialog;
 mod chrome;
 mod details;
@@ -117,6 +118,18 @@ pub(crate) struct SourcefourWindow {
     >,
     /// Token for the newest rollup load, so stale results drop.
     github_states_request: u64,
+    /// The Actions run overlay, while open (§ mockup/actions.html).
+    actions_view: Option<actions::ActionsView>,
+    /// Token for the newest jobs read of the overlay.
+    actions_request: u64,
+    /// Token for the newest log read of the overlay.
+    actions_log_request: u64,
+    /// Retires stale five-second poll loops when a new run opens.
+    actions_poll: u64,
+    /// Focus target while the Actions overlay is open, so Escape closes it.
+    actions_focus: FocusHandle,
+    /// Scroll position of the overlay's log list.
+    actions_log_scroll: UniformListScrollHandle,
     /// Recent Actions workflow runs with their fetch time.
     github_runs: Option<Cached<Vec<sourcefour_model::WorkflowRun>>>,
     /// Token for the newest workflow-run load, so stale results drop.
@@ -166,6 +179,11 @@ actions!(
         FocusDetails,
         OpenSettings,
         CloseSettings,
+        CloseActionsRun,
+        NextActionsJob,
+        PrevActionsJob,
+        NextActionsStep,
+        PrevActionsStep,
     ]
 );
 
@@ -251,6 +269,16 @@ fn counted(count: usize, noun: &str) -> String {
 }
 
 /// The demo must render identically on every machine, so it never reads
+/// this user's interface state (§12.4).
+fn initial_ui_state(demo: bool) -> crate::ui_state::UiState {
+    if demo {
+        crate::ui_state::UiState::default()
+    } else {
+        crate::ui_state::UiState::load()
+    }
+}
+
+/// The demo must render identically on every machine, so it never reads
 /// this user's settings file (§12.4).
 fn initial_settings(demo: bool) -> crate::settings::AppSettings {
     if demo {
@@ -327,6 +355,12 @@ impl SourcefourWindow {
             github_checks_request: 0,
             github_states: None,
             github_states_request: 0,
+            actions_view: None,
+            actions_request: 0,
+            actions_log_request: 0,
+            actions_poll: 0,
+            actions_focus: cx.focus_handle(),
+            actions_log_scroll: UniformListScrollHandle::new(),
             github_runs: None,
             github_runs_request: 0,
             token_input: Self::masked_token_input(cx),
@@ -340,12 +374,10 @@ impl SourcefourWindow {
             running_op: None,
             fetch_status: None,
             branch_dialog: None,
-            branch_input: cx
-                .new(|cx| crate::text_input::TextInput::new("new-branch-name", &Theme::dark(), cx)),
+            branch_input: Self::plain_input("new-branch-name", cx),
             list_scroll: UniformListScrollHandle::new(),
             focus: cx.focus_handle(),
-            filter_input: cx
-                .new(|cx| crate::text_input::TextInput::new("Filter commits", &Theme::dark(), cx)),
+            filter_input: Self::plain_input("Filter commits", cx),
         };
         // The input owns the text; the window derives the filtered view.
         cx.observe(&window.filter_input, |this, input, cx| {
@@ -356,11 +388,7 @@ impl SourcefourWindow {
             }
         })
         .detach();
-        let state = crate::ui_state::UiState::load();
-        window.sections.apply(&state);
-        window.panels.apply(&state);
-        window.preferred_diff_mode = DiffMode::from_name(state.diff_mode.as_deref());
-        window.details_collapsed = state.details_collapsed;
+        window.apply_ui_state(&initial_ui_state(launch.demo));
         // §4.6: relative dates refresh once a minute, never per frame.
         cx.spawn(async move |this, cx| {
             loop {
@@ -770,6 +798,10 @@ impl SourcefourWindow {
 
     /// Saves panel sizes, section order, and collapse state off-thread.
     fn persist_ui_state(&self, cx: &gpui::Context<Self>) {
+        // Demo interactions must never overwrite this user's real state.
+        if self.demo {
+            return;
+        }
         let state = crate::ui_state::UiState {
             sidebar_width: Some(self.panels.sidebar),
             graph_width: Some(self.panels.graph),
@@ -800,6 +832,10 @@ impl SourcefourWindow {
                 self.settings_view = Some(crate::settings_ui::SettingsSection::default());
                 return;
             }
+            demo::Scene::Actions => {
+                self.actions_view = Some(actions::demo_view());
+                return;
+            }
             demo::Scene::Split => DiffMode::Split,
             _ => DiffMode::Unified,
         };
@@ -816,6 +852,22 @@ impl SourcefourWindow {
         view.ensure_split();
         view.ensure_images();
         self.diff_view = Some(view);
+    }
+
+    /// Applies everything the persisted interface state remembers.
+    fn apply_ui_state(&mut self, state: &crate::ui_state::UiState) {
+        self.sections.apply(state);
+        self.panels.apply(state);
+        self.preferred_diff_mode = DiffMode::from_name(state.diff_mode.as_deref());
+        self.details_collapsed = state.details_collapsed;
+    }
+
+    /// One themed text input with a placeholder.
+    fn plain_input(
+        placeholder: &'static str,
+        cx: &mut gpui::Context<Self>,
+    ) -> gpui::Entity<crate::text_input::TextInput> {
+        cx.new(|cx| crate::text_input::TextInput::new(placeholder, &Theme::dark(), cx))
     }
 
     /// The GitHub section's token field: like every input, but masked.
@@ -960,6 +1012,21 @@ impl SourcefourWindow {
         .on_action(cx.listener(|this, _: &CloseSettings, window, cx| {
             this.close_settings(window, cx);
         }))
+        .on_action(cx.listener(|this, _: &CloseActionsRun, window, cx| {
+            this.close_actions(window, cx);
+        }))
+        .on_action(cx.listener(|this, _: &NextActionsJob, _, cx| {
+            this.select_actions_job(1, cx);
+        }))
+        .on_action(cx.listener(|this, _: &PrevActionsJob, _, cx| {
+            this.select_actions_job(-1, cx);
+        }))
+        .on_action(cx.listener(|this, _: &NextActionsStep, _, cx| {
+            this.select_actions_step(1, cx);
+        }))
+        .on_action(cx.listener(|this, _: &PrevActionsStep, _, cx| {
+            this.select_actions_step(-1, cx);
+        }))
         .map(|root| Self::root_drag_handlers(root, cx))
     }
 
@@ -1075,7 +1142,8 @@ impl Render for SourcefourWindow {
             .child(self.status())
             .children(self.diff_overlay(cx))
             .children(self.branch_overlay(cx))
-            .children(self.settings_overlay(cx));
+            .children(self.settings_overlay(cx))
+            .children(self.actions_overlay(cx));
         // §12.5 frame instrumentation: element construction only — layout,
         // paint, and GPU time happen inside gpui after this returns.
         if std::env::var_os("SOURCEFOUR_FRAME_LOG").is_some() {

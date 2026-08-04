@@ -363,7 +363,7 @@ impl SourcefourWindow {
                             this.children(
                                 runs.iter()
                                     .enumerate()
-                                    .map(|(index, run)| self.workflow_run_row(index, run)),
+                                    .map(|(index, run)| self.workflow_run_row(index, run, cx)),
                             )
                         })
                 }
