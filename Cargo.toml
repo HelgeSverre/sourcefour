@@ -19,6 +19,7 @@ authors = ["Sourcefour contributors"]
 [workspace.dependencies]
 gix = "0.85.0"
 smallvec = "1.15.1"
+tempfile = "3.27.0"
 thiserror = "2.0.17"
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.20", features = ["env-filter", "fmt"] }

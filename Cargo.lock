@@ -5362,6 +5362,9 @@ dependencies = [
 [[package]]
 name = "sourcefour-test-support"
 version = "0.1.0"
+dependencies = [
+ "tempfile",
+]
 
 [[package]]
 name = "spin"
