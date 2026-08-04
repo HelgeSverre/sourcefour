@@ -5332,6 +5332,7 @@ dependencies = [
  "gpui",
  "smallvec",
  "sourcefour-git",
+ "sourcefour-graph",
  "sourcefour-model",
  "sourcefour-test-support",
  "tracing",

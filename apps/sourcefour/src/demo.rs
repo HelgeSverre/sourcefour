@@ -7,11 +7,11 @@
 use std::{collections::BTreeMap, path::PathBuf, time::Instant};
 
 use smallvec::SmallVec;
+use sourcefour_graph::GraphState;
 use sourcefour_model::{
-    AheadBehindState, BranchSnapshot, CommitFlags, CommitRow, GRAPH_COLOR_COUNT, GitTime,
-    GraphFlags, GraphRow, HeadSnapshot, Oid, RemoteBranchSnapshot, RemoteSnapshot, RepoKind,
-    RepoLocation, RepoSnapshot, UpstreamSnapshot, WorktreeAccessibility, WorktreeId,
-    WorktreeSnapshot,
+    AheadBehindState, BranchSnapshot, CommitFlags, CommitRow, GitTime, GraphRow, HeadSnapshot, Oid,
+    RefKind, RefLabel, RemoteBranchSnapshot, RemoteSnapshot, RepoKind, RepoLocation, RepoSnapshot,
+    UpstreamSnapshot, WorktreeAccessibility, WorktreeId, WorktreeSnapshot,
 };
 
 /// Repository identity shown by `--demo`, matching the screenshot fixture.
@@ -23,92 +23,66 @@ pub(crate) const NOW_SECONDS: i64 = 1_722_600_000;
 
 const AUTHOR: &str = "Helge Sverre";
 
-/// Subject, hash prefix, hours before [`NOW_SECONDS`], lane, is-merge.
-const COMMITS: [(&str, &str, i64, u16, bool); 18] = [
+/// Subject, hash prefix, hours before [`NOW_SECONDS`], and parent row indices.
+///
+/// The topology deliberately exercises every painter case: two-lane stretches,
+/// lane convergence (rows 5, 10, 15), merges (rows 0, 10), a branch tip
+/// appearing mid-list (row 7), and a root (row 17). Lanes and segments come
+/// from the real §7.3 algorithm, never from this table.
+const COMMITS: [(&str, &str, i64, &[usize]); 18] = [
     (
         "Merge branch 'feature/worktrees' into main",
         "9f3e21a",
         2,
-        0,
-        true,
+        &[1, 2],
     ),
-    (
-        "chore(deps): pin gpui to rev d637307",
-        "7c1d9b4",
-        3,
-        0,
-        false,
-    ),
+    ("chore(deps): pin gpui to rev d637307", "7c1d9b4", 3, &[3]),
     (
         "List linked worktrees from common git directory",
         "4b8e0f2",
         5,
-        1,
-        false,
+        &[4],
     ),
-    (
-        "Render metadata sidebar loading state",
-        "e57a109",
-        26,
-        0,
-        false,
-    ),
+    ("Render metadata sidebar loading state", "e57a109", 26, &[5]),
     (
         "Preserve selected commit on a safe refresh",
         "6c9de83",
         28,
-        2,
-        false,
+        &[5],
     ),
-    ("Add deterministic history fixture", "0f2a49d", 30, 0, false),
+    ("Add deterministic history fixture", "0f2a49d", 30, &[6]),
     (
         "Improve repository discovery failure messages",
         "e6b1a95",
         50,
-        3,
-        false,
+        &[8],
     ),
-    ("Document the hybrid Git backend", "2a7ccf4", 52, 1, false),
+    ("Document the hybrid Git backend", "2a7ccf4", 52, &[9]),
     (
         "Use all unique references as default scope",
         "5cb3418",
         74,
-        0,
-        false,
+        &[10],
     ),
-    (
-        "Add graph colour continuity goldens",
-        "3d88c70",
-        76,
-        4,
-        false,
-    ),
-    ("Merge branch 'feature/history'", "7f0e4f1", 98, 0, true),
+    ("Add graph colour continuity goldens", "3d88c70", 76, &[10]),
+    ("Merge branch 'feature/history'", "7f0e4f1", 98, &[11, 12]),
     (
         "Read commits through a persistent cursor",
         "66ea252",
         100,
-        2,
-        false,
+        &[13],
     ),
-    (
-        "Implement typed repository sessions",
-        "0ceef2b",
-        122,
-        5,
-        false,
-    ),
-    ("Add sourcefour virtual workspace", "c4f4b7a", 124, 0, false),
+    ("Implement typed repository sessions", "0ceef2b", 122, &[14]),
+    ("Add sourcefour virtual workspace", "c4f4b7a", 124, &[15]),
     (
         "Promote implementation specification",
         "4f8d31b",
         146,
-        1,
-        false,
+        &[15],
     ),
-    ("Archive restart prototype", "1f202f1", 148, 0, false),
-    ("Initial Sourcefour architecture", "128b3a6", 170, 2, false),
-    ("Repository bootstrap", "ac7d153", 172, 0, false),
+    ("Archive restart prototype", "1f202f1", 148, &[16]),
+    ("Initial Sourcefour architecture", "128b3a6", 170, &[17]),
+    ("Repository bootstrap", "ac7d153", 172, &[]),
 ];
 
 /// The metadata sidebar's state, shaped like the supplied mockup.
@@ -195,49 +169,50 @@ pub(crate) fn snapshot() -> RepoSnapshot {
 }
 
 /// The loaded history, exactly as a completed traversal would deliver it.
+///
+/// Layout runs through the real §7.3 lane algorithm, so the fixture renders
+/// whatever the shipping code produces for this topology — including the
+/// curves the §7.4 painter draws between rows.
 pub(crate) fn history() -> (Vec<CommitRow>, Vec<GraphRow>) {
-    let rows = COMMITS
+    let rows: Vec<CommitRow> = COMMITS
         .iter()
         .enumerate()
-        .map(|(index, &(subject, hash, hours, _, merge))| {
-            let mut parents: SmallVec<[Oid; 2]> = SmallVec::new();
-            if let Some(&(_, parent, ..)) = COMMITS.get(index + 1) {
-                parents.push(oid(parent));
-            }
-            if merge && let Some(&(_, parent, ..)) = COMMITS.get(index + 2) {
-                parents.push(oid(parent));
-            }
+        .map(|(index, &(subject, hash, hours, parent_rows))| {
+            let parents: SmallVec<[Oid; 2]> = parent_rows
+                .iter()
+                .map(|&parent| oid(COMMITS[parent].1))
+                .collect();
+            let labels = if index == 0 {
+                SmallVec::from_iter([RefLabel {
+                    name: String::from("main"),
+                    kind: RefKind::LocalBranch,
+                    is_head: true,
+                    is_current: true,
+                }])
+            } else {
+                SmallVec::new()
+            };
             CommitRow {
                 oid: oid(hash),
-                parents,
                 summary: subject.to_owned(),
                 author_name: AUTHOR.to_owned(),
                 commit_time: GitTime {
                     seconds_since_epoch: NOW_SECONDS - hours * 3600,
                     offset_minutes: 0,
                 },
-                labels: SmallVec::new(),
+                labels,
                 flags: CommitFlags {
-                    is_merge: merge,
+                    is_merge: parents.len() > 1,
                     is_shallow_boundary: false,
                 },
+                parents,
             }
         })
         .collect();
-    let layout = COMMITS
+    let mut state = GraphState::default();
+    let layout = rows
         .iter()
-        .enumerate()
-        .map(|(index, &(_, _, _, lane, merge))| GraphRow {
-            node_lane: lane,
-            node_color: u8::try_from(lane).map_or(0, |lane| lane % GRAPH_COLOR_COUNT),
-            segments: SmallVec::new(),
-            flags: GraphFlags {
-                is_merge: merge,
-                is_root: index == COMMITS.len() - 1,
-                is_shallow_boundary: false,
-                continues_above: index != 0,
-            },
-        })
+        .map(|row| state.push(row.oid, &row.parents))
         .collect();
     (rows, layout)
 }
@@ -356,5 +331,38 @@ mod tests {
     fn the_fixture_exceeds_the_baseline_viewport() {
         const BASELINE_VISIBLE_ROWS: usize = 13;
         assert!(history().0.len() > BASELINE_VISIBLE_ROWS);
+    }
+
+    #[test]
+    fn the_fixture_topology_exercises_every_painter_case() {
+        use sourcefour_model::GraphSegment;
+
+        let (rows, layout) = history();
+
+        assert!(layout[0].flags.is_merge, "row 0 is a merge");
+        assert!(
+            layout[10]
+                .segments
+                .iter()
+                .any(|segment| matches!(segment, GraphSegment::Fork { .. }))
+                && layout[10]
+                    .segments
+                    .iter()
+                    .any(|segment| matches!(segment, GraphSegment::Merge { .. })),
+            "row 10 both converges one branch and starts another"
+        );
+        assert!(
+            !layout[7].flags.continues_above,
+            "row 7 is a branch tip appearing mid-list"
+        );
+        assert!(layout[17].flags.is_root, "the last row is the root");
+        assert!(
+            layout.iter().any(|row| row.node_lane > 0),
+            "the fixture must actually leave lane 0"
+        );
+        assert!(
+            rows[0].labels.iter().any(|label| label.is_head),
+            "the newest commit carries HEAD so the halo renders"
+        );
     }
 }
