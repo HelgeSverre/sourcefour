@@ -438,6 +438,13 @@ section {
   flex-direction: column;
   justify-content: center;
 }
+/* The copy needs no card — only the states row keeps one. */
+.bento .copy-cell {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 12px 8px;
+}
 .bento .shot-cell img {
   max-height: 660px;
   width: auto;
