@@ -67,3 +67,17 @@ package:
 [group('dist')]
 icon:
     python3 scripts/make-icon.py
+
+# Show what a release would produce.
+[group('dist')]
+release-plan:
+    dist plan
+
+# Cut a release: set the version, tag it, and let CI build and tap it.
+[group('dist')]
+release version: check
+    sed -i '' 's/^version = .*/version = "{{version}}"/' Cargo.toml
+    cargo update --workspace
+    git commit -am "release: v{{version}}"
+    git tag -a "v{{version}}" -m "v{{version}}"
+    git push origin HEAD --follow-tags

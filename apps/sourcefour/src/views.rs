@@ -1304,7 +1304,8 @@ impl SourcefourWindow {
             .child(
                 div()
                     .flex_none()
-                    .text_color(self.theme.text_faint)
+                    .text_size(px(9.0))
+                    .text_color(self.theme.text_faint.opacity(0.7))
                     .child(if focused { "Esc" } else { "Cmd+F" }),
             )
     }
@@ -1478,12 +1479,16 @@ impl SourcefourWindow {
                     )
                     .children(tree.is_current.then(|| {
                         div()
+                            .h(px(15.0))
                             .px(px(4.0))
+                            .flex()
+                            .items_center()
                             .rounded(px(3.0))
                             .border_1()
                             .border_color(self.theme.accent.opacity(0.45))
                             .bg(self.theme.accent.opacity(0.12))
                             .text_size(px(8.0))
+                            .line_height(px(8.0))
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(self.theme.accent)
                             .child("CURRENT")
@@ -2546,7 +2551,13 @@ impl SourcefourWindow {
                 .flex()
                 .p(px(26.0))
                 .bg(gpui::black().opacity(0.55))
-                .on_click(cx.listener(|this, _, window, cx| {
+                .on_click(cx.listener(|this, event: &gpui::ClickEvent, window, cx| {
+                    // A slider or scrollbar drag released over the backdrop
+                    // is the end of a drag, not a request to close.
+                    let (down, up) = (event.down.position, event.up.position);
+                    if (down.x.0 - up.x.0).abs() > 3.0 || (down.y.0 - up.y.0).abs() > 3.0 {
+                        return;
+                    }
                     this.diff_view = None;
                     this.focus.focus(window);
                     cx.notify();
@@ -2868,6 +2879,14 @@ impl SourcefourWindow {
                     cx.notify();
                 }),
             )
+            .on_click(cx.listener(|this, event: &gpui::ClickEvent, _, cx| {
+                if event.down.click_count == 2
+                    && let Some(view) = &mut this.diff_view
+                {
+                    view.slider = 0.5;
+                    cx.notify();
+                }
+            }))
             .child(
                 gpui::canvas(
                     |_, _, _| (),
