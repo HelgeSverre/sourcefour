@@ -20,7 +20,7 @@ jobs:
       - name: Enable long paths
         if: runner.os == 'Windows'
         run: git config --global core.longpaths true
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@stable
       - uses: taiki-e/install-action@nextest
       - name: Install Linux native build prerequisites
