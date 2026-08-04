@@ -22,6 +22,11 @@ pub(crate) struct HistoryState {
     pub(crate) has_more: bool,
     pub(crate) request_in_flight: bool,
     pub(crate) selected: Option<Oid>,
+    /// Bumped by every [`Self::reset`], so a batch requested before a scope
+    /// change can be recognized as stale and dropped with its cursor. The
+    /// session/generation envelope cannot catch this case: a same-window scope
+    /// switch changes neither.
+    pub(crate) epoch: u64,
 }
 
 impl HistoryState {
@@ -52,6 +57,7 @@ impl HistoryState {
         self.has_more = true;
         self.request_in_flight = false;
         self.selected = None;
+        self.epoch += 1;
     }
 
     /// Number of rows the list should render.
@@ -329,6 +335,18 @@ mod tests {
         assert_eq!(state.selected, None);
         assert!(state.has_more);
         assert!(!state.request_in_flight);
+    }
+
+    #[test]
+    fn a_scope_change_retires_batches_already_in_flight() {
+        let mut state = loaded(5);
+        let epoch_at_request = state.epoch;
+
+        state.reset(HistoryScope::AllRefs);
+
+        // A batch requested before the reset must be recognizable as stale, or
+        // its rows (and its abandoned cursor) would leak into the new scope.
+        assert_ne!(state.epoch, epoch_at_request);
     }
 
     #[test]

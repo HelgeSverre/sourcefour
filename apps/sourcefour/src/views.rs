@@ -115,6 +115,11 @@ impl SidebarSections {
 /// enough that an externally created branch appears without feeling delayed.
 const METADATA_POLL: std::time::Duration = std::time::Duration::from_millis(150);
 
+/// Diagnostic identities for the window's read requests (§5.5).
+const SNAPSHOT_REQUEST: RequestId = RequestId(0);
+const AHEAD_BEHIND_REQUEST: RequestId = RequestId(1);
+const HISTORY_REQUEST: RequestId = RequestId(2);
+
 /// Whether a background result still belongs to the window that asked for it.
 ///
 /// A result from a superseded generation is dropped rather than applied; this
@@ -291,8 +296,8 @@ fn remote_marker(theme: &Theme) -> Div {
         .border_color(theme.orange)
 }
 
-fn lane_marker(theme: &Theme, lane: usize, merge: bool) -> Div {
-    let color = theme.graph_lanes[lane];
+fn lane_marker(theme: &Theme, color_index: usize, merge: bool) -> Div {
+    let color = theme.graph_lanes[color_index];
     div()
         .w(px(GRAPH_WIDTH))
         .h_full()
@@ -420,7 +425,7 @@ impl SourcefourWindow {
                     let applied = this.apply_snapshot(&RepoEnvelope {
                         session,
                         generation,
-                        request: RequestId(0),
+                        request: SNAPSHOT_REQUEST,
                         payload,
                     });
                     if applied {
@@ -447,7 +452,7 @@ impl SourcefourWindow {
                 this.apply_ahead_behind(&RepoEnvelope {
                     session,
                     generation,
-                    request: RequestId(1),
+                    request: AHEAD_BEHIND_REQUEST,
                     payload: updates,
                 });
                 cx.notify();
@@ -489,6 +494,7 @@ impl SourcefourWindow {
         self.history.request_in_flight = true;
         let session = self.session;
         let generation = self.generation;
+        let epoch = self.history.epoch;
         let rows = cursor.next_batch_size();
         cx.spawn(async move |this, cx| {
             // The cursor moves to the worker and back so the render thread never
@@ -501,11 +507,19 @@ impl SourcefourWindow {
                 })
                 .await;
             this.update(cx, |this, cx| {
+                if this.history.epoch != epoch {
+                    // The scope changed while this batch was in flight. Its rows
+                    // belong to the abandoned traversal, and so does the cursor:
+                    // restoring it would overwrite the new scope's cursor and
+                    // feed old-scope rows into the new list. Dropping it here
+                    // also stops its worker thread.
+                    return;
+                }
                 this.cursor = Some(cursor);
                 this.apply_batch(&RepoEnvelope {
                     session,
                     generation,
-                    request: RequestId(2),
+                    request: HISTORY_REQUEST,
                     payload: batch,
                 });
                 cx.notify();
@@ -1021,11 +1035,11 @@ impl SourcefourWindow {
                 .h(px(HISTORY_ROW_HEIGHT));
         };
         let selected = self.history.selected == Some(row.oid);
-        let lane = self
+        let color = self
             .history
             .layout
             .get(index)
-            .map_or((0, 0), |graph| (graph.node_lane, graph.node_color));
+            .map_or(0, |graph| graph.node_color);
         let oid = row.oid;
         div()
             .id(("commit", index))
@@ -1044,7 +1058,7 @@ impl SourcefourWindow {
             .text_color(self.theme.text_primary)
             .child(lane_marker(
                 &self.theme,
-                lane.1 as usize % self.theme.graph_lanes.len(),
+                usize::from(color) % self.theme.graph_lanes.len(),
                 row.flags.is_merge,
             ))
             .child(
