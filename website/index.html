@@ -1,0 +1,517 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sourcefour — the Git history browser that keeps up</title>
+<meta name="description" content="A native, GPU-rendered Git history browser for macOS. Rust + GPUI + gix. Opens the Linux kernel's 1.46 million commits progressively in under a quarter of a second.">
+<style>
+  :root {
+    color-scheme: only dark;
+    --bg: #0b0c0f;
+    --bg-raised: #14161b;
+    --bg-card: #171a20;
+    --border: #262a33;
+    --border-strong: #2f3542;
+    --text: #dfe3ec;
+    --text2: #9aa2b3;
+    --text3: #5f677a;
+    --accent: #5b9dff;
+    --green: #7ec96f;
+    --orange: #e0a458;
+    --purple: #b392f0;
+    --red: #e5655e;
+    --cyan: #64c7d6;
+    --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+    --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-ui);
+    -webkit-font-smoothing: antialiased;
+    line-height: 1.55;
+  }
+
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  .wrap { max-width: 1120px; margin: 0 auto; padding: 0 24px; }
+
+  /* ── nav ─────────────────────────────────────────────── */
+  nav {
+    position: sticky; top: 0; z-index: 10;
+    background: rgba(11, 12, 15, 0.82);
+    backdrop-filter: blur(14px);
+    border-bottom: 1px solid var(--border);
+  }
+  .nav-inner {
+    display: flex; align-items: center; gap: 28px;
+    height: 58px;
+  }
+  .logo {
+    font-weight: 700; font-size: 17px; letter-spacing: -0.02em;
+    color: var(--text);
+  }
+  .logo b { color: var(--accent); font-weight: 700; }
+  .nav-links { display: flex; gap: 22px; font-size: 13.5px; color: var(--text2); }
+  .nav-links a { color: var(--text2); }
+  .nav-links a:hover { color: var(--text); text-decoration: none; }
+  .nav-cta {
+    margin-left: auto;
+    font-size: 13px; font-weight: 600;
+    background: var(--accent); color: #0b0c0f;
+    padding: 7px 14px; border-radius: 7px;
+  }
+  .nav-cta:hover { text-decoration: none; filter: brightness(1.1); }
+
+  /* ── hero ─────────────────────────────────────────────── */
+  header {
+    padding: 84px 0 40px;
+    text-align: center;
+    background:
+      radial-gradient(ellipse 60% 40% at 50% 0%, rgba(91, 157, 255, 0.14), transparent 70%),
+      radial-gradient(ellipse 40% 30% at 80% 10%, rgba(179, 146, 240, 0.08), transparent 70%);
+  }
+  .eyebrow {
+    display: inline-block;
+    font-size: 12px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--accent);
+    border: 1px solid rgba(91, 157, 255, 0.35);
+    background: rgba(91, 157, 255, 0.08);
+    padding: 5px 12px; border-radius: 99px;
+    margin-bottom: 22px;
+  }
+  h1 {
+    font-size: clamp(38px, 6vw, 62px);
+    line-height: 1.06;
+    letter-spacing: -0.03em;
+    font-weight: 800;
+    margin: 0 auto 18px;
+    max-width: 820px;
+  }
+  h1 .grad {
+    background: linear-gradient(92deg, var(--accent), var(--purple) 55%, var(--cyan));
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+  .sub {
+    font-size: 18px; color: var(--text2);
+    max-width: 640px; margin: 0 auto 30px;
+  }
+  .cta-row { display: flex; gap: 14px; justify-content: center; margin-bottom: 14px; }
+  .btn {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-size: 14.5px; font-weight: 600;
+    padding: 12px 22px; border-radius: 9px;
+  }
+  .btn-primary { background: var(--accent); color: #0b0c0f; }
+  .btn-primary:hover { text-decoration: none; filter: brightness(1.1); }
+  .btn-ghost { border: 1px solid var(--border-strong); color: var(--text); background: var(--bg-raised); }
+  .btn-ghost:hover { text-decoration: none; border-color: var(--text3); }
+  .hero-note { font-size: 12.5px; color: var(--text3); }
+
+  /* ── app frame ───────────────────────────────────────── */
+  .app-shot { padding: 44px 0 10px; }
+  .frame {
+    position: relative;
+    margin: 0 auto;
+    max-width: 1060px;
+    border-radius: 14px;
+    padding: 1px;
+    background: linear-gradient(180deg, rgba(91,157,255,0.35), rgba(38,42,51,0.6) 40%);
+    box-shadow: 0 40px 120px rgba(0,0,0,0.65), 0 8px 30px rgba(0,0,0,0.5);
+  }
+  .frame-inner {
+    border-radius: 13px;
+    overflow: hidden;
+    background: var(--bg);
+    aspect-ratio: 1328 / 848;
+  }
+  .frame iframe {
+    width: 1328px; height: 848px;
+    border: 0;
+    transform-origin: top left;
+    pointer-events: none;
+  }
+  .shot-caption {
+    text-align: center; font-size: 12.5px; color: var(--text3);
+    margin-top: 16px;
+  }
+
+  /* ── stats band ──────────────────────────────────────── */
+  .stats {
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px;
+    background: var(--border);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+    margin: 56px auto 0;
+  }
+  .stat { background: var(--bg-card); padding: 26px 22px; text-align: center; }
+  .stat .n {
+    font-family: var(--font-mono);
+    font-size: 30px; font-weight: 700; letter-spacing: -0.02em;
+    color: var(--text);
+  }
+  .stat .n em { font-style: normal; color: var(--accent); }
+  .stat .l { font-size: 12.5px; color: var(--text3); margin-top: 6px; }
+
+  /* ── sections ────────────────────────────────────────── */
+  section { padding: 84px 0 8px; }
+  .kicker {
+    font-size: 12px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase;
+    color: var(--accent); margin-bottom: 10px;
+  }
+  h2 {
+    font-size: clamp(26px, 3.4vw, 36px);
+    letter-spacing: -0.02em; line-height: 1.15;
+    font-weight: 750;
+    margin-bottom: 12px;
+  }
+  .section-sub { color: var(--text2); max-width: 620px; font-size: 15.5px; margin-bottom: 40px; }
+
+  /* ── feature grid ────────────────────────────────────── */
+  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+  .card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 24px 22px;
+    transition: border-color 120ms ease, transform 120ms ease;
+  }
+  .card:hover { border-color: var(--border-strong); transform: translateY(-2px); }
+  .card .ic {
+    width: 34px; height: 34px; border-radius: 9px;
+    display: flex; align-items: center; justify-content: center;
+    margin-bottom: 15px;
+    font-size: 16px;
+  }
+  .card h3 { font-size: 16px; font-weight: 650; margin-bottom: 7px; letter-spacing: -0.01em; }
+  .card p { font-size: 13.5px; color: var(--text2); }
+  .card p code, .perf td code {
+    font-family: var(--font-mono); font-size: 12px;
+    background: var(--bg-raised); border: 1px solid var(--border);
+    border-radius: 5px; padding: 1px 5px; color: var(--text2);
+  }
+  .t-blue   { background: rgba(91,157,255,.12);  color: var(--accent); }
+  .t-green  { background: rgba(126,201,111,.12); color: var(--green); }
+  .t-orange { background: rgba(224,164,88,.12);  color: var(--orange); }
+  .t-purple { background: rgba(179,146,240,.12); color: var(--purple); }
+  .t-red    { background: rgba(229,101,94,.12);  color: var(--red); }
+  .t-cyan   { background: rgba(100,199,214,.12); color: var(--cyan); }
+
+  /* ── performance table ───────────────────────────────── */
+  .perf {
+    width: 100%;
+    border-collapse: collapse;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+    font-size: 13.5px;
+  }
+  .perf th, .perf td { padding: 12px 18px; text-align: right; border-bottom: 1px solid var(--border); }
+  .perf th:first-child, .perf td:first-child { text-align: left; }
+  .perf thead th {
+    font-size: 11px; letter-spacing: 0.07em; text-transform: uppercase;
+    color: var(--text3); background: var(--bg-raised);
+  }
+  .perf tbody tr:last-child td { border-bottom: 0; }
+  .perf td { color: var(--text2); font-family: var(--font-mono); font-size: 12.5px; }
+  .perf td:first-child { font-family: var(--font-ui); color: var(--text); font-size: 13.5px; }
+  .perf .hot td { color: var(--text); }
+  .perf .hot td:first-child { color: var(--accent); font-weight: 650; }
+  .perf-note { font-size: 12.5px; color: var(--text3); margin-top: 14px; }
+  .perf-note code { font-family: var(--font-mono); }
+
+  /* ── tech split ──────────────────────────────────────── */
+  .split { display: grid; grid-template-columns: 1fr 1fr; gap: 44px; align-items: start; }
+  .tech-list { display: flex; flex-direction: column; gap: 18px; }
+  .tech {
+    display: flex; gap: 14px;
+    padding: 16px 18px;
+    background: var(--bg-card); border: 1px solid var(--border); border-radius: 11px;
+  }
+  .tech .dot { width: 9px; height: 9px; border-radius: 50%; margin-top: 7px; flex: none; }
+  .tech h4 { font-size: 14.5px; font-weight: 650; margin-bottom: 3px; }
+  .tech p { font-size: 13px; color: var(--text2); }
+  .term {
+    background: #0e1013;
+    border: 1px solid var(--border);
+    border-radius: 11px;
+    padding: 18px 20px;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    line-height: 1.75;
+    color: var(--text2);
+    overflow-x: auto;
+    white-space: pre;
+  }
+  .term .g { color: var(--green); }
+  .term .b { color: var(--accent); }
+  .term .d { color: var(--text3); }
+
+  /* ── roadmap ─────────────────────────────────────────── */
+  .road { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+  .road .card h3 { display: flex; align-items: center; gap: 9px; }
+  .pill {
+    font-size: 10.5px; font-weight: 700; letter-spacing: 0.05em;
+    padding: 2px 8px; border-radius: 99px;
+  }
+  .pill.now { background: rgba(126,201,111,.14); color: var(--green); }
+  .pill.next { background: rgba(224,164,88,.14); color: var(--orange); }
+  .pill.later { background: rgba(95,103,122,.18); color: var(--text3); }
+
+  /* ── footer ──────────────────────────────────────────── */
+  footer {
+    margin-top: 96px;
+    border-top: 1px solid var(--border);
+    padding: 34px 0 44px;
+    font-size: 13px; color: var(--text3);
+    display: flex; justify-content: center;
+  }
+  .foot-inner { display: flex; align-items: center; justify-content: space-between; width: 100%; }
+
+  @media (max-width: 900px) {
+    .grid, .road { grid-template-columns: 1fr; }
+    .stats { grid-template-columns: repeat(2, 1fr); }
+    .split { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="wrap nav-inner">
+    <span class="logo">source<b>four</b></span>
+    <span class="nav-links">
+      <a href="#features">Features</a>
+      <a href="#performance">Performance</a>
+      <a href="#tech">Under the hood</a>
+      <a href="#roadmap">Roadmap</a>
+    </span>
+    <a class="nav-cta" href="#performance">See the numbers</a>
+  </div>
+</nav>
+
+<header>
+  <div class="wrap">
+    <span class="eyebrow">Native macOS · GPU-rendered · Open development</span>
+    <h1>The Git history browser<br>that <span class="grad">keeps up with you</span></h1>
+    <p class="sub">
+      Sourcefour opens a repository, draws its commit graph, and follows every branch,
+      tag, and worktree as they change — at native speed, on kernel-scale history.
+    </p>
+    <div class="cta-row">
+      <a class="btn btn-primary" href="#performance">1.46M commits, 218&nbsp;ms &rarr;</a>
+      <a class="btn btn-ghost" href="#tech">Built with Rust + GPUI</a>
+    </div>
+    <p class="hero-note">In development · macOS first · Apple Silicon native</p>
+  </div>
+
+  <div class="wrap app-shot">
+    <div class="frame">
+      <div class="frame-inner">
+        <iframe src="app.html" title="Sourcefour application window" loading="lazy" scrolling="no"></iframe>
+      </div>
+    </div>
+    <p class="shot-caption">The Sourcefour window: worktrees, branches, and remotes on the left; the painted commit graph, virtualized history, and per-commit changed files on the right.</p>
+  </div>
+</header>
+
+<div class="wrap">
+  <div class="stats">
+    <div class="stat"><div class="n"><em>1.46M</em></div><div class="l">Linux kernel commits, walked and laid out</div></div>
+    <div class="stat"><div class="n">218<em>ms</em></div><div class="l">to the first 256 rows of kernel history</div></div>
+    <div class="stat"><div class="n">41k<em>+</em></div><div class="l">rows per second, sustained graph layout</div></div>
+    <div class="stat"><div class="n"><em>0</em></div><div class="l">graph invariant violations in 1.73M validated rows</div></div>
+  </div>
+</div>
+
+<section id="features">
+  <div class="wrap">
+    <p class="kicker">Features</p>
+    <h2>Everything on screen is live, drawn, and verified.</h2>
+    <p class="section-sub">
+      No embedded web view, no shelling out to parse porcelain, no repainting the world per row.
+      One window, rendered by the GPU, fed by a real Git object database.
+    </p>
+    <div class="grid">
+      <div class="card">
+        <div class="ic t-blue">⌥</div>
+        <h3>A commit graph painted properly</h3>
+        <p>Every visible lane, curve, and node is painted in a single GPU canvas per frame —
+        cubic Bézier merges with vertical tangents, per-line colors that survive lane changes,
+        and a halo on HEAD. No element-per-segment DOM soup.</p>
+      </div>
+      <div class="card">
+        <div class="ic t-green">∞</div>
+        <h3>Kernel-scale by default</h3>
+        <p>History streams in progressive 256/512-row batches from a persistent cursor that never
+        restarts. The Linux kernel's 1,464,430 commits scroll like a small repository.</p>
+      </div>
+      <div class="card">
+        <div class="ic t-orange">◉</div>
+        <h3>Live repository watching</h3>
+        <p>Create a branch or tag in your terminal and it appears in the sidebar within ~150&nbsp;ms —
+        while your scope and selected commit stay exactly where you left them.</p>
+      </div>
+      <div class="card">
+        <div class="ic t-purple">⎇</div>
+        <h3>Worktrees are first-class</h3>
+        <p>Linked worktrees appear beside branches and remotes with their checked-out branch, locked
+        state, and health — including checkouts that have gone missing.</p>
+      </div>
+      <div class="card">
+        <div class="ic t-cyan">⇲</div>
+        <h3>Resizable everything</h3>
+        <p>Drag the sidebar, the graph column, and the details panel. Wide merge histories can open
+        the graph to dozens of visible lanes.</p>
+      </div>
+      <div class="card">
+        <div class="ic t-red">Δ</div>
+        <h3>Changed files at a glance</h3>
+        <p>Selecting a commit shows its file changes with Git's own status letters — debounced, so
+        holding an arrow key never decodes commits you fly past.</p>
+      </div>
+      <div class="card">
+        <div class="ic t-blue">⌨</div>
+        <h3>Keyboard-first history</h3>
+        <p>Arrows, Page Up/Down, Home and End drive the list through declared, rebindable actions.
+        Selection follows the commit, not the row number.</p>
+      </div>
+      <div class="card">
+        <div class="ic t-green">✓</div>
+        <h3>Verified against real repositories</h3>
+        <p>A stress harness validates the exact data the painter consumes — cross-row line continuity,
+        color for color — across 18 real repositories including linux, git, and WordPress.</p>
+      </div>
+      <div class="card">
+        <div class="ic t-purple">λ</div>
+        <h3>Branch scoping in one click</h3>
+        <p>Click a branch to scope history to it; click again to widen back to all refs. External
+        updates re-resolve the tip so the walk never goes stale.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="performance">
+  <div class="wrap">
+    <p class="kicker">Performance</p>
+    <h2>Measured, archived, and honest.</h2>
+    <p class="section-sub">
+      Single-sample warm-cache numbers from the repository stress harness on an Apple M2 Max —
+      raw output archived in the repository, no estimates, no projections.
+    </p>
+    <table class="perf">
+      <thead>
+        <tr><th>Repository</th><th>Commits</th><th>First 256 rows</th><th>Full walk + layout</th><th>Throughput</th><th>Violations</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>vector-editor</td><td>176</td><td>2 ms</td><td>2 ms</td><td>88,000 rows/s</td><td>0</td></tr>
+        <tr><td>sema</td><td>2,474</td><td>6 ms</td><td>20 ms</td><td>123,700 rows/s</td><td>0</td></tr>
+        <tr><td>crescat</td><td>21,558</td><td>13 ms</td><td>120 ms</td><td>179,650 rows/s</td><td>0</td></tr>
+        <tr><td>nocodb</td><td>36,437</td><td>15 ms</td><td>219 ms</td><td>166,378 rows/s</td><td>0</td></tr>
+        <tr><td>WordPress</td><td>62,969</td><td>11 ms</td><td>753 ms</td><td>83,624 rows/s</td><td>0</td></tr>
+        <tr><td>git</td><td>85,080</td><td>55 ms</td><td>2.0 s</td><td>43,209 rows/s</td><td>0</td></tr>
+        <tr class="hot"><td>Linux kernel</td><td>1,464,430</td><td>218 ms</td><td>35.4 s</td><td>41,368 rows/s</td><td>0</td></tr>
+      </tbody>
+    </table>
+    <p class="perf-note">
+      Violations = graph-invariant failures across the stream the painter renders, validated row by row.
+      Raw results: <code>fixtures/stress/2026-08-04-warm.txt</code>. The harness found — and the suite now
+      guards against — a real-world edge: git.git's famous tag pointing at a blob.
+    </p>
+  </div>
+</section>
+
+<section id="tech">
+  <div class="wrap">
+    <p class="kicker">Under the hood</p>
+    <h2>A hybrid engine with no shortcuts.</h2>
+    <div class="split">
+      <div class="tech-list">
+        <div class="tech"><span class="dot" style="background: var(--accent)"></span>
+          <div><h4>gix for every read</h4>
+          <p>Direct object-database access: incremental traversal, reusable caches, and data
+          structures independent of subprocess text formats.</p></div>
+        </div>
+        <div class="tech"><span class="dot" style="background: var(--green)"></span>
+          <div><h4>Your real Git for mutations</h4>
+          <p>Fetch and branch operations run the installed <span style="font-family: var(--font-mono)">git</span>,
+          inheriting your credential helpers, SSH setup, and hooks untouched.</p></div>
+        </div>
+        <div class="tech"><span class="dot" style="background: var(--purple)"></span>
+          <div><h4>GPUI, the engine behind Zed</h4>
+          <p>Metal-rendered UI with a virtualized list — one element per visible row,
+          one canvas for the whole graph, every frame.</p></div>
+        </div>
+        <div class="tech"><span class="dot" style="background: var(--orange)"></span>
+          <div><h4>Rust with the guardrails on</h4>
+          <p><span style="font-family: var(--font-mono)">unsafe_code = "forbid"</span> across the workspace,
+          pedantic Clippy as an error, and a UI that never blocks on the filesystem.</p></div>
+        </div>
+      </div>
+      <div class="term">$ <span class="b">cargo run --release --example stress -- ~/code/forks/linux.git</span>
+
+linux.git   <span class="g">1464430 rows</span>  discover 0ms  snapshot 14ms
+            first batch <span class="g">218ms</span>  full walk 35400ms
+            <span class="g">41368 rows/s</span>  max lanes 128  <span class="g">violations 0</span>
+
+<span class="d"># 131 tests · TDD with mutation verification
+# every batch resumes, never restarts (§6.9)
+# stale results are rejected by session + generation (§5.5)</span></div>
+    </div>
+  </div>
+</section>
+
+<section id="roadmap">
+  <div class="wrap">
+    <p class="kicker">Roadmap</p>
+    <h2>Where it is, and where it's going.</h2>
+    <div class="road">
+      <div class="card">
+        <h3>Browse <span class="pill now">Shipped</span></h3>
+        <p>Discovery, metadata sidebar, live watching, painted graph, virtualized history,
+        branch scoping, keyboard navigation, changed files, resizable panels.</p>
+      </div>
+      <div class="card">
+        <h3>Inspect <span class="pill next">Next</span></h3>
+        <p>Commit filtering, full commit details, and lazy per-file diffs with strict
+        size guards — never a frozen window on a generated-file monster commit.</p>
+      </div>
+      <div class="card">
+        <h3>Act <span class="pill later">Later</span></h3>
+        <p>Fetch with live progress and cancellation, branch create and checkout,
+        packaging, and the visual-regression release gate.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap foot-inner">
+    <span>source<b style="color: var(--accent)">four</b> — a Git history browser by Helge Sverre</span>
+    <span>Built with Rust, GPUI, and gix</span>
+  </div>
+</footer>
+
+<script>
+  // Scale the fixed-size app render to its responsive frame.
+  const frame = document.querySelector(".frame-inner");
+  const shot = document.querySelector(".frame iframe");
+  const fit = () => {
+    shot.style.transform = `scale(${frame.clientWidth / 1328})`;
+  };
+  fit();
+  addEventListener("resize", fit);
+</script>
+
+</body>
+</html>
