@@ -33,8 +33,9 @@ pub(super) struct ActionsView {
     pub(super) selected_job: usize,
     /// The step whose log slice shows; `None` means the failing step.
     pub(super) selected_step: Option<usize>,
-    /// The selected job's complete log, split into lines.
-    pub(super) log: Option<Result<Vec<String>, String>>,
+    /// Every job's complete log, fetched in parallel as jobs complete so
+    /// expanding any of them is instant.
+    pub(super) logs: std::collections::HashMap<u64, Result<Vec<String>, String>>,
     /// Show the whole job log instead of the selected step's slice.
     pub(super) full_log: bool,
 }
@@ -179,7 +180,7 @@ pub(super) fn demo_view() -> ActionsView {
         jobs: Some(Ok(demo_jobs())),
         selected_job: 1,
         selected_step: None,
-        log: Some(Ok(demo_log())),
+        logs: std::collections::HashMap::from([(2, Ok(demo_log()))]),
         full_log: false,
     }
 }
@@ -339,7 +340,7 @@ impl SourcefourWindow {
             jobs: None,
             selected_job: 0,
             selected_step: None,
-            log: None,
+            logs: std::collections::HashMap::new(),
             full_log: false,
         });
         match self.actions_prefetch.take_if(|warm| warm.run_id == run_id) {
@@ -396,8 +397,11 @@ impl SourcefourWindow {
             }
             if first_arrival {
                 view.selected_job = default_job(view.jobs_ok());
-                self.load_actions_log(cx);
             }
+            // Every completed job's log fetches in parallel right away, so
+            // expanding any job is instant — and a job that just finished
+            // gets its log the same cycle.
+            self.load_actions_logs(cx);
             cx.notify();
         } else if let Some(warm) = &mut self.actions_prefetch
             && warm.run_id == run_id
@@ -440,8 +444,7 @@ impl SourcefourWindow {
         view.selected_job = index;
         view.selected_step = None;
         view.full_log = false;
-        view.log = None;
-        self.load_actions_log(cx);
+        self.scroll_actions_log_to_slice();
         cx.notify();
     }
 
@@ -488,8 +491,10 @@ impl SourcefourWindow {
         );
     }
 
-    /// Reads the selected job's log and jumps the list to the slice.
-    fn load_actions_log(&mut self, cx: &mut gpui::Context<Self>) {
+    /// Fetches, in parallel, the log of every completed job that has none
+    /// yet. GitHub withholds a job's log until it finishes, so running jobs
+    /// are skipped and picked up by the next poll cycle.
+    fn load_actions_logs(&mut self, cx: &mut gpui::Context<Self>) {
         let Some(remote) = self.github_remote.clone() else {
             return;
         };
@@ -497,42 +502,65 @@ impl SourcefourWindow {
             return;
         };
         let run_id = view.run.id;
-        let Some(job) = view.selected() else {
-            return;
-        };
-        let job_id = job.id;
-        self.fetch_github(
-            |this| &mut this.actions_log_request,
-            move |token| {
-                sourcefour_github::job_log(
-                    &sourcefour_github::UreqTransport,
-                    &remote,
-                    &token,
-                    job_id,
-                )
-            },
-            move |this, outcome, cx| {
-                let Some(view) = &mut this.actions_view else {
-                    return;
-                };
-                if view.run.id != run_id || view.selected().is_none_or(|job| job.id != job_id) {
-                    return;
-                }
-                view.log =
-                    Some(outcome.map(|log| log.lines().map(str::to_owned).collect::<Vec<_>>()));
-                this.scroll_actions_log_to_slice();
-                cx.notify();
-            },
-            cx,
-        );
+        let method = self.settings.github.auth_method;
+        let wanted: Vec<u64> = view
+            .jobs_ok()
+            .iter()
+            .filter(|job| matches!(job.status, CheckStatus::Completed(_)))
+            .filter(|job| !matches!(view.logs.get(&job.id), Some(Ok(_))))
+            .map(|job| job.id)
+            .filter(|id| !self.actions_logs_pending.contains(id))
+            .collect();
+        for job_id in wanted {
+            self.actions_logs_pending.insert(job_id);
+            let remote = remote.clone();
+            let credentials = super::github::credentials_path();
+            cx.spawn(async move |this, cx| {
+                let outcome = cx
+                    .background_executor()
+                    .spawn(async move {
+                        let token =
+                            super::github::resolve_github_token(method, credentials.as_deref())?;
+                        sourcefour_github::job_log(
+                            &sourcefour_github::UreqTransport,
+                            &remote,
+                            &token,
+                            job_id,
+                        )
+                    })
+                    .await;
+                this.update(cx, |this, cx| {
+                    this.actions_logs_pending.remove(&job_id);
+                    let Some(view) = &mut this.actions_view else {
+                        return;
+                    };
+                    if view.run.id != run_id {
+                        return;
+                    }
+                    let selected = view.selected().is_some_and(|job| job.id == job_id);
+                    view.logs.insert(
+                        job_id,
+                        outcome.map(|log| log.lines().map(str::to_owned).collect()),
+                    );
+                    if selected {
+                        this.scroll_actions_log_to_slice();
+                    }
+                    cx.notify();
+                })
+                .ok();
+            })
+            .detach();
+        }
     }
 
-    /// Re-reads jobs and log past every cache, the ↻ affordance.
+    /// Re-reads jobs and every log past every cache, the ↻ affordance.
     pub(super) fn refresh_actions(&mut self, cx: &mut gpui::Context<Self>) {
-        if let Some(view) = &self.actions_view {
-            self.fetch_actions_jobs(view.run.id, cx);
-        }
-        self.load_actions_log(cx);
+        let Some(view) = &mut self.actions_view else {
+            return;
+        };
+        view.logs.clear();
+        let run_id = view.run.id;
+        self.fetch_actions_jobs(run_id, cx);
     }
 
     /// While the run is alive and its overlay open, jobs re-read every five
@@ -581,13 +609,13 @@ impl SourcefourWindow {
     /// step's slice.
     fn actions_log_window(&self) -> Option<(usize, usize, usize)> {
         let view = self.actions_view.as_ref()?;
-        let Some(Ok(lines)) = &view.log else {
+        let job = view.selected()?;
+        let Some(Ok(lines)) = view.logs.get(&job.id) else {
             return None;
         };
         if view.full_log {
             return Some((0, lines.len(), lines.len()));
         }
-        let job = view.selected()?;
         let step = view.focused_step().and_then(|index| job.steps.get(index))?;
         let range = sourcefour_github::step_slice(lines, step.started_at, step.completed_at);
         Some((range.start, range.end, lines.len()))
@@ -601,7 +629,7 @@ impl SourcefourWindow {
         let Some(view) = &self.actions_view else {
             return;
         };
-        let target = match &view.log {
+        let target = match view.selected().and_then(|job| view.logs.get(&job.id)) {
             Some(Ok(lines)) => sourcefour_github::first_error(&lines[start..end])
                 .map_or(0, |offset| offset.saturating_sub(2)),
             _ => 0,
@@ -1107,36 +1135,28 @@ impl SourcefourWindow {
         view: &ActionsView,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<gpui::AnyElement> {
-        match &view.log {
-            None => vec![
+        let notice = |text: String| {
+            vec![
                 div()
                     .px(px(42.0))
                     .py(px(6.0))
                     .text_size(px(10.5))
                     .text_color(self.theme.text_faint)
-                    .child("Fetching log…")
+                    .child(text)
                     .into_any_element(),
-            ],
-            Some(Err(message)) => {
-                // GitHub withholds job logs until the job finishes.
-                let running = view
-                    .selected()
-                    .is_some_and(|job| !matches!(job.status, CheckStatus::Completed(_)));
-                let text = if running {
-                    String::from("The log appears once this job finishes.")
-                } else {
-                    message.clone()
-                };
-                vec![
-                    div()
-                        .px(px(42.0))
-                        .py(px(6.0))
-                        .text_size(px(10.5))
-                        .text_color(self.theme.text_faint)
-                        .child(text)
-                        .into_any_element(),
-                ]
-            }
+            ]
+        };
+        let Some(job) = view.selected() else {
+            return Vec::new();
+        };
+        // GitHub withholds a job's log until the job finishes; there is
+        // nothing to wait for while it runs.
+        if !matches!(job.status, CheckStatus::Completed(_)) {
+            return notice(String::from("The log appears once this job finishes."));
+        }
+        match view.logs.get(&job.id) {
+            None => notice(String::from("Fetching log…")),
+            Some(Err(message)) => notice(message.clone()),
             Some(Ok(lines)) => {
                 let Some((start, end, total)) = self.actions_log_window() else {
                     return Vec::new();
@@ -1154,7 +1174,9 @@ impl SourcefourWindow {
                         let Some(view) = &this.actions_view else {
                             return Vec::new();
                         };
-                        let Some(Ok(lines)) = &view.log else {
+                        let Some(Ok(lines)) =
+                            view.selected().and_then(|job| view.logs.get(&job.id))
+                        else {
                             return Vec::new();
                         };
                         range

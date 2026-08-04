@@ -124,8 +124,8 @@ pub(crate) struct SourcefourWindow {
     actions_view: Option<actions::ActionsView>,
     /// Token for the newest jobs read of the overlay.
     actions_request: u64,
-    /// Token for the newest log read of the overlay.
-    actions_log_request: u64,
+    /// Jobs whose log download is in flight, so sweeps never double-fetch.
+    actions_logs_pending: std::collections::HashSet<u64>,
     /// Retires stale five-second poll loops when a new run opens.
     actions_poll: u64,
     /// Focus target while the Actions overlay is open, so Escape closes it.
@@ -360,7 +360,7 @@ impl SourcefourWindow {
             actions_prefetch: None,
             actions_view: None,
             actions_request: 0,
-            actions_log_request: 0,
+            actions_logs_pending: std::collections::HashSet::new(),
             actions_poll: 0,
             actions_focus: cx.focus_handle(),
             actions_log_scroll: UniformListScrollHandle::new(),

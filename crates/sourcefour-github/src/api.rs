@@ -354,7 +354,10 @@ pub fn job_log(
         remote.owner, remote.repo
     );
     let bytes = transport.download(&url, Some(token))?;
-    Ok(String::from_utf8_lossy(&bytes).into_owned())
+    let text = String::from_utf8_lossy(&bytes);
+    // Actions logs open with a UTF-8 BOM, which would hide the first
+    // line's timestamp from the slicer.
+    Ok(text.trim_start_matches('\u{feff}').to_owned())
 }
 
 /// GitHub's two-field status/conclusion pair as one typed state.

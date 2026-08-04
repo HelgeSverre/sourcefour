@@ -31,7 +31,7 @@ impl<T> Cached<T> {
 pub(super) type GithubChecks = Result<Vec<sourcefour_model::CheckRun>, String>;
 
 /// The 0600 token file, next to the other per-user files.
-fn credentials_path() -> Option<std::path::PathBuf> {
+pub(super) fn credentials_path() -> Option<std::path::PathBuf> {
     crate::ui_state::support_file("credentials.json")
 }
 
@@ -60,7 +60,7 @@ pub(super) fn check_glyph(
 
 /// The token the configured auth method yields right now, or the words to
 /// show for why it cannot.
-fn resolve_github_token(
+pub(super) fn resolve_github_token(
     method: crate::settings::AuthMethod,
     credentials: Option<&std::path::Path>,
 ) -> Result<String, String> {
