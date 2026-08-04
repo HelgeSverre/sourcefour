@@ -13,6 +13,7 @@ path = "src/main.rs"
 
 [dependencies]
 gpui = { git = "https://github.com/zed-industries/zed", package = "gpui", rev = "d637307bd75389f63adbb7d86bc66174ee817d0d" }
+smallvec.workspace = true
 sourcefour-git = { path = "../../crates/sourcefour-git" }
 sourcefour-model = { path = "../../crates/sourcefour-model" }
 tracing.workspace = true

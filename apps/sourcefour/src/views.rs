@@ -1,15 +1,18 @@
 use gpui::{
-    Div, FontWeight, IntoElement, Render, ScrollHandle, StatefulInteractiveElement, Window, div,
-    point, prelude::*, px, svg,
+    Div, FocusHandle, FontWeight, IntoElement, Render, ScrollHandle, StatefulInteractiveElement,
+    UniformListScrollHandle, Window, actions, div, point, prelude::*, px, svg, uniform_list,
 };
+use sourcefour_git::{GixHistoryCursor, HistoryCursor as _};
 use sourcefour_model::{
-    AheadBehindState, AheadBehindUpdate, Generation, HeadSnapshot, LoadState, RepoEnvelope,
-    RepoFailure, RepoLocation, RepoSessionId, RepoSnapshot, RequestId, WorktreeAccessibility,
+    AheadBehindState, AheadBehindUpdate, Generation, HeadSnapshot, HistoryBatch, HistoryQuery,
+    HistoryScope, LoadState, RepoEnvelope, RepoFailure, RepoLocation, RepoSessionId, RepoSnapshot,
+    RequestId, WorktreeAccessibility,
 };
 
 use crate::{
     app::WindowLaunch,
     demo::COMMITS,
+    history::{HistoryState, relative_date},
     theme::{
         DETAILS_HEIGHT, GRAPH_WIDTH, HEADER_HEIGHT, HISTORY_ROW_HEIGHT, SIDEBAR_WIDTH,
         STATUS_HEIGHT, TITLEBAR_HEIGHT, TOOLBAR_HEIGHT, Theme,
@@ -28,10 +31,30 @@ pub(crate) struct SourcefourWindow {
     /// Kept so a refresh can re-read without re-discovering.
     location: Option<RepoLocation>,
     repo: LoadState<RepoSnapshot>,
+    history: HistoryState,
+    /// Owned between batches; moved to a worker while one is in flight.
+    cursor: Option<GixHistoryCursor>,
     theme: Theme,
     sections: SidebarSections,
     history_scroll: ScrollHandle,
+    list_scroll: UniformListScrollHandle,
+    focus: FocusHandle,
 }
+
+actions!(
+    sourcefour,
+    [
+        SelectNextCommit,
+        SelectPreviousCommit,
+        SelectFirstCommit,
+        SelectLastLoadedCommit,
+        PageDown,
+        PageUp,
+    ]
+);
+
+/// Rows a page key moves, matching the baseline viewport's row count.
+const PAGE_ROWS: isize = 20;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SidebarSection {
@@ -328,9 +351,13 @@ impl SourcefourWindow {
             generation,
             location: None,
             repo: LoadState::Idle,
+            history: HistoryState::default(),
+            cursor: None,
             theme: Theme::dark(),
             sections: SidebarSections::default(),
             history_scroll: ScrollHandle::new(),
+            list_scroll: UniformListScrollHandle::new(),
+            focus: cx.focus_handle(),
         };
         if let Some(location) = launch.location {
             window.repo = LoadState::Loading {
@@ -420,6 +447,11 @@ impl SourcefourWindow {
                         request: RequestId(0),
                         payload,
                     });
+                    if applied {
+                        // Labels come from the snapshot, so history starts only
+                        // once the reference pass has produced them (§6.6).
+                        this.start_history(HistoryScope::AllRefs, cx);
+                    }
                     cx.notify();
                     applied
                 })
@@ -447,6 +479,102 @@ impl SourcefourWindow {
             .ok();
         })
         .detach();
+    }
+
+    /// Starts a traversal for `scope`, discarding anything already loaded.
+    fn start_history(&mut self, scope: HistoryScope, cx: &mut gpui::Context<Self>) {
+        let Some(location) = self.location.clone() else {
+            return;
+        };
+        let labels = self
+            .snapshot()
+            .map(|snapshot| snapshot.labels_by_object.clone())
+            .unwrap_or_default();
+        // Dropping the previous cursor ends its worker thread.
+        self.cursor = None;
+        self.history.reset(scope.clone());
+        match GixHistoryCursor::start(&location, HistoryQuery { scope }, labels) {
+            Ok(cursor) => {
+                self.cursor = Some(cursor);
+                self.request_batch(cx);
+            }
+            Err(failure) => {
+                tracing::error!(%failure, "history could not start");
+                self.history.has_more = false;
+            }
+        }
+    }
+
+    /// Requests the next batch, if one is warranted and none is in flight.
+    fn request_batch(&mut self, cx: &mut gpui::Context<Self>) {
+        let Some(mut cursor) = self.cursor.take() else {
+            return;
+        };
+        self.history.request_in_flight = true;
+        let session = self.session;
+        let generation = self.generation;
+        let rows = cursor.next_batch_size();
+        cx.spawn(async move |this, cx| {
+            // The cursor moves to the worker and back so the render thread never
+            // waits on a traversal.
+            let (batch, cursor) = cx
+                .background_executor()
+                .spawn(async move {
+                    let batch = cursor.next_batch(rows);
+                    (batch, cursor)
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                this.cursor = Some(cursor);
+                this.apply_batch(&RepoEnvelope {
+                    session,
+                    generation,
+                    request: RequestId(2),
+                    payload: batch,
+                });
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Appends a batch that still belongs to the current scope.
+    fn apply_batch(&mut self, envelope: &RepoEnvelope<Result<HistoryBatch, RepoFailure>>) -> bool {
+        if !belongs_to(self.session, self.generation, envelope) {
+            return false;
+        }
+        self.history.request_in_flight = false;
+        match &envelope.payload {
+            Ok(batch) => {
+                self.history
+                    .extend(batch.rows.clone(), batch.graph_rows.clone(), batch.has_more);
+                true
+            }
+            Err(failure) => {
+                tracing::error!(%failure, "history batch failed");
+                self.history.has_more = false;
+                false
+            }
+        }
+    }
+
+    /// Moves the selection and keeps it visible.
+    fn move_selection(&mut self, delta: isize, cx: &mut gpui::Context<Self>) {
+        if let Some(index) = self.history.move_selection(delta) {
+            self.list_scroll
+                .scroll_to_item(index, gpui::ScrollStrategy::Top);
+            cx.notify();
+        }
+    }
+
+    /// Selects one loaded row by index and keeps it visible.
+    fn select_row(&mut self, index: usize, cx: &mut gpui::Context<Self>) {
+        if let Some(index) = self.history.select_index(index) {
+            self.list_scroll
+                .scroll_to_item(index, gpui::ScrollStrategy::Top);
+            cx.notify();
+        }
     }
 
     /// Merges divergence counts into the loaded snapshot.
@@ -962,13 +1090,161 @@ impl SourcefourWindow {
             })
     }
 
-    fn history(&self, columns: ColumnVisibility, cx: &gpui::Context<Self>) -> impl IntoElement {
+    fn history(&self, columns: ColumnVisibility, cx: &mut gpui::Context<Self>) -> Div {
+        if !self.demo {
+            return div()
+                .relative()
+                .flex_grow()
+                .min_h(px(1.0))
+                .child(self.history_list(columns, cx));
+        }
         div()
             .relative()
             .flex_grow()
             .min_h(px(1.0))
             .child(self.history_rows(columns))
             .child(self.history_scrollbar(cx))
+    }
+
+    /// The virtualized commit list: one element per visible row only (§8.3).
+    fn history_list(&self, columns: ColumnVisibility, cx: &mut gpui::Context<Self>) -> Div {
+        if self.history.len() == 0 {
+            return div()
+                .size_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .bg(self.theme.bg_list)
+                .text_size(px(12.0))
+                .text_color(self.theme.text_faint)
+                .child(if self.history.has_more {
+                    format!("Loading history from {}...", self.path)
+                } else {
+                    String::from("No commits yet")
+                });
+        }
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |elapsed| {
+                i64::try_from(elapsed.as_secs()).unwrap_or(i64::MAX)
+            });
+        div().size_full().bg(self.theme.bg_list).child(
+            uniform_list(
+                cx.entity(),
+                "history",
+                self.history.len(),
+                move |this, visible, _window, cx| {
+                    // Scrolling near the tail is what asks for the next batch.
+                    if this.history.wants_more(visible.end) {
+                        this.request_batch(cx);
+                    }
+                    visible
+                        .clone()
+                        .map(|index| this.commit_row(index, columns, now, cx))
+                        .collect()
+                },
+            )
+            .track_scroll(self.list_scroll.clone())
+            .size_full(),
+        )
+    }
+
+    /// One history row: graph cell, subject, author, date, hash.
+    fn commit_row(
+        &self,
+        index: usize,
+        columns: ColumnVisibility,
+        now: i64,
+        cx: &mut gpui::Context<Self>,
+    ) -> gpui::Stateful<Div> {
+        let Some(row) = self.history.rows.get(index) else {
+            return div()
+                .id(("commit-missing", index))
+                .h(px(HISTORY_ROW_HEIGHT));
+        };
+        let selected = self.history.selected == Some(row.oid);
+        let lane = self
+            .history
+            .layout
+            .get(index)
+            .map_or((0, 0), |graph| (graph.node_lane, graph.node_color));
+        let oid = row.oid;
+        div()
+            .id(("commit", index))
+            .h(px(HISTORY_ROW_HEIGHT))
+            // Without a full-width row the subject sizes to its text and every
+            // later column drifts, so the header no longer lines up with it.
+            .w_full()
+            .flex()
+            .items_center()
+            .bg(if selected {
+                self.theme.bg_selected
+            } else {
+                self.theme.bg_list
+            })
+            .hover(|style| style.bg(self.theme.bg_hover))
+            .text_color(self.theme.text_primary)
+            .child(lane_marker(
+                &self.theme,
+                lane.1 as usize % self.theme.graph_lanes.len(),
+                row.flags.is_merge,
+            ))
+            .child(
+                div()
+                    .flex_grow()
+                    .min_w(px(1.0))
+                    // Without clipping, a long subject runs straight through the
+                    // author column instead of stopping at it.
+                    .overflow_hidden()
+                    .text_ellipsis()
+                    .whitespace_nowrap()
+                    .pl(px(10.0))
+                    .pr(px(10.0))
+                    .text_size(px(12.5))
+                    .text_color(if row.flags.is_merge {
+                        self.theme.text_secondary
+                    } else {
+                        self.theme.text_primary
+                    })
+                    .child(row.summary.clone()),
+            )
+            .when(columns.author, |this| {
+                this.child(
+                    div()
+                        .w(px(148.0))
+                        .flex_none()
+                        .overflow_hidden()
+                        .text_ellipsis()
+                        .whitespace_nowrap()
+                        .text_size(px(11.5))
+                        .text_color(self.theme.text_secondary)
+                        .child(row.author_name.clone()),
+                )
+            })
+            .child(
+                div()
+                    .w(px(96.0))
+                    .text_size(px(11.5))
+                    .text_color(self.theme.text_secondary)
+                    .child(relative_date(now, row.commit_time)),
+            )
+            .when(columns.hash, |this| {
+                this.child(
+                    div()
+                        .w(px(74.0))
+                        .text_size(px(11.0))
+                        .text_color(if selected {
+                            self.theme.accent
+                        } else {
+                            self.theme.text_faint
+                        })
+                        .child(oid.abbreviated(7)),
+                )
+            })
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.history.selected = Some(oid);
+                cx.notify();
+            }))
     }
 
     fn history_rows(&self, columns: ColumnVisibility) -> impl IntoElement {
@@ -1111,18 +1387,58 @@ impl SourcefourWindow {
 
     fn details(&self) -> impl IntoElement {
         if !self.demo {
+            // §6.10: the header is populated from the already-loaded row while
+            // the exact metadata, files, and diff arrive in M4.
+            let selected = self
+                .history
+                .selected_index()
+                .and_then(|index| self.history.rows.get(index));
+            let (hash, subject, author) = selected.map_or_else(
+                || {
+                    (
+                        String::new(),
+                        String::from("No commit selected"),
+                        String::new(),
+                    )
+                },
+                |row| {
+                    (
+                        row.oid.abbreviated(9),
+                        row.summary.clone(),
+                        row.author_name.clone(),
+                    )
+                },
+            );
             return div()
                 .h(px(DETAILS_HEIGHT))
                 .flex_none()
                 .flex()
-                .items_center()
+                .flex_col()
+                .gap(px(6.0))
                 .px(px(14.0))
+                .pt(px(10.0))
                 .border_t_1()
                 .border_color(self.theme.border)
                 .bg(self.theme.bg_panel)
-                .text_size(px(12.0))
-                .text_color(self.theme.text_faint)
-                .child(format!("Loading repository metadata for {}...", self.path));
+                .child(
+                    div()
+                        .text_size(px(12.0))
+                        .text_color(self.theme.accent)
+                        .child(hash),
+                )
+                .child(
+                    div()
+                        .text_size(px(13.0))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(self.theme.text_primary)
+                        .child(subject),
+                )
+                .child(
+                    div()
+                        .text_size(px(11.5))
+                        .text_color(self.theme.text_secondary)
+                        .child(author),
+                );
         }
         let hash = COMMITS[0].hash;
         let title = COMMITS[0].subject;
@@ -1160,6 +1476,27 @@ impl Render for SourcefourWindow {
     fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
         let columns = ColumnVisibility::for_window_width(window.viewport_size().width.0);
         div()
+            .key_context("History")
+            .track_focus(&self.focus)
+            .on_action(cx.listener(|this, _: &SelectNextCommit, _, cx| {
+                this.move_selection(1, cx);
+            }))
+            .on_action(cx.listener(|this, _: &SelectPreviousCommit, _, cx| {
+                this.move_selection(-1, cx);
+            }))
+            .on_action(cx.listener(|this, _: &PageDown, _, cx| {
+                this.move_selection(PAGE_ROWS, cx);
+            }))
+            .on_action(cx.listener(|this, _: &PageUp, _, cx| {
+                this.move_selection(-PAGE_ROWS, cx);
+            }))
+            .on_action(cx.listener(|this, _: &SelectFirstCommit, _, cx| {
+                this.select_row(0, cx);
+            }))
+            .on_action(cx.listener(|this, _: &SelectLastLoadedCommit, _, cx| {
+                let last = this.history.len().saturating_sub(1);
+                this.select_row(last, cx);
+            }))
             .size_full()
             .flex()
             .flex_col()

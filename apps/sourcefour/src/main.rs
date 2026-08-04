@@ -2,6 +2,7 @@
 
 mod app;
 mod demo;
+mod history;
 mod theme;
 mod views;
 

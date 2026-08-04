@@ -95,6 +95,7 @@ pub(crate) fn run(request: &LaunchRequest) -> ExitCode {
                 }
             })
             .detach();
+            cx.bind_keys(history_keymap());
             let result = match launch {
                 Launch::Window(window) => {
                     let options = window_options(
@@ -124,6 +125,22 @@ pub(crate) fn run(request: &LaunchRequest) -> ExitCode {
             cx.activate(true);
         });
     launch_exit_code(opened.load(Ordering::Acquire), failed)
+}
+
+/// History navigation keys, declared once rather than matched ad hoc (§8.5).
+fn history_keymap() -> Vec<gpui::KeyBinding> {
+    use crate::views::{
+        PageDown, PageUp, SelectFirstCommit, SelectLastLoadedCommit, SelectNextCommit,
+        SelectPreviousCommit,
+    };
+    vec![
+        gpui::KeyBinding::new("down", SelectNextCommit, Some("History")),
+        gpui::KeyBinding::new("up", SelectPreviousCommit, Some("History")),
+        gpui::KeyBinding::new("pagedown", PageDown, Some("History")),
+        gpui::KeyBinding::new("pageup", PageUp, Some("History")),
+        gpui::KeyBinding::new("home", SelectFirstCommit, Some("History")),
+        gpui::KeyBinding::new("end", SelectLastLoadedCommit, Some("History")),
+    ]
 }
 
 fn window_options(
