@@ -25,6 +25,8 @@ pub(crate) struct SourcefourWindow {
     /// Identity every background result must match to be applied.
     session: RepoSessionId,
     generation: Generation,
+    /// Kept so a refresh can re-read without re-discovering.
+    location: Option<RepoLocation>,
     repo: LoadState<RepoSnapshot>,
     theme: Theme,
     sections: SidebarSections,
@@ -115,6 +117,10 @@ impl SidebarSections {
         }
     }
 }
+
+/// §6.14 coalescing interval: long enough to batch a burst of ref writes, short
+/// enough that an externally created branch appears without feeling delayed.
+const METADATA_POLL: std::time::Duration = std::time::Duration::from_millis(150);
 
 /// Whether a background result still belongs to the window that asked for it.
 ///
@@ -320,6 +326,7 @@ impl SourcefourWindow {
             demo: launch.demo,
             session,
             generation,
+            location: None,
             repo: LoadState::Idle,
             theme: Theme::dark(),
             sections: SidebarSections::default(),
@@ -329,9 +336,60 @@ impl SourcefourWindow {
             window.repo = LoadState::Loading {
                 started_at: std::time::Instant::now(),
             };
-            window.load_metadata(location, cx);
+            window.location = Some(location.clone());
+            window.load_metadata(location.clone(), cx);
+            Self::watch_metadata(location, cx);
         }
         window
+    }
+
+    /// Re-reads metadata when refs or worktrees change outside the application.
+    ///
+    /// Polling at the §6.14 coalescing interval costs one stat pass over the
+    /// metadata paths, which is far cheaper than a recursive worktree watcher
+    /// and behaves identically on every platform.
+    fn watch_metadata(location: RepoLocation, cx: &mut gpui::Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            let mut watcher = sourcefour_git::MetadataWatcher::new(&location);
+            loop {
+                cx.background_executor().timer(METADATA_POLL).await;
+                // The watcher moves to the background thread and back rather
+                // than being cloned, so polling costs no allocation per tick.
+                let (change, returned) = cx
+                    .background_executor()
+                    .spawn(async move {
+                        let change = watcher.poll();
+                        (change, watcher)
+                    })
+                    .await;
+                watcher = returned;
+                if change.is_none() {
+                    continue;
+                }
+                let reload = this.update(cx, |this, cx| {
+                    // A new generation retires every result still in flight.
+                    this.generation = Generation(this.generation.0 + 1);
+                    if let Some(current) = this.repo.value().cloned() {
+                        this.repo = LoadState::Refreshing {
+                            current,
+                            started_at: std::time::Instant::now(),
+                        };
+                    }
+                    cx.notify();
+                    this.location.clone()
+                });
+                match reload {
+                    Ok(Some(location)) => {
+                        this.update(cx, |this, cx| this.load_metadata(location, cx))
+                            .ok();
+                    }
+                    Ok(None) => {}
+                    // The window is gone, so the watcher has nothing to serve.
+                    Err(_) => return,
+                }
+            }
+        })
+        .detach();
     }
 
     /// Loads metadata, then divergence counts, without blocking either render.

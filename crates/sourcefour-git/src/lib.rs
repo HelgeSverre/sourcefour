@@ -8,6 +8,7 @@ mod ahead_behind;
 mod discover;
 mod refs;
 mod session;
+mod watch;
 mod worktrees;
 
 use std::sync::atomic::AtomicBool;
@@ -17,6 +18,7 @@ pub use crate::{
     discover::{discover, display_name},
     refs::{References, references},
     session::snapshot,
+    watch::{MetadataChange, MetadataWatcher},
     worktrees::worktrees,
 };
 
@@ -113,27 +115,6 @@ pub trait RepoOperator: Send + Sync {
 pub trait OperationSink: Send + Sync {
     /// Accepts one progress update.
     fn report(&self, progress: OperationProgress);
-}
-
-/// Watches metadata-only repository changes without recursively watching files.
-pub trait MetadataWatcher: Send {
-    /// Returns one coalesced change notice when available.
-    ///
-    /// # Errors
-    ///
-    /// Returns a typed failure when watcher state cannot be read.
-    fn poll(&mut self) -> Result<Option<MetadataChange>, RepoFailure>;
-}
-
-/// Metadata change reported by a watcher implementation.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum MetadataChange {
-    /// Reference names or targets changed.
-    Refs,
-    /// Worktree registration or metadata changed.
-    Worktrees,
-    /// Both metadata groups changed during a debounce interval.
-    RefsAndWorktrees,
 }
 
 /// Marker proving this crate is linked to the pinned gix dependency.
