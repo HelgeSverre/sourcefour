@@ -67,12 +67,19 @@ fn default_path() -> Option<PathBuf> {
     support_file("state.json")
 }
 
+/// The user's home directory. Windows sets `USERPROFILE` where Unix sets
+/// `HOME`.
+pub(crate) fn home_directory() -> Option<PathBuf> {
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
+}
+
 /// A file in the app's per-user support directory,
 /// `~/Library/Application Support/Sourcefour/` on macOS.
 pub(crate) fn support_file(name: &str) -> Option<PathBuf> {
-    let home = std::env::var_os("HOME")?;
     Some(
-        PathBuf::from(home)
+        home_directory()?
             .join("Library")
             .join("Application Support")
             .join("Sourcefour")

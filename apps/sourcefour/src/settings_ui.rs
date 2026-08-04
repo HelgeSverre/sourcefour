@@ -34,10 +34,25 @@ pub(crate) struct SettingsView {
     pub(crate) section: SettingsSection,
 }
 
+/// Where the GitHub connection stands, shown in the GitHub section.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) enum GithubConnection {
+    /// Nothing checked yet.
+    #[default]
+    Idle,
+    /// A `GET /user` is in flight.
+    Checking,
+    /// The credentials work; `login` is who they authenticate as.
+    Connected { login: String },
+    /// The last check failed, with the words to show.
+    Failed { message: String },
+}
+
 /// The full-window settings overlay: backdrop, nav, and the active section.
 pub(crate) fn overlay(
     settings: &AppSettings,
     section: SettingsSection,
+    github: &GithubSectionState<'_>,
     theme: &Theme,
     focus: &gpui::FocusHandle,
     cx: &mut gpui::Context<SourcefourWindow>,
@@ -69,7 +84,7 @@ pub(crate) fn overlay(
                 .overflow_hidden()
                 .on_click(|_, _, cx| cx.stop_propagation())
                 .child(nav(section, theme, cx))
-                .child(content(settings, section, theme, cx)),
+                .child(content(settings, section, github, theme, cx)),
         )
 }
 
@@ -129,6 +144,7 @@ fn nav(active: SettingsSection, theme: &Theme, cx: &mut gpui::Context<Sourcefour
 fn content(
     settings: &AppSettings,
     section: SettingsSection,
+    github: &GithubSectionState<'_>,
     theme: &Theme,
     cx: &mut gpui::Context<SourcefourWindow>,
 ) -> Div {
@@ -193,47 +209,157 @@ fn content(
                 .flex_col()
                 .gap(px(14.0))
                 .children(match section {
-                    SettingsSection::GitHub => github_cards(settings, theme, cx),
+                    SettingsSection::GitHub => github_cards(settings, github, theme, cx),
                     SettingsSection::About => about_cards(theme, cx),
                 }),
         )
 }
 
+/// What the GitHub section renders beyond the settings file.
+pub(crate) struct GithubSectionState<'a> {
+    pub(crate) connection: &'a GithubConnection,
+    pub(crate) token_input: &'a gpui::Entity<crate::text_input::TextInput>,
+}
+
 fn github_cards(
     settings: &AppSettings,
+    github: &GithubSectionState<'_>,
     theme: &Theme,
     cx: &mut gpui::Context<SourcefourWindow>,
 ) -> Vec<Div> {
     let enabled = settings.github.enabled;
     let method = settings.github.auth_method;
-    vec![card(
-        theme,
-        vec![
-            row(
+    let mut rows = vec![
+        row(
+            theme,
+            "Enable GitHub integration",
+            "Show pull requests and checks for github.com remotes.",
+            toggle(theme, "github-enabled", enabled, cx, move |settings, on| {
+                settings.github.enabled = on;
+            }),
+        ),
+        row(
+            theme,
+            "Authentication",
+            "How API requests identify you.",
+            segmented(
                 theme,
-                "Enable GitHub integration",
-                "Show pull requests and checks for github.com remotes.",
-                toggle(theme, "github-enabled", enabled, cx, move |settings, on| {
-                    settings.github.enabled = on;
-                }),
+                &[
+                    ("Off", AuthMethod::Off),
+                    ("Access token", AuthMethod::Token),
+                    ("gh CLI", AuthMethod::GhCli),
+                ],
+                method,
+                cx,
             ),
-            row(
-                theme,
-                "Authentication",
-                "How API requests identify you. Connection arrives in a later step.",
-                segmented(
+        ),
+    ];
+    if enabled && method == AuthMethod::Token {
+        rows.push(row(
+            theme,
+            "Personal access token",
+            "Stored owner-only in credentials.json; needs repository read access.",
+            div()
+                .flex_none()
+                .flex()
+                .items_center()
+                .gap(px(8.0))
+                .child(
+                    div()
+                        .w(px(220.0))
+                        .h(px(24.0))
+                        .flex()
+                        .items_center()
+                        .px(px(8.0))
+                        .rounded(px(5.0))
+                        .border_1()
+                        .border_color(theme.border_strong)
+                        .bg(theme.bg_page)
+                        .text_size(px(11.0))
+                        .child(github.token_input.clone()),
+                )
+                .child(button(
                     theme,
-                    &[
-                        ("Off", AuthMethod::Off),
-                        ("Access token", AuthMethod::Token),
-                        ("gh CLI", AuthMethod::GhCli),
-                    ],
-                    method,
+                    "github-connect",
+                    "Connect",
                     cx,
-                ),
-            ),
-        ],
-    )]
+                    |this, cx| {
+                        this.connect_github(cx);
+                    },
+                )),
+        ));
+    }
+    if enabled && method == AuthMethod::GhCli {
+        rows.push(row(
+            theme,
+            "GitHub CLI",
+            "Borrows the token of a signed-in gh; nothing is stored.",
+            button(theme, "github-connect", "Connect", cx, |this, cx| {
+                this.connect_github(cx);
+            }),
+        ));
+    }
+    if enabled && *github.connection != GithubConnection::Idle {
+        rows.push(status_row(github.connection, theme, cx));
+    }
+    vec![card(theme, rows)]
+}
+
+/// The connection outcome, with Disconnect once one exists.
+fn status_row(
+    connection: &GithubConnection,
+    theme: &Theme,
+    cx: &mut gpui::Context<SourcefourWindow>,
+) -> Div {
+    let (text, color) = match connection {
+        GithubConnection::Idle => (String::new(), theme.text_faint),
+        GithubConnection::Checking => (String::from("Checking connection…"), theme.text_faint),
+        GithubConnection::Connected { login } => (format!("Connected as {login}"), theme.green),
+        GithubConnection::Failed { message } => (message.clone(), theme.red),
+    };
+    div()
+        .flex()
+        .items_center()
+        .justify_between()
+        .gap(px(16.0))
+        .px(px(14.0))
+        .py(px(10.0))
+        .child(div().text_size(px(11.5)).text_color(color).child(text))
+        .children(
+            matches!(connection, GithubConnection::Connected { .. }).then(|| {
+                button(theme, "github-disconnect", "Disconnect", cx, |this, cx| {
+                    this.disconnect_github(cx);
+                })
+            }),
+        )
+}
+
+/// A bordered chip button.
+fn button(
+    theme: &Theme,
+    id: &'static str,
+    label: &'static str,
+    cx: &mut gpui::Context<SourcefourWindow>,
+    on_click: impl Fn(&mut SourcefourWindow, &mut gpui::Context<SourcefourWindow>) + 'static,
+) -> gpui::Stateful<Div> {
+    div()
+        .id(id)
+        .flex_none()
+        .px(px(10.0))
+        .py(px(3.0))
+        .rounded(px(5.0))
+        .border_1()
+        .border_color(theme.border_strong)
+        .bg(theme.bg_list)
+        .cursor_pointer()
+        .text_size(px(11.0))
+        .text_color(theme.text_primary)
+        .hover({
+            let hover = theme.bg_hover;
+            move |style| style.bg(hover)
+        })
+        .on_click(cx.listener(move |this, _, _, cx| on_click(this, cx)))
+        .child(label)
 }
 
 fn about_cards(theme: &Theme, cx: &mut gpui::Context<SourcefourWindow>) -> Vec<Div> {
@@ -284,7 +410,12 @@ fn card(theme: &Theme, rows: Vec<Div>) -> Div {
 }
 
 /// One setting row: name and description on the left, its control right.
-fn row(theme: &Theme, name: &'static str, description: &'static str, control: Div) -> Div {
+fn row(
+    theme: &Theme,
+    name: &'static str,
+    description: &'static str,
+    control: impl gpui::IntoElement,
+) -> Div {
     div()
         .flex()
         .items_center()

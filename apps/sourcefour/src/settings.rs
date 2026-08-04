@@ -21,8 +21,9 @@ pub(crate) struct AppSettings {
 pub(crate) struct GithubSettings {
     pub(crate) enabled: bool,
     pub(crate) auth_method: AuthMethod,
-    /// REST endpoint host; reserved for GitHub Enterprise later.
-    pub(crate) api_host: String,
+    /// The repository host; the REST endpoint derives from it. Reserved for
+    /// GitHub Enterprise later.
+    pub(crate) host: String,
 }
 
 impl Default for GithubSettings {
@@ -30,7 +31,7 @@ impl Default for GithubSettings {
         Self {
             enabled: false,
             auth_method: AuthMethod::Off,
-            api_host: String::from("api.github.com"),
+            host: String::from("github.com"),
         }
     }
 }
@@ -102,7 +103,7 @@ mod tests {
             github: GithubSettings {
                 enabled: true,
                 auth_method: AuthMethod::Token,
-                api_host: String::from("github.example.com"),
+                host: String::from("github.example.com"),
             },
         };
 
@@ -122,7 +123,7 @@ mod tests {
 
         let absent = AppSettings::load_from(&directory.path().join("nowhere.json"));
         assert_eq!(absent, AppSettings::default());
-        assert_eq!(absent.github.api_host, "api.github.com");
+        assert_eq!(absent.github.host, "github.com");
 
         let broken = directory.path().join("broken.json");
         std::fs::write(&broken, "{ not json")?;
@@ -150,10 +151,7 @@ mod tests {
             AuthMethod::Off,
             "a future auth method reads as Off, not a parse failure"
         );
-        assert_eq!(
-            loaded.github.api_host, "api.github.com",
-            "missing fields default"
-        );
+        assert_eq!(loaded.github.host, "github.com", "missing fields default");
         Ok(())
     }
 }

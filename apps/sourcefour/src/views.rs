@@ -69,6 +69,12 @@ pub(crate) struct SourcefourWindow {
     settings_view: Option<crate::settings_ui::SettingsView>,
     /// Focus target while the settings overlay is open, so Escape closes it.
     settings_focus: FocusHandle,
+    /// Where the GitHub connection stands (§ settings, GitHub).
+    github_connection: crate::settings_ui::GithubConnection,
+    /// Token for the newest connection check, so stale results drop.
+    github_request: u64,
+    /// The masked personal-access-token field of the GitHub section.
+    token_input: gpui::Entity<crate::text_input::TextInput>,
     /// Juxtapose area bounds captured at paint, for mapping mouse X.
     juxtapose_bounds: std::rc::Rc<std::cell::Cell<gpui::Bounds<gpui::Pixels>>>,
     /// The last chosen diff layout, persisted across launches.
@@ -565,6 +571,36 @@ fn remote_marker(theme: &Theme) -> gpui::Svg {
         .text_color(theme.orange)
 }
 
+/// The token the configured auth method yields right now, or the words to
+/// show for why it cannot.
+fn resolve_github_token(
+    method: crate::settings::AuthMethod,
+    host: &str,
+    credentials: Option<&std::path::Path>,
+) -> Result<String, String> {
+    use crate::settings::AuthMethod;
+    match method {
+        AuthMethod::Off => Err(String::from("GitHub authentication is off.")),
+        AuthMethod::Token => credentials
+            .and_then(|path| sourcefour_github::load_token(path, host))
+            .ok_or_else(|| String::from("No token is stored.")),
+        AuthMethod::GhCli => {
+            let output = std::process::Command::new("gh")
+                .args(["auth", "token"])
+                .output()
+                .map_err(|error| format!("The gh CLI could not be run: {error}"))?;
+            let token = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !output.status.success() {
+                Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+            } else if token.is_empty() {
+                Err(String::from("gh returned no token; run `gh auth login`."))
+            } else {
+                Ok(token)
+            }
+        }
+    }
+}
+
 /// Color of a graph line, wrapping when lanes exceed the palette.
 fn lane_color(theme: &Theme, color: u8) -> gpui::Hsla {
     theme.graph_lanes[usize::from(color) % theme.graph_lanes.len()]
@@ -718,9 +754,23 @@ impl SourcefourWindow {
             diff_focus: cx.focus_handle(),
             diff_scroll: UniformListScrollHandle::new(),
             scrubbing: Scrub::None,
-            settings: crate::settings::AppSettings::load(),
+            // The demo must render identically on every machine, so it never
+            // reads this user's settings file (§12.4).
+            settings: if launch.demo {
+                crate::settings::AppSettings::default()
+            } else {
+                crate::settings::AppSettings::load()
+            },
             settings_view: None,
             settings_focus: cx.focus_handle(),
+            github_connection: crate::settings_ui::GithubConnection::Idle,
+            github_request: 0,
+            token_input: cx.new(|cx| {
+                let mut input =
+                    crate::text_input::TextInput::new("ghp_… or github_pat_…", &Theme::dark(), cx);
+                input.masked = true;
+                input
+            }),
             juxtapose_bounds: std::rc::Rc::default(),
             preferred_diff_mode: DiffMode::Unified,
             compare_parent: DiffParent::FirstParent,
@@ -2487,12 +2537,92 @@ impl SourcefourWindow {
         cx.notify();
     }
 
+    /// Stores the pasted token (if any) and verifies the connection with
+    /// `GET /user` on the background executor (§ settings, GitHub).
+    pub(crate) fn connect_github(&mut self, cx: &mut gpui::Context<Self>) {
+        use crate::settings::AuthMethod;
+        use crate::settings_ui::GithubConnection;
+
+        let method = self.settings.github.auth_method;
+        let host = self.settings.github.host.clone();
+        let credentials = crate::ui_state::support_file("credentials.json");
+        let pasted = self.token_input.read(cx).content.trim().to_string();
+
+        if method == AuthMethod::Token {
+            let Some(path) = credentials.as_deref() else {
+                return;
+            };
+            if !pasted.is_empty()
+                && let Err(error) = sourcefour_github::store_token(path, &host, &pasted)
+            {
+                self.github_connection = GithubConnection::Failed {
+                    message: format!("The token could not be stored: {error}"),
+                };
+                cx.notify();
+                return;
+            }
+            if pasted.is_empty() && sourcefour_github::load_token(path, &host).is_none() {
+                self.github_connection = GithubConnection::Failed {
+                    message: String::from("Paste a personal access token first."),
+                };
+                cx.notify();
+                return;
+            }
+        }
+
+        self.github_connection = GithubConnection::Checking;
+        self.github_request += 1;
+        let request = self.github_request;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let outcome = cx
+                .background_executor()
+                .spawn(async move {
+                    let token = resolve_github_token(method, &host, credentials.as_deref())?;
+                    sourcefour_github::whoami(&sourcefour_github::UreqTransport, &host, &token)
+                        .map_err(|failure| failure.message)
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                if this.github_request != request {
+                    return;
+                }
+                this.github_connection = match outcome {
+                    Ok(account) => GithubConnection::Connected {
+                        login: account.login,
+                    },
+                    Err(message) => GithubConnection::Failed { message },
+                };
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Deletes the stored token and forgets the connection.
+    pub(crate) fn disconnect_github(&mut self, cx: &mut gpui::Context<Self>) {
+        let host = &self.settings.github.host;
+        if let Some(path) = crate::ui_state::support_file("credentials.json") {
+            sourcefour_github::delete_token(&path, host).ok();
+        }
+        self.token_input
+            .update(cx, |input, cx| input.set_text("", cx));
+        self.github_request += 1;
+        self.github_connection = crate::settings_ui::GithubConnection::Idle;
+        cx.notify();
+    }
+
     /// The settings overlay, while open.
     fn settings_overlay(&self, cx: &mut gpui::Context<Self>) -> Option<impl IntoElement + use<>> {
         let view = self.settings_view.as_ref()?;
         Some(crate::settings_ui::overlay(
             &self.settings,
             view.section,
+            &crate::settings_ui::GithubSectionState {
+                connection: &self.github_connection,
+                token_input: &self.token_input,
+            },
             &self.theme,
             &self.settings_focus,
             cx,

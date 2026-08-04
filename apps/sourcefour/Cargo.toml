@@ -19,6 +19,7 @@ serde.workspace = true
 serde_json.workspace = true
 smallvec.workspace = true
 sourcefour-git = { path = "../../crates/sourcefour-git" }
+sourcefour-github = { path = "../../crates/sourcefour-github" }
 sourcefour-graph = { path = "../../crates/sourcefour-graph" }
 sourcefour-model = { path = "../../crates/sourcefour-model" }
 tracing.workspace = true
@@ -31,3 +32,23 @@ tempfile.workspace = true
 
 [lints]
 workspace = true
+
+# Drives the macOS .app that gets wrapped into the signed .pkg, and the Linux
+# AppImage. Assets are compiled into the binary, so neither format ships a
+# resources directory.
+[package.metadata.packager]
+before-packaging-command = "cargo build --release --locked -p sourcefour"
+product-name = "Sourcefour"
+identifier = "no.lisethsolutions.sourcefour"
+icons = ["assets/icon/Sourcefour.png", "assets/icon/Sourcefour.icns"]
+formats = ["app"]
+
+[package.metadata.packager.macos]
+minimum-system-version = "13.0"
+signing-identity = "-"
+
+[package.metadata.wix]
+upgrade-guid = "519EB068-09EF-4C12-97E0-0C5EE8BE248D"
+path-guid = "B14FC9E3-A9B9-48FB-9D4A-45084077A0B3"
+license = false
+eula = false

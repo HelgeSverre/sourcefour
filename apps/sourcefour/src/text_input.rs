@@ -72,6 +72,10 @@ pub(crate) fn keymap() -> Vec<gpui::KeyBinding> {
 pub(crate) struct TextInput {
     pub(crate) focus_handle: FocusHandle,
     pub(crate) content: SharedString,
+    /// Draw mask characters instead of the content (token fields). The mask
+    /// is one `*` per byte so every caret offset stays valid; secrets are
+    /// ASCII, so bytes and characters agree.
+    pub(crate) masked: bool,
     placeholder: SharedString,
     theme: Theme,
     selected_range: Range<usize>,
@@ -91,6 +95,7 @@ impl TextInput {
         Self {
             focus_handle: cx.focus_handle(),
             content: SharedString::default(),
+            masked: false,
             placeholder: placeholder.into(),
             theme: *theme,
             selected_range: 0..0,
@@ -540,6 +545,8 @@ impl Element for TextElement {
 
         let (display_text, text_color) = if content.is_empty() {
             (input.placeholder.clone(), theme.text_faint)
+        } else if input.masked {
+            (SharedString::from("*".repeat(content.len())), style.color)
         } else {
             (content, style.color)
         };

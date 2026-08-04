@@ -953,6 +953,72 @@ pub struct AheadBehindUpdate {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CapturedAt(pub SystemTime);
 
+/// The GitHub account a token authenticates as.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GithubAccount {
+    /// The login name, e.g. `octocat`.
+    pub login: String,
+}
+
+/// One open pull request, as much as branch decoration needs.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PrSummary {
+    pub number: u64,
+    pub title: String,
+    pub draft: bool,
+    /// The branch the PR merges from (`head.ref`).
+    pub head_branch: String,
+    /// The head commit at last fetch.
+    pub head_sha: String,
+    /// The PR page, for click-through.
+    pub html_url: String,
+}
+
+/// Where one check or workflow run stands.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CheckStatus {
+    Queued,
+    InProgress,
+    Completed(CheckConclusion),
+}
+
+/// How a completed check ended.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CheckConclusion {
+    Success,
+    Failure,
+    Neutral,
+    Cancelled,
+    Skipped,
+    TimedOut,
+    ActionRequired,
+    /// Backend reported a conclusion this build does not know.
+    Unknown,
+}
+
+/// One check run attached to a commit; GitHub Actions jobs appear here.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CheckRun {
+    pub name: String,
+    pub status: CheckStatus,
+    /// The check's page, for click-through.
+    pub html_url: String,
+}
+
+/// One GitHub Actions workflow run.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WorkflowRun {
+    /// The workflow's name, e.g. `CI`.
+    pub name: String,
+    pub run_number: u64,
+    /// The branch the run was triggered on.
+    pub branch: String,
+    pub sha: String,
+    pub status: CheckStatus,
+    /// The run's page, for click-through.
+    pub html_url: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

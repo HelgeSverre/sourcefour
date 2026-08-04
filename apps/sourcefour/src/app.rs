@@ -1,6 +1,6 @@
 use std::{
     borrow::Cow,
-    path::{Path, PathBuf},
+    path::Path,
     process::ExitCode,
     sync::{
         Arc,
@@ -200,7 +200,7 @@ fn launch_exit_code(opened: bool, failed: bool) -> ExitCode {
 
 /// Renders a path the way a shell prompt would, shortening the home directory.
 pub(crate) fn display_path(path: &Path) -> String {
-    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let home = crate::ui_state::home_directory();
     match home
         .as_deref()
         .and_then(|home| path.strip_prefix(home).ok())
@@ -382,11 +382,12 @@ mod tests {
 
     #[test]
     fn display_path_shortens_the_home_directory() {
-        let home = PathBuf::from(std::env::var_os("HOME").expect("HOME is set on this platform"));
+        let home =
+            crate::ui_state::home_directory().expect("every platform names a home directory");
 
         assert_eq!(
-            display_path(&home.join("code/sourcefour")),
-            "~/code/sourcefour"
+            display_path(&home.join("code").join("sourcefour")),
+            format!("~/code{}sourcefour", std::path::MAIN_SEPARATOR)
         );
         assert_eq!(display_path(&home), "~");
         assert_eq!(display_path(Path::new("/opt/elsewhere")), "/opt/elsewhere");
