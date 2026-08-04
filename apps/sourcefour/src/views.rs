@@ -12,7 +12,7 @@ use sourcefour_model::{
 use crate::{
     app::WindowLaunch,
     demo::COMMITS,
-    history::{HistoryState, relative_date},
+    history::{HistoryState, is_scoped_to, relative_date, toggled_scope},
     theme::{
         DETAILS_HEIGHT, GRAPH_WIDTH, HEADER_HEIGHT, HISTORY_ROW_HEIGHT, SIDEBAR_WIDTH,
         STATUS_HEIGHT, TITLEBAR_HEIGHT, TOOLBAR_HEIGHT, Theme,
@@ -899,7 +899,7 @@ impl SourcefourWindow {
                     snapshot
                         .local_branches
                         .iter()
-                        .map(|branch| self.branch_row(branch)),
+                        .map(|branch| self.branch_row(branch, cx)),
                 )
             })
             // The prototype counts remotes here, not their branches.
@@ -979,20 +979,35 @@ impl SourcefourWindow {
             )
     }
 
-    fn branch_row(&self, branch: &sourcefour_model::BranchSnapshot) -> Div {
+    fn branch_row(
+        &self,
+        branch: &sourcefour_model::BranchSnapshot,
+        cx: &mut gpui::Context<Self>,
+    ) -> gpui::Stateful<Div> {
+        let scoped = is_scoped_to(self.history.scope.as_ref(), &branch.full_name);
+        let full_name = branch.full_name.clone();
+        let tip = branch.tip;
         div()
+            .id(gpui::SharedString::from(branch.full_name.clone()))
             .h(px(26.0))
             .flex()
             .items_center()
             .px(px(15.0))
             .gap(px(7.0))
-            .bg(if branch.is_current {
+            .cursor_pointer()
+            .hover(|style| style.bg(self.theme.bg_hover))
+            .on_click(cx.listener(move |this, _, _, cx| {
+                let scope = toggled_scope(this.history.scope.as_ref(), &full_name, tip);
+                this.start_history(scope, cx);
+                cx.notify();
+            }))
+            .bg(if scoped || branch.is_current {
                 self.theme.bg_selected
             } else {
                 self.theme.bg_panel
             })
             .text_size(px(12.0))
-            .text_color(if branch.is_current {
+            .text_color(if scoped || branch.is_current {
                 self.theme.text_primary
             } else {
                 self.theme.text_secondary

@@ -99,6 +99,34 @@ impl HistoryState {
     }
 }
 
+/// The scope a click on `full_name` should switch to.
+///
+/// Clicking the already-selected ref returns to all refs, so the same control
+/// both narrows and widens (§3.1).
+pub(crate) fn toggled_scope(
+    current: Option<&HistoryScope>,
+    full_name: &str,
+    tip: Oid,
+) -> HistoryScope {
+    match current {
+        Some(HistoryScope::Ref {
+            full_name: active, ..
+        }) if active == full_name => HistoryScope::AllRefs,
+        _ => HistoryScope::Ref {
+            full_name: full_name.to_owned(),
+            tip,
+        },
+    }
+}
+
+/// Whether `full_name` is the ref history is currently scoped to.
+pub(crate) fn is_scoped_to(current: Option<&HistoryScope>, full_name: &str) -> bool {
+    matches!(
+        current,
+        Some(HistoryScope::Ref { full_name: active, .. }) if active == full_name
+    )
+}
+
 /// Human-readable age, matching the prototype's compact style.
 ///
 /// `now` is passed in rather than read from the clock so the formatting is
@@ -130,7 +158,52 @@ mod tests {
         CommitFlags, CommitRow, GitTime, GraphFlags, GraphRow, HistoryScope, Oid,
     };
 
-    use super::{HistoryState, relative_date};
+    use super::{HistoryState, is_scoped_to, relative_date, toggled_scope};
+
+    #[test]
+    fn clicking_a_branch_narrows_then_widens_again() {
+        let tip = oid(7);
+
+        let narrowed = toggled_scope(Some(&HistoryScope::AllRefs), "refs/heads/main", tip);
+        assert_eq!(
+            narrowed,
+            HistoryScope::Ref {
+                full_name: String::from("refs/heads/main"),
+                tip
+            }
+        );
+
+        // Clicking the same ref again returns to the all-refs scope.
+        assert_eq!(
+            toggled_scope(Some(&narrowed), "refs/heads/main", tip),
+            HistoryScope::AllRefs
+        );
+
+        // Clicking a different ref switches scope rather than widening.
+        assert_eq!(
+            toggled_scope(Some(&narrowed), "refs/heads/side", tip),
+            HistoryScope::Ref {
+                full_name: String::from("refs/heads/side"),
+                tip
+            }
+        );
+    }
+
+    #[test]
+    fn only_the_active_ref_reads_as_scoped() {
+        let scope = HistoryScope::Ref {
+            full_name: String::from("refs/heads/main"),
+            tip: oid(1),
+        };
+
+        assert!(is_scoped_to(Some(&scope), "refs/heads/main"));
+        assert!(!is_scoped_to(Some(&scope), "refs/heads/side"));
+        assert!(!is_scoped_to(
+            Some(&HistoryScope::AllRefs),
+            "refs/heads/main"
+        ));
+        assert!(!is_scoped_to(None, "refs/heads/main"));
+    }
 
     fn oid(name: u8) -> Oid {
         let mut bytes = [0_u8; 20];
