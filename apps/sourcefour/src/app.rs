@@ -10,8 +10,8 @@ use std::{
 };
 
 use gpui::{
-    App, AppContext, Application, AssetSource, Bounds, Result, SharedString, TitlebarOptions,
-    WindowBounds, WindowOptions, px, size,
+    App, AppContext, Application, AssetSource, Bounds, Menu, MenuItem, Result, SharedString,
+    TitlebarOptions, WindowBounds, WindowOptions, actions, px, size,
 };
 use sourcefour_git::{discover, display_name};
 use sourcefour_model::{RepoFailure, RepoLocation};
@@ -23,6 +23,8 @@ use crate::{
     },
     views::{ErrorWindow, SourcefourWindow},
 };
+
+actions!(sourcefour, [Quit]);
 
 /// Returned once the user dismisses the "not a repository" window.
 const DISCOVERY_FAILED: u8 = 2;
@@ -97,6 +99,14 @@ pub(crate) fn run(request: &LaunchRequest) -> ExitCode {
             .detach();
             cx.bind_keys(history_keymap());
             cx.bind_keys(crate::text_input::keymap());
+            // A bare process gets no quit shortcut from macOS: the standard
+            // application menu is what makes Cmd+Q work.
+            cx.on_action(|_: &Quit, cx| cx.quit());
+            cx.bind_keys([gpui::KeyBinding::new("cmd-q", Quit, None)]);
+            cx.set_menus(vec![Menu {
+                name: SharedString::from("Sourcefour"),
+                items: vec![MenuItem::action("Quit Sourcefour", Quit)],
+            }]);
             let result = match launch {
                 Launch::Window(window) => {
                     let options = window_options(
