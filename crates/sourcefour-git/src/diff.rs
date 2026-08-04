@@ -21,15 +21,19 @@ pub struct DiffLimits {
 }
 
 impl Default for DiffLimits {
+    /// Effectively unlimited: the viewer virtualizes its lines, so no diff is
+    /// too large to render. §6.11's caps remain available through
+    /// [`file_diff_with_limits`] for callers that want them.
     fn default() -> Self {
         Self {
-            bytes: 5 * 1024 * 1024,
-            lines: 20_000,
+            bytes: usize::MAX,
+            lines: usize::MAX,
         }
     }
 }
 
-/// Reads one file's unified diff with the default §6.11 caps.
+/// Reads one file's unified diff, uncapped: the interface virtualizes diff
+/// lines, so size never prevents rendering.
 ///
 /// # Errors
 ///
@@ -345,6 +349,31 @@ mod tests {
         };
         assert!(lines > 4);
         assert_eq!(line_limit, 4);
+        Ok(())
+    }
+
+    #[test]
+    fn default_limits_render_a_very_large_diff_in_full() -> Result<(), Box<dyn std::error::Error>> {
+        use std::fmt::Write as _;
+
+        let repository = TempRepo::init();
+        let big: String = (1..=25_000).fold(String::new(), |mut text, line| {
+            let _ = writeln!(text, "line {line}");
+            text
+        });
+        std::fs::write(repository.path().join("big.txt"), big)?;
+        repository.git(&["add", "."]);
+        repository.commit("vendor a generated file");
+
+        let diff = file_diff(
+            &discover(repository.path())?,
+            &request(head(&repository)?, "big.txt"),
+        )?;
+
+        let DiffContent::Text { lines } = diff.content else {
+            panic!("no diff is too large to render by default");
+        };
+        assert!(lines.len() > 25_000, "every line is present");
         Ok(())
     }
 
