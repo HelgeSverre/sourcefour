@@ -14,15 +14,26 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, ubuntu-latest]
+        os: [macos-latest, ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - name: Enable long paths
+        if: runner.os == 'Windows'
+        run: git config --global core.longpaths true
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@stable
       - uses: taiki-e/install-action@nextest
       - name: Install Linux native build prerequisites
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libclang-dev libfontconfig1-dev libxcb1-dev libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libvulkan1 pkg-config
+      # A malformed .wxs is only discovered when a release builds the MSI,
+      # which is far too late. Parsing it costs nothing.
+      - name: Check MSI definition
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $document = New-Object System.Xml.XmlDocument
+          $document.Load((Resolve-Path "apps/sourcefour/wix/main.wxs"))
       - name: Verify lockfile
         run: cargo metadata --locked --format-version 1 --no-deps
       - name: Format
