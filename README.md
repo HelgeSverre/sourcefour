@@ -8,6 +8,8 @@ into.
 Built with [GPUI](https://www.gpui.rs) for GPU-rendered native UI and
 [gitoxide](https://github.com/GitoxideLabs/gitoxide) for reading repositories.
 
+![The Sourcefour window: worktrees, branches and remotes in the sidebar, the commit graph and history in the middle, and the selected commit's message and changed files below.](website/screenshots/overview.png)
+
 ## Install
 
 | Platform | Installer | Package manager |
@@ -17,9 +19,8 @@ Built with [GPUI](https://www.gpui.rs) for GPU-rendered native UI and
 | Linux | [`.AppImage`](https://github.com/HelgeSverre/sourcefour/releases/latest/download/sourcefour-x86_64-unknown-linux-gnu.AppImage), x86-64 | `brew install helgesverre/tap/sourcefour` |
 
 Those links always resolve to the newest tagged release; the filenames never
-carry a version, which is what keeps them stable.
-
-Or build from source:
+carry a version, which is what keeps them stable. No release is tagged yet, so
+until the first one they resolve to nothing — build from source for now:
 
 ```sh
 cargo install --git https://github.com/HelgeSverre/sourcefour sourcefour
@@ -45,14 +46,20 @@ just check    # the full pre-push gate — the same one CI runs
 just package  # build dist/Sourcefour.app (ad-hoc signed, local use)
 ```
 
-The website lives in `website/`. Its screenshots are captures of the deterministic
-demo fixture, one per scene, regenerated with `just screenshots` — never edited by
-hand, so they cannot claim anything the app does not do.
+The website lives in `website/`. Its screenshots — and the one above — are
+captures of the deterministic demo fixture, regenerated with `just screenshots`
+and never edited by hand, so they cannot claim anything the app does not do.
+`--scene` names every view worth capturing; the script ships the subset the
+website and this file use.
 
 ## Releasing
 
-CI runs format, lint, tests, and locked debug/release builds on macOS, Linux,
-and Windows for every push and pull request.
+CI runs format, lint, tests, and locked debug/release builds on every pull
+request — Linux only, to keep the bill down, since macOS and Windows minutes
+bill at 10x and 2x. The full three-platform matrix runs on demand from the
+Actions tab, and **must be run before cutting a release**: nothing else checks
+that the macOS and Windows builds still compile, and the release packages all
+three.
 
 Releases are cut by [cargo-dist](https://opensource.axo.dev/cargo-dist/).
 Pushing a version tag runs the test suite first, and only then builds anything:
@@ -92,4 +99,4 @@ release with a missing macOS installer.
 
 ## License
 
-MIT or Apache-2.0, at your option.
+[MIT](LICENSE).
