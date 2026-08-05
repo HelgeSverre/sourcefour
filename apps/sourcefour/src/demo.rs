@@ -419,11 +419,13 @@ impl Scene {
                         bytes: 4_404_019,
                         duration_ms: Some(12_400),
                         dimensions: Some((1920, 1080)),
+                        ..sourcefour_model::VideoInfo::default()
                     }),
                     after_info: Some(sourcefour_model::VideoInfo {
                         bytes: 2_202_009,
                         duration_ms: Some(8_100),
                         dimensions: Some((1280, 720)),
+                        ..sourcefour_model::VideoInfo::default()
                     }),
                 };
             }

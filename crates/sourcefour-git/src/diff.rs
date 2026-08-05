@@ -3,6 +3,8 @@
 //! The diff itself is computed by imara-diff through gix's blob-diff stack —
 //! the fastest engine available, and the one the spec prescribes.
 
+use std::path::Path;
+
 use gix_imara_diff::{Algorithm, BasicLineDiffPrinter, Diff, InternedInput, UnifiedDiffConfig};
 use sourcefour_model::{
     DiffContent, DiffLine, DiffLineKind, FileDiff, FileDiffRequest, RepoFailure, RepoLocation,
@@ -38,6 +40,10 @@ impl Default for DiffLimits {
 /// Reads one file's unified diff, uncapped: the interface virtualizes diff
 /// lines, so size never prevents rendering.
 ///
+/// `ffmpeg_dir` is where the user says their video tools live, consulted only
+/// when the compared path is a video and only on the first one of the session
+/// — see [`crate::media`].
+///
 /// # Errors
 ///
 /// Returns a typed failure when the repository or the commit cannot be read.
@@ -45,8 +51,9 @@ impl Default for DiffLimits {
 pub fn file_diff(
     location: &RepoLocation,
     request: &FileDiffRequest,
+    ffmpeg_dir: Option<&Path>,
 ) -> Result<FileDiff, RepoFailure> {
-    file_diff_with_limits(location, request, DiffLimits::default())
+    file_diff_with_limits(location, request, DiffLimits::default(), ffmpeg_dir)
 }
 
 /// [`file_diff`] with explicit output caps, primarily for tests.
@@ -58,6 +65,7 @@ pub fn file_diff_with_limits(
     location: &RepoLocation,
     request: &FileDiffRequest,
     limits: DiffLimits,
+    ffmpeg_dir: Option<&Path>,
 ) -> Result<FileDiff, RepoFailure> {
     let repository =
         gix::open(&location.git_dir).map_err(|error| open_failure(&location.git_dir, &error))?;
@@ -74,7 +82,7 @@ pub fn file_diff_with_limits(
 
     Ok(FileDiff {
         request: request.clone(),
-        content: content_for(&request.path, old_bytes, new_bytes, limits),
+        content: content_for(&request.path, old_bytes, new_bytes, limits, ffmpeg_dir),
     })
 }
 
@@ -89,6 +97,7 @@ pub fn worktree_file_diff(
     location: &RepoLocation,
     path: &RepoPath,
     staged: bool,
+    ffmpeg_dir: Option<&Path>,
 ) -> Result<DiffContent, RepoFailure> {
     let repository =
         gix::open(&location.git_dir).map_err(|error| open_failure(&location.git_dir, &error))?;
@@ -103,7 +112,13 @@ pub fn worktree_file_diff(
     } else {
         (index_bytes, worktree_bytes(location, &path.0))
     };
-    Ok(content_for(path, old, new, DiffLimits::default()))
+    Ok(content_for(
+        path,
+        old,
+        new,
+        DiffLimits::default(),
+        ffmpeg_dir,
+    ))
 }
 
 /// The blob-pair tail every diff shares: image, video, binary, text, or absent.
@@ -112,6 +127,7 @@ fn content_for(
     old: Option<Vec<u8>>,
     new: Option<Vec<u8>>,
     limits: DiffLimits,
+    ffmpeg_dir: Option<&Path>,
 ) -> DiffContent {
     match (old, new) {
         (None, None) => DiffContent::Unavailable {
@@ -132,8 +148,8 @@ fn content_for(
                 // until both sides are read, which is tens of milliseconds for
                 // a local clip. Split it into a second async phase, the way the
                 // Markdown preview loads, if that ever reads as a stall.
-                let (before, before_info) = probe_side(old.as_deref(), &format);
-                let (after, after_info) = probe_side(new.as_deref(), &format);
+                let (before, before_info) = probe_side(old.as_deref(), &format, ffmpeg_dir);
+                let (after, after_info) = probe_side(new.as_deref(), &format, ffmpeg_dir);
                 DiffContent::Video {
                     before,
                     after,
@@ -156,10 +172,14 @@ fn content_for(
 }
 
 /// One side of a video comparison, absent on the side where the file is not.
-fn probe_side(bytes: Option<&[u8]>, format: &str) -> (Option<Vec<u8>>, Option<VideoInfo>) {
+fn probe_side(
+    bytes: Option<&[u8]>,
+    format: &str,
+    ffmpeg_dir: Option<&Path>,
+) -> (Option<Vec<u8>>, Option<VideoInfo>) {
     match bytes {
         Some(bytes) => {
-            let (poster, info) = crate::media::probe(bytes, format);
+            let (poster, info) = crate::media::probe(bytes, format, ffmpeg_dir);
             (poster, Some(info))
         }
         None => (None, None),
@@ -348,6 +368,7 @@ mod tests {
         let diff = file_diff(
             &discover(repository.path())?,
             &request(head(&repository)?, "a.txt"),
+            None,
         )?;
 
         let DiffContent::Text { lines } = diff.content else {
@@ -383,6 +404,7 @@ mod tests {
         let diff = file_diff(
             &discover(repository.path())?,
             &request(head(&repository)?, "new.txt"),
+            None,
         )?;
 
         let DiffContent::Text { lines } = diff.content else {
@@ -409,6 +431,7 @@ mod tests {
         let diff = file_diff(
             &discover(repository.path())?,
             &request(head(&repository)?, "blob.bin"),
+            None,
         )?;
 
         assert!(matches!(diff.content, DiffContent::Binary { .. }));
@@ -428,6 +451,7 @@ mod tests {
         let diff = file_diff(
             &discover(repository.path())?,
             &request(head(&repository)?, "logo.png"),
+            None,
         )?;
 
         let DiffContent::Image {
@@ -460,6 +484,7 @@ mod tests {
         let diff = file_diff(
             &discover(repository.path())?,
             &request(head(&repository)?, "clip.mp4"),
+            None,
         )?;
 
         let DiffContent::Video {
@@ -480,12 +505,12 @@ mod tests {
         // The join the two halves leave untested: a blob that only exists in
         // the object database, spilled to disk and decoded. Skipped where
         // there is no decoder, which is also what the viewer does there.
-        if !crate::media::probe_available() {
+        let Some(ffmpeg) = crate::media::probe_tool() else {
             return Ok(());
-        }
+        };
         let repository = TempRepo::init();
         let path = repository.path().join("clip.mp4");
-        let made = std::process::Command::new("ffmpeg")
+        let made = std::process::Command::new(ffmpeg)
             .args(["-v", "error", "-nostdin", "-y"])
             .args([
                 "-f",
@@ -503,6 +528,7 @@ mod tests {
         let diff = file_diff(
             &discover(repository.path())?,
             &request(head(&repository)?, "clip.mp4"),
+            None,
         )?;
 
         let DiffContent::Video {
@@ -533,6 +559,7 @@ mod tests {
         let diff = file_diff(
             &discover(repository.path())?,
             &request(head(&repository)?, "clip.mp4"),
+            None,
         )?;
 
         let DiffContent::Video {
@@ -561,6 +588,7 @@ mod tests {
         let diff = file_diff(
             &discover(repository.path())?,
             &request(head(&repository)?, "photo.JPEG"),
+            None,
         )?;
 
         let DiffContent::Image {
@@ -594,6 +622,7 @@ mod tests {
                 bytes: 1024 * 1024,
                 lines: 4,
             },
+            None,
         )?;
 
         let DiffContent::TooLarge {
@@ -623,6 +652,7 @@ mod tests {
         let diff = file_diff(
             &discover(repository.path())?,
             &request(head(&repository)?, "big.txt"),
+            None,
         )?;
 
         let DiffContent::Text { lines } = diff.content else {
@@ -646,7 +676,7 @@ mod tests {
         let location = discover(repository.path())?;
         let path = RepoPath(b"a.txt".to_vec());
 
-        let DiffContent::Text { lines } = worktree_file_diff(&location, &path, true)? else {
+        let DiffContent::Text { lines } = worktree_file_diff(&location, &path, true, None)? else {
             panic!("the staged comparison renders as text");
         };
         assert!(
@@ -660,7 +690,7 @@ mod tests {
             "the unstaged edit is invisible to the staged side"
         );
 
-        let DiffContent::Text { lines } = worktree_file_diff(&location, &path, false)? else {
+        let DiffContent::Text { lines } = worktree_file_diff(&location, &path, false, None)? else {
             panic!("the unstaged comparison renders as text");
         };
         assert!(
@@ -687,7 +717,7 @@ mod tests {
         let location = discover(repository.path())?;
         let path = RepoPath(b"fresh.txt".to_vec());
 
-        let DiffContent::Text { lines } = worktree_file_diff(&location, &path, false)? else {
+        let DiffContent::Text { lines } = worktree_file_diff(&location, &path, false, None)? else {
             panic!("an untracked text file renders as text");
         };
         assert_eq!(
@@ -699,7 +729,7 @@ mod tests {
         );
         assert!(
             matches!(
-                worktree_file_diff(&location, &path, true)?,
+                worktree_file_diff(&location, &path, true, None)?,
                 DiffContent::Unavailable { .. }
             ),
             "an untracked path has no staged comparison"
@@ -715,6 +745,7 @@ mod tests {
         let diff = file_diff(
             &discover(repository.path())?,
             &request(head(&repository)?, "ghost.txt"),
+            None,
         )?;
 
         assert!(matches!(diff.content, DiffContent::Unavailable { .. }));

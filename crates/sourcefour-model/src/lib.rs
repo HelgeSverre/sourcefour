@@ -736,6 +736,12 @@ pub struct VideoInfo {
     pub duration_ms: Option<u64>,
     /// Pixel dimensions of the video track, when a probe read them.
     pub dimensions: Option<(u32, u32)>,
+    /// Whether no decoder was found to ask at all.
+    ///
+    /// The one absence worth telling the reader apart from the others: an
+    /// unreadable container or an exotic codec is nothing they can act on,
+    /// and a decoder they have not installed is.
+    pub tools_missing: bool,
 }
 
 /// Classified display line in a unified diff.

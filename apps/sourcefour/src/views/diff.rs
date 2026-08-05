@@ -197,6 +197,19 @@ fn video_summary(info: VideoInfo) -> gpui::SharedString {
     format!("▶ {}", video_line(info)).into()
 }
 
+/// What to tell the reader when the card is bare because nothing was installed
+/// to decode with, and nothing when it is bare for a reason they cannot act on.
+///
+/// Either side is enough: both are probed by the same absent tools, and a
+/// comparison where only one side exists still has the same thing to say.
+fn missing_tools_note(before: Option<VideoInfo>, after: Option<VideoInfo>) -> Option<&'static str> {
+    [before, after]
+        .into_iter()
+        .flatten()
+        .any(|info| info.tools_missing)
+        .then_some("Install ffmpeg to see a preview frame")
+}
+
 /// A duration as `m:ss`, growing an hours field only when there is one.
 fn video_duration(milliseconds: u64) -> String {
     let seconds = milliseconds / 1000;
@@ -328,7 +341,7 @@ impl SourcefourWindow {
         cx.spawn(async move |this, cx| {
             let diff = cx
                 .background_executor()
-                .spawn(async move { sourcefour_git::file_diff(&location, &request) })
+                .spawn(async move { sourcefour_git::file_diff(&location, &request, None) })
                 .await;
             this.update(cx, |this, cx| {
                 this.set_diff_content(token, diff.map(|diff| diff.content), cx);
@@ -378,10 +391,12 @@ impl SourcefourWindow {
         self.diff_scroll = UniformListScrollHandle::new();
         self.diff_focus.focus(window);
         cx.spawn(async move |this, cx| {
-            let content = cx
-                .background_executor()
-                .spawn(async move { sourcefour_git::worktree_file_diff(&location, &path, staged) })
-                .await;
+            let content =
+                cx.background_executor()
+                    .spawn(async move {
+                        sourcefour_git::worktree_file_diff(&location, &path, staged, None)
+                    })
+                    .await;
             this.update(cx, |this, cx| {
                 this.set_diff_content(token, content, cx);
             })
@@ -776,15 +791,33 @@ impl SourcefourWindow {
             ))
     }
 
-    /// Side-by-side cards for a video no decoder could open a frame of.
+    /// Side-by-side cards for a video no decoder could open a frame of, under
+    /// the one sentence that says so when that is why.
     pub(super) fn video_card_view(&self, view: &DiffView) -> Div {
         let (before, after) = view.video_facts();
         div()
             .size_full()
             .flex()
-            .child(self.video_card("Before", before, "Added — no before"))
-            .child(div().w(px(1.0)).flex_none().h_full().bg(self.theme.border))
-            .child(self.video_card("After", after, "Deleted — no after"))
+            .flex_col()
+            .child(
+                div()
+                    .flex_1()
+                    .min_h(px(1.0))
+                    .flex()
+                    .child(self.video_card("Before", before, "Added — no before"))
+                    .child(div().w(px(1.0)).flex_none().h_full().bg(self.theme.border))
+                    .child(self.video_card("After", after, "Deleted — no after")),
+            )
+            .children(missing_tools_note(before, after).map(|note| {
+                div()
+                    .flex_none()
+                    .flex()
+                    .justify_center()
+                    .pb(px(16.0))
+                    .text_size(px(11.0))
+                    .text_color(self.theme.text_faint)
+                    .child(note)
+            }))
     }
 
     /// One labeled half of the card view: what the container said, and no more.
@@ -1315,6 +1348,7 @@ mod tests {
             bytes: 4_404_019,
             duration_ms: Some(12_400),
             dimensions: Some((1920, 1080)),
+            ..VideoInfo::default()
         };
         assert_eq!(video_line(full), "0:12 · 1920 × 1080 · 4.2 MB");
         // The chip is what tells a poster apart from an image diff, so the
@@ -1329,5 +1363,31 @@ mod tests {
         };
         assert_eq!(video_line(bare), "2.1 MB");
         assert_eq!(video_summary(bare), "▶ 2.1 MB");
+    }
+
+    #[test]
+    fn only_an_absent_decoder_earns_a_sentence_on_the_card() {
+        let probed = VideoInfo {
+            bytes: 2_202_009,
+            ..VideoInfo::default()
+        };
+        let unprobed = VideoInfo {
+            tools_missing: true,
+            ..probed
+        };
+
+        // A container ffmpeg could not read, or a blob past the cap: the card
+        // is just as bare, and there is nothing the reader could install.
+        assert_eq!(missing_tools_note(Some(probed), Some(probed)), None);
+        assert_eq!(missing_tools_note(None, None), None);
+        // An added or deleted video has one side, and it still knows.
+        assert_eq!(
+            missing_tools_note(None, Some(unprobed)),
+            Some("Install ffmpeg to see a preview frame")
+        );
+        assert_eq!(
+            missing_tools_note(Some(unprobed), Some(unprobed)),
+            Some("Install ffmpeg to see a preview frame")
+        );
     }
 }
