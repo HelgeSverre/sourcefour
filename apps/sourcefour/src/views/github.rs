@@ -164,7 +164,7 @@ impl SourcefourWindow {
     /// The selected commit's checks (§ GitHub): rendered only once an answer
     /// for exactly this commit exists, so the block never flickers.
     pub(super) fn checks_block(&self, cx: &mut gpui::Context<Self>) -> Option<Div> {
-        let selected = self.history.selected?;
+        let selected = self.history.selected_commit()?;
         let (cached, outcome) = &self.github_checks.as_ref()?.value;
         if *cached != selected {
             return None;
@@ -479,7 +479,7 @@ impl SourcefourWindow {
         let Some(remote) = self.github_remote.clone() else {
             return;
         };
-        let Some(oid) = self.history.selected else {
+        let Some(oid) = self.history.selected_commit() else {
             self.github_checks = None;
             return;
         };

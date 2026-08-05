@@ -128,7 +128,7 @@ impl SourcefourWindow {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
-        let Some(oid) = self.history.selected else {
+        let Some(oid) = self.history.selected_commit() else {
             return;
         };
         let Some(location) = self.location.clone() else {

@@ -413,7 +413,7 @@ impl SourcefourWindow {
             window.history.extend(rows, layout, false);
             window.detail = Some(demo::detail());
             window.files = Some(demo::files());
-            window.files_for = window.history.selected;
+            window.files_for = window.history.selected_commit();
             window.seed_scene(launch.scene);
         } else if let Some(location) = launch.location {
             window.repo = LoadState::Loading {
@@ -678,7 +678,7 @@ impl SourcefourWindow {
     fn load_selected_files(&mut self, cx: &mut gpui::Context<Self>) {
         // Checks follow the selection with their own cache and TTL.
         self.load_selected_checks(false, cx);
-        let Some(oid) = self.history.selected else {
+        let Some(oid) = self.history.selected_commit() else {
             self.detail = None;
             self.files = None;
             self.files_for = None;

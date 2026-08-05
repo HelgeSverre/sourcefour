@@ -34,7 +34,7 @@ impl SourcefourWindow {
 
     /// The commit a new branch starts from: the selection, or HEAD.
     pub(super) fn branch_start(&self) -> Option<sourcefour_model::Oid> {
-        self.history.selected.or_else(|| {
+        self.history.selected_commit().or_else(|| {
             self.snapshot().and_then(|snapshot| match &snapshot.head {
                 HeadSnapshot::Branch { oid, .. } | HeadSnapshot::Detached { oid } => Some(*oid),
                 HeadSnapshot::Unborn { .. } | HeadSnapshot::Missing => None,

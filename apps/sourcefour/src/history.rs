@@ -16,6 +16,23 @@ const DAY: i64 = 24 * HOUR;
 const MONTH: i64 = 30 * DAY;
 const YEAR: i64 = 365 * DAY;
 
+/// What the history list points at.
+///
+/// The working tree is a selectable thing that is not a commit, so the
+/// selection carries which kind it is; everything that needs an object ID
+/// asks [`HistoryState::selected_commit`] and gets `None` for the tree.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum Selection {
+    /// The uncommitted working tree (the pinned top row, when dirty).
+    ///
+    /// Not yet produced outside tests: the row itself lands with the status
+    /// backend. `allow` rather than `expect`, because tests construct it.
+    #[allow(dead_code, reason = "produced by the working-tree row slice")]
+    WorkingTree,
+    /// A loaded commit.
+    Commit(Oid),
+}
+
 /// Incrementally loaded history for one scope.
 #[derive(Debug, Default)]
 pub(crate) struct HistoryState {
@@ -24,7 +41,7 @@ pub(crate) struct HistoryState {
     pub(crate) layout: Vec<GraphRow>,
     pub(crate) has_more: bool,
     pub(crate) request_in_flight: bool,
-    pub(crate) selected: Option<Oid>,
+    pub(crate) selected: Option<Selection>,
     /// Bumped by every [`Self::reset`], so a batch requested before a scope
     /// change can be recognized as stale and dropped with its cursor. The
     /// session/generation envelope cannot catch this case: a same-window scope
@@ -54,7 +71,7 @@ impl HistoryState {
         self.has_more = has_more;
         self.request_in_flight = false;
         if self.selected.is_none() {
-            self.selected = self.rows.first().map(|row| row.oid);
+            self.selected = self.rows.first().map(|row| Selection::Commit(row.oid));
         }
         if self.visible.is_some() {
             self.reapply_filter();
@@ -130,9 +147,17 @@ impl HistoryState {
         }
     }
 
+    /// The selected commit, when the selection is one.
+    pub(crate) fn selected_commit(&self) -> Option<Oid> {
+        match self.selected {
+            Some(Selection::Commit(oid)) => Some(oid),
+            _ => None,
+        }
+    }
+
     /// The selection's position in the current view, if visible.
     pub(crate) fn selected_display_index(&self) -> Option<usize> {
-        let selected = self.selected?;
+        let selected = self.selected_commit()?;
         match &self.visible {
             Some(visible) => visible
                 .iter()
@@ -172,7 +197,7 @@ impl HistoryState {
 
     /// Index of the selected row among the loaded rows, if it is loaded.
     pub(crate) fn selected_index(&self) -> Option<usize> {
-        let selected = self.selected?;
+        let selected = self.selected_commit()?;
         self.rows.iter().position(|row| row.oid == selected)
     }
 
@@ -190,14 +215,14 @@ impl HistoryState {
         if target == current && self.selected_display_index().is_some() {
             return None;
         }
-        self.selected = Some(self.row_at(target)?.oid);
+        self.selected = Some(Selection::Commit(self.row_at(target)?.oid));
         Some(target)
     }
 
     /// Selects a display position in the current view, if it exists.
     pub(crate) fn select_index(&mut self, index: usize) -> Option<usize> {
         let row = self.row_at(index)?;
-        self.selected = Some(row.oid);
+        self.selected = Some(Selection::Commit(row.oid));
         Some(index)
     }
 }
@@ -294,7 +319,9 @@ mod tests {
         CommitFlags, CommitRow, GitTime, GraphFlags, GraphRow, HistoryScope, Oid,
     };
 
-    use super::{HistoryState, is_scoped_to, refreshed_scope, relative_date, toggled_scope};
+    use super::{
+        HistoryState, Selection, is_scoped_to, refreshed_scope, relative_date, toggled_scope,
+    };
 
     #[test]
     fn clicking_a_branch_narrows_then_widens_again() {
@@ -434,10 +461,25 @@ mod tests {
     }
 
     #[test]
+    fn the_working_tree_selection_is_not_a_commit() {
+        let mut state = loaded(3);
+        state.selected = Some(Selection::WorkingTree);
+
+        assert_eq!(state.selected_commit(), None);
+        assert_eq!(
+            state.selected_display_index(),
+            None,
+            "no display row exists for it yet; the row slice gives it index 0"
+        );
+        assert_eq!(state.selected_index(), None);
+    }
+
+    #[test]
     fn the_first_batch_selects_the_newest_commit() {
         let state = loaded(3);
 
-        assert_eq!(state.selected, Some(oid(0)));
+        assert_eq!(state.selected, Some(Selection::Commit(oid(0))));
+        assert_eq!(state.selected_commit(), Some(oid(0)));
         assert_eq!(state.selected_index(), Some(0));
     }
 
@@ -603,11 +645,11 @@ mod tests {
         state.rows[4].summary = String::from("special two");
         state.set_filter("special");
 
-        state.selected = Some(oid(1));
+        state.selected = Some(Selection::Commit(oid(1)));
         assert_eq!(state.selected_display_index(), Some(0));
 
         assert_eq!(state.move_selection(1), Some(1), "next match, not next row");
-        assert_eq!(state.selected, Some(oid(4)));
+        assert_eq!(state.selected_commit(), Some(oid(4)));
         assert_eq!(state.move_selection(1), None, "clamped at the last match");
     }
 

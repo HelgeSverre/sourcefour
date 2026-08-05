@@ -303,7 +303,7 @@ impl SourcefourWindow {
                 .id(("commit-missing", index))
                 .h(px(HISTORY_ROW_HEIGHT));
         };
-        let selected = self.history.selected == Some(row.oid);
+        let selected = self.history.selected_commit() == Some(row.oid);
         let oid = row.oid;
         div()
             .id(("commit", index))
@@ -359,7 +359,7 @@ impl SourcefourWindow {
                 )
             })
             .on_click(cx.listener(move |this, _, _, cx| {
-                this.history.selected = Some(oid);
+                this.history.selected = Some(crate::history::Selection::Commit(oid));
                 this.load_selected_files(cx);
                 cx.notify();
             }))
