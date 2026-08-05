@@ -12,7 +12,10 @@ mod remote;
 mod time;
 mod transport;
 
-pub use api::{check_runs, commit_states, job_log, open_pulls, run_jobs, whoami, workflow_runs};
+pub use api::{
+    actions_run_id_in_url, check_runs, commit_states, job_log, open_pulls, run_jobs, whoami,
+    workflow_run, workflow_runs,
+};
 pub use credentials::{delete_token, gh_cli_token, load_token, store_token};
 pub use log::{first_error, split_timestamp, step_slice};
 pub use remote::GithubRemote;

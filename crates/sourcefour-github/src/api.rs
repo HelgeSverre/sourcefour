@@ -116,6 +116,53 @@ pub fn check_runs(
         .collect())
 }
 
+#[derive(Deserialize)]
+struct RunActorJson {
+    login: String,
+}
+
+/// GitHub's workflow-run JSON, shared by the list and single-run reads.
+#[derive(Deserialize)]
+struct RunJson {
+    id: u64,
+    name: String,
+    display_title: String,
+    run_number: u64,
+    event: String,
+    actor: Option<RunActorJson>,
+    head_branch: String,
+    head_sha: String,
+    status: String,
+    conclusion: Option<String>,
+    run_started_at: Option<String>,
+    updated_at: Option<String>,
+    html_url: String,
+}
+
+impl RunJson {
+    fn into_model(self) -> WorkflowRun {
+        let state = status(&self.status, self.conclusion.as_deref());
+        WorkflowRun {
+            id: self.id,
+            name: self.name,
+            display_title: self.display_title,
+            run_number: self.run_number,
+            event: self.event,
+            actor: self.actor.map(|actor| actor.login).unwrap_or_default(),
+            branch: self.head_branch,
+            sha: self.head_sha,
+            status: state,
+            started_at: self.run_started_at.as_deref().and_then(parse_iso8601),
+            // Runs have no completion field; the last update is it once
+            // the run has completed.
+            completed_at: matches!(state, CheckStatus::Completed(_))
+                .then(|| self.updated_at.as_deref().and_then(parse_iso8601))
+                .flatten(),
+            html_url: self.html_url,
+        }
+    }
+}
+
 /// Recent Actions workflow runs, newest first
 /// (`GET /repos/{owner}/{repo}/actions/runs`).
 ///
@@ -129,32 +176,8 @@ pub fn workflow_runs(
     count: u8,
 ) -> Result<Vec<WorkflowRun>, String> {
     #[derive(Deserialize)]
-    struct Actor {
-        login: String,
-    }
-    #[derive(Deserialize)]
-    #[expect(
-        clippy::struct_field_names,
-        reason = "field names mirror GitHub's JSON exactly"
-    )]
-    struct Run {
-        id: u64,
-        name: String,
-        display_title: String,
-        run_number: u64,
-        event: String,
-        actor: Option<Actor>,
-        head_branch: String,
-        head_sha: String,
-        status: String,
-        conclusion: Option<String>,
-        run_started_at: Option<String>,
-        updated_at: Option<String>,
-        html_url: String,
-    }
-    #[derive(Deserialize)]
     struct Page {
-        workflow_runs: Vec<Run>,
+        workflow_runs: Vec<RunJson>,
     }
     let url = format!(
         "{API_BASE}/repos/{}/{}/actions/runs?per_page={count}",
@@ -164,28 +187,37 @@ pub fn workflow_runs(
     Ok(page
         .workflow_runs
         .into_iter()
-        .map(|run| {
-            let state = status(&run.status, run.conclusion.as_deref());
-            WorkflowRun {
-                id: run.id,
-                name: run.name,
-                display_title: run.display_title,
-                run_number: run.run_number,
-                event: run.event,
-                actor: run.actor.map(|actor| actor.login).unwrap_or_default(),
-                branch: run.head_branch,
-                sha: run.head_sha,
-                status: state,
-                started_at: run.run_started_at.as_deref().and_then(parse_iso8601),
-                // Runs have no completion field; the last update is it once
-                // the run has completed.
-                completed_at: matches!(state, CheckStatus::Completed(_))
-                    .then(|| run.updated_at.as_deref().and_then(parse_iso8601))
-                    .flatten(),
-                html_url: run.html_url,
-            }
-        })
+        .map(RunJson::into_model)
         .collect())
+}
+
+/// One workflow run by id (`GET /repos/{owner}/{repo}/actions/runs/{id}`) —
+/// how a commit's check opens its overlay.
+///
+/// # Errors
+///
+/// See [`whoami`].
+pub fn workflow_run(
+    transport: &dyn GithubTransport,
+    remote: &GithubRemote,
+    token: &str,
+    id: u64,
+) -> Result<WorkflowRun, String> {
+    let url = format!(
+        "{API_BASE}/repos/{}/{}/actions/runs/{id}",
+        remote.owner, remote.repo
+    );
+    let run: RunJson = parse(&transport.get(&url, Some(token))?)?;
+    Ok(run.into_model())
+}
+
+/// The workflow-run id inside an Actions URL, `None` for anything else —
+/// an external CI's check page has no run to open in the overlay.
+#[must_use]
+pub fn actions_run_id_in_url(url: &str) -> Option<u64> {
+    let (_, rest) = url.split_once("/actions/runs/")?;
+    let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+    digits.parse().ok()
 }
 
 /// The rolled-up CI state of many commits in one GraphQL request
@@ -380,6 +412,47 @@ fn status(status: &str, conclusion: Option<&str>) -> CheckStatus {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn an_actions_url_yields_its_run_id() {
+        use super::actions_run_id_in_url as run_id;
+        assert_eq!(
+            run_id("https://github.com/o/r/actions/runs/16733483951/job/47364"),
+            Some(16_733_483_951)
+        );
+        assert_eq!(run_id("https://github.com/o/r/actions/runs/42"), Some(42));
+        assert_eq!(
+            run_id("https://github.com/o/r/runs/12345"),
+            None,
+            "a check page is not an Actions run"
+        );
+        assert_eq!(run_id("https://ci.example.com/build/9"), None);
+        assert_eq!(run_id("https://github.com/o/r/actions/runs/"), None);
+    }
+
+    #[test]
+    fn one_workflow_run_reads_by_id() {
+        let fake = Fake::new(
+            r#"{"id": 77, "name": "CI", "display_title": "fix: the thing",
+                "run_number": 143, "event": "push",
+                "actor": {"login": "helge"}, "head_branch": "main",
+                "head_sha": "abc123", "status": "completed",
+                "conclusion": "failure", "run_started_at": "2026-08-01T10:00:00Z",
+                "updated_at": "2026-08-01T10:02:05Z",
+                "html_url": "https://github.com/helge/sourcefour/actions/runs/77"}"#,
+        );
+        let run = super::workflow_run(&fake, &remote(), "token", 77).expect("run parses");
+        assert_eq!(run.id, 77);
+        assert_eq!(run.display_title, "fix: the thing");
+        assert_eq!(
+            run.status,
+            sourcefour_model::CheckStatus::Completed(sourcefour_model::CheckConclusion::Failure)
+        );
+        assert_eq!(
+            run.completed_at,
+            super::parse_iso8601("2026-08-01T10:02:05Z")
+        );
+    }
     use std::cell::RefCell;
 
     use sourcefour_model::{CheckConclusion, CheckStatus};

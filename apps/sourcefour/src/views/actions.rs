@@ -429,6 +429,65 @@ impl SourcefourWindow {
         }
     }
 
+    /// Opens a commit check's Actions run in the overlay instead of the
+    /// browser. The overlay opens instantly on a stub carrying what the
+    /// check already knows — name and status — and the real header
+    /// replaces it when the run read lands.
+    pub(super) fn open_actions_check(
+        &mut self,
+        run_id: u64,
+        name: &str,
+        status: CheckStatus,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let stub = WorkflowRun {
+            id: run_id,
+            name: String::new(),
+            display_title: name.to_owned(),
+            run_number: 0,
+            event: String::new(),
+            actor: String::new(),
+            branch: String::new(),
+            sha: String::new(),
+            status,
+            started_at: None,
+            completed_at: None,
+            html_url: String::new(),
+        };
+        self.open_actions_run(stub, window, cx);
+        let Some(remote) = self.github_remote.clone() else {
+            return;
+        };
+        let method = self.settings.github.auth_method;
+        let credentials = super::github::credentials_path();
+        cx.spawn(async move |this, cx| {
+            let outcome = cx
+                .background_executor()
+                .spawn(async move {
+                    let token =
+                        super::github::resolve_github_token(method, credentials.as_deref())?;
+                    sourcefour_github::workflow_run(
+                        &sourcefour_github::UreqTransport,
+                        &remote,
+                        &token,
+                        run_id,
+                    )
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                if let (Ok(run), Some(view)) = (outcome, &mut this.actions_view)
+                    && view.run.id == run_id
+                {
+                    view.run = run;
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     /// Closes the overlay, returning focus to the history.
     pub(super) fn close_actions(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) {
         self.actions_view = None;

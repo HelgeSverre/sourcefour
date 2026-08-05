@@ -171,42 +171,52 @@ impl SourcefourWindow {
         }
         let body: Vec<Div> = match outcome {
             Ok(runs) if runs.is_empty() => return None,
-            Ok(runs) => runs
-                .iter()
-                .enumerate()
-                .map(|(index, run)| {
-                    let (glyph, color) = check_glyph(&self.theme, run.status);
-                    let url = run.html_url.clone();
-                    div().child(
-                        div()
-                            .id(("check-run", index))
-                            .h(px(20.0))
-                            .flex()
-                            .items_center()
-                            .gap(px(8.0))
-                            .cursor_pointer()
-                            .hover(|style| style.bg(self.theme.bg_hover))
-                            .on_click(move |_, _, cx| {
-                                cx.stop_propagation();
-                                cx.open_url(&url);
-                            })
-                            .child(
-                                div()
-                                    .w(px(12.0))
-                                    .flex_none()
-                                    .font_weight(FontWeight::BOLD)
-                                    .text_color(color)
-                                    .child(glyph),
-                            )
-                            .child(
-                                div()
-                                    .text_size(px(11.0))
-                                    .text_color(self.theme.text_secondary)
-                                    .child(run.name.clone()),
-                            ),
-                    )
-                })
-                .collect(),
+            Ok(runs) => {
+                runs.iter()
+                    .enumerate()
+                    .map(|(index, run)| {
+                        let (glyph, color) = check_glyph(&self.theme, run.status);
+                        let url = run.html_url.clone();
+                        // An Actions-backed check opens in the overlay; only an
+                        // external CI's check still needs the browser.
+                        let run_id = sourcefour_github::actions_run_id_in_url(&url);
+                        let name = run.name.clone();
+                        let status = run.status;
+                        div().child(
+                            div()
+                                .id(("check-run", index))
+                                .h(px(20.0))
+                                .flex()
+                                .items_center()
+                                .gap(px(8.0))
+                                .cursor_pointer()
+                                .hover(|style| style.bg(self.theme.bg_hover))
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    cx.stop_propagation();
+                                    match run_id {
+                                        Some(run_id) => this
+                                            .open_actions_check(run_id, &name, status, window, cx),
+                                        None => cx.open_url(&url),
+                                    }
+                                }))
+                                .child(
+                                    div()
+                                        .w(px(12.0))
+                                        .flex_none()
+                                        .font_weight(FontWeight::BOLD)
+                                        .text_color(color)
+                                        .child(glyph),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(px(11.0))
+                                        .text_color(self.theme.text_secondary)
+                                        .child(run.name.clone()),
+                                ),
+                        )
+                    })
+                    .collect()
+            }
             Err(message) => vec![
                 div()
                     .text_size(px(10.5))
