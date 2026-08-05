@@ -13,9 +13,30 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 #[serde(default)]
 pub(crate) struct AppSettings {
+    pub(crate) appearance: AppearanceSettings,
     pub(crate) github: GithubSettings,
     pub(crate) diff: DiffSettings,
     pub(crate) video: VideoSettings,
+}
+
+/// How the interface reads, as opposed to what it does.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[serde(default)]
+pub(crate) struct AppearanceSettings {
+    pub(crate) date_display: DateDisplay,
+}
+
+/// How a commit's timestamp is written.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum DateDisplay {
+    /// `YYYY-MM-DD HH:MM` on the clock the commit itself recorded.
+    Absolute,
+    /// An age: "2 hours ago"; also what unknown future values read as, which
+    /// is why it is last — `serde(other)` only sits on the final variant.
+    #[default]
+    #[serde(other)]
+    Relative,
 }
 
 /// The GitHub integration's configuration (§ post-v1 integrations).
@@ -116,13 +137,19 @@ impl AppSettings {
 
 #[cfg(test)]
 mod tests {
-    use super::{AppSettings, AuthMethod, DiffSettings, GithubSettings, VideoSettings};
+    use super::{
+        AppSettings, AppearanceSettings, AuthMethod, DateDisplay, DiffSettings, GithubSettings,
+        VideoSettings,
+    };
 
     #[test]
     fn settings_round_trip_through_their_file() -> Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::TempDir::new()?;
         let path = directory.path().join("nested").join("settings.json");
         let settings = AppSettings {
+            appearance: AppearanceSettings {
+                date_display: DateDisplay::Absolute,
+            },
             github: GithubSettings {
                 enabled: true,
                 auth_method: AuthMethod::Token,
@@ -238,6 +265,39 @@ mod tests {
                 ffmpeg_dir: Some(std::path::PathBuf::from("/opt/ffmpeg/bin")),
             },
             "a future key inside the section is ignored, not fatal"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn an_appearance_section_survives_a_file_that_predates_it()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::TempDir::new()?;
+        let path = directory.path().join("settings.json");
+        std::fs::write(&path, r#"{"diff": {"line_height": 1.7}}"#)?;
+        assert_eq!(
+            AppSettings::load_from(&path).appearance,
+            AppearanceSettings::default(),
+            "a file written before the section reads as the default display"
+        );
+
+        std::fs::write(
+            &path,
+            r#"{"appearance": {"date_display": "absolute", "hue": "warm"}}"#,
+        )?;
+        assert_eq!(
+            AppSettings::load_from(&path).appearance,
+            AppearanceSettings {
+                date_display: DateDisplay::Absolute,
+            },
+            "a future key inside the section is ignored, not fatal"
+        );
+
+        std::fs::write(&path, r#"{"appearance": {"date_display": "stardate"}}"#)?;
+        assert_eq!(
+            AppSettings::load_from(&path).appearance.date_display,
+            DateDisplay::Relative,
+            "a future display reads as Relative, not a parse failure"
         );
         Ok(())
     }

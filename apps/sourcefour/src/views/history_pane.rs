@@ -8,7 +8,7 @@ use gpui::{
 
 use crate::{
     graph_paint::{HALO_OPACITY, HALO_RADIUS, NODE_RADIUS, STROKE_WIDTH, Shape, row_shapes},
-    history::{HistoryState, relative_date},
+    history::{HistoryState, display_date},
     panels::Splitter,
     theme::{HEADER_HEIGHT, HISTORY_ROW_HEIGHT, SPLITTER_WIDTH, Theme},
 };
@@ -345,7 +345,11 @@ impl SourcefourWindow {
                     .flex_none()
                     .text_size(px(11.5))
                     .text_color(self.theme.text_secondary)
-                    .child(relative_date(now, row.commit_time)),
+                    .child(display_date(
+                        self.settings.appearance.date_display,
+                        now,
+                        row.commit_time,
+                    )),
             )
             .when(columns.hash, |this| {
                 this.child(

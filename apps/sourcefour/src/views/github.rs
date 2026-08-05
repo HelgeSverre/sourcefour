@@ -92,7 +92,8 @@ impl SourcefourWindow {
             run.run_number,
             run.branch,
             run.started_at.map_or_else(String::new, |started| {
-                crate::history::relative_date(
+                crate::history::display_date(
+                    self.settings.appearance.date_display,
                     self.now_seconds(),
                     sourcefour_model::GitTime {
                         seconds_since_epoch: started,

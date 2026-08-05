@@ -7,7 +7,11 @@
 
 use gpui::{Div, FocusableWrapper, FontWeight, div, prelude::*, px, svg};
 
-use crate::{settings::AppSettings, settings::AuthMethod, theme::Theme, views::SourcefourWindow};
+use crate::{
+    settings::{AppSettings, AuthMethod, DateDisplay},
+    theme::Theme,
+    views::SourcefourWindow,
+};
 
 /// Everything one frame of the overlay reads, borrowed from the window.
 ///
@@ -29,16 +33,18 @@ pub(crate) struct SettingsView<'a> {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) enum SettingsSection {
     #[default]
+    General,
     GitHub,
     Diffs,
     About,
 }
 
 impl SettingsSection {
-    const ALL: &'static [Self] = &[Self::GitHub, Self::Diffs, Self::About];
+    const ALL: &'static [Self] = &[Self::General, Self::GitHub, Self::Diffs, Self::About];
 
     const fn title(self) -> &'static str {
         match self {
+            Self::General => "General",
             Self::GitHub => "GitHub",
             Self::Diffs => "Diffs",
             Self::About => "About",
@@ -47,6 +53,7 @@ impl SettingsSection {
 
     fn cards(self, view: &SettingsView<'_>, cx: &mut gpui::Context<SourcefourWindow>) -> Vec<Div> {
         match self {
+            Self::General => general_cards(view, cx),
             Self::GitHub => github_cards(view, cx),
             Self::Diffs => diffs_cards(view, cx),
             Self::About => about_cards(view.theme, cx),
@@ -219,6 +226,31 @@ fn content(view: &SettingsView<'_>, cx: &mut gpui::Context<SourcefourWindow>) ->
         )
 }
 
+/// The settings that belong to the window rather than to one feature of it.
+fn general_cards(view: &SettingsView<'_>, cx: &mut gpui::Context<SourcefourWindow>) -> Vec<Div> {
+    let theme = view.theme;
+    vec![
+        card(
+            theme,
+            vec![
+                Choice {
+                    id: "date-display",
+                    name: "Dates",
+                    description: "How old a commit is, or the clock it was written by.",
+                    choices: &[
+                        ("Relative", DateDisplay::Relative),
+                        ("Exact", DateDisplay::Absolute),
+                    ],
+                    active: view.settings.appearance.date_display,
+                    apply: |settings, display| settings.appearance.date_display = display,
+                }
+                .row(theme, cx),
+            ],
+        ),
+        card(theme, vec![video_row(view.settings, theme)]),
+    ]
+}
+
 fn github_cards(view: &SettingsView<'_>, cx: &mut gpui::Context<SourcefourWindow>) -> Vec<Div> {
     let theme = view.theme;
     let enabled = view.settings.github.enabled;
@@ -362,23 +394,20 @@ fn button(
 /// control is preset-based.
 fn diffs_cards(view: &SettingsView<'_>, cx: &mut gpui::Context<SourcefourWindow>) -> Vec<Div> {
     let theme = view.theme;
-    vec![
-        card(
-            theme,
-            vec![
-                Choice {
-                    id: "diff-line-height",
-                    name: "Line height",
-                    description: "Spacing between diff lines, as a multiple of the mono font size.",
-                    choices: &[("Standard", 1.55), ("Comfortable", 1.8)],
-                    active: view.settings.diff.line_height,
-                    apply: |settings, height| settings.diff.line_height = height,
-                }
-                .row(theme, cx),
-            ],
-        ),
-        card(theme, vec![video_row(view.settings, theme)]),
-    ]
+    vec![card(
+        theme,
+        vec![
+            Choice {
+                id: "diff-line-height",
+                name: "Line height",
+                description: "Spacing between diff lines, as a multiple of the mono font size.",
+                choices: &[("Standard", 1.55), ("Comfortable", 1.8)],
+                active: view.settings.diff.line_height,
+                apply: |settings, height| settings.diff.line_height = height,
+            }
+            .row(theme, cx),
+        ],
+    )]
 }
 
 /// Whether a video diff will show a frame, and how to say where the decoder

@@ -4,7 +4,7 @@
 use gpui::{Div, FontWeight, IntoElement, div, prelude::*, px};
 use sourcefour_model::{ChangedFile, DiffParent};
 
-use crate::{history::relative_date, theme::MONO_FONT};
+use crate::{history::display_date, theme::MONO_FONT};
 
 use super::{SourcefourWindow, change_color, change_letter, counted};
 
@@ -25,6 +25,7 @@ impl SourcefourWindow {
     /// and from the already-loaded row until then (§6.10).
     pub(super) fn detail_lines(&self) -> DetailLines {
         let now = self.now_seconds();
+        let dates = self.settings.appearance.date_display;
         let row = self
             .history
             .selected_index()
@@ -48,7 +49,7 @@ impl SourcefourWindow {
             date: detail
                 .map(|detail| detail.author.time)
                 .or_else(|| row.map(|row| row.commit_time))
-                .map(|time| relative_date(now, time)),
+                .map(|time| display_date(dates, now, time)),
             committer: detail
                 .filter(|detail| {
                     detail.committer.name != detail.author.name
@@ -58,7 +59,7 @@ impl SourcefourWindow {
                     format!(
                         "committed by {} {}",
                         detail.committer.name,
-                        relative_date(now, detail.committer.time)
+                        display_date(dates, now, detail.committer.time)
                     )
                 }),
             parent_choices: detail.map_or_else(Vec::new, |detail| {
