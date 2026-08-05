@@ -418,14 +418,43 @@ impl SourcefourWindow {
         id_offset: usize,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<gpui::AnyElement> {
+        let all: Vec<sourcefour_model::RepoPath> =
+            files.iter().filter_map(stageable_path).collect();
         let mut rows = vec![
             div()
+                .flex()
+                .items_center()
                 .pb(px(6.0))
                 .pt(px(4.0))
-                .text_size(px(10.0))
-                .font_weight(FontWeight::BOLD)
-                .text_color(self.theme.text_faint)
-                .child(format!("{label} · {}", counted(count, "file")))
+                .child(
+                    div()
+                        .flex_1()
+                        .text_size(px(10.0))
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(self.theme.text_faint)
+                        .child(format!("{label} · {}", counted(count, "file"))),
+                )
+                .when(!all.is_empty(), |this| {
+                    this.child(
+                        div()
+                            .id(("stage-section", usize::from(staged)))
+                            .flex_none()
+                            .px(px(5.0))
+                            .rounded(px(4.0))
+                            .text_size(px(10.0))
+                            .text_color(self.theme.text_faint)
+                            .cursor_pointer()
+                            .hover(|style| {
+                                style
+                                    .bg(self.theme.bg_hover)
+                                    .text_color(self.theme.text_primary)
+                            })
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.edit_index(all.clone(), staged, cx);
+                            }))
+                            .child(if staged { "unstage all" } else { "stage all" }),
+                    )
+                })
                 .into_any_element(),
         ];
         rows.extend(files.iter().enumerate().map(|(index, file)| {
@@ -503,5 +532,38 @@ impl SourcefourWindow {
                     .text_color(self.theme.red)
                     .child(format!("-{removed}"))
             }))
+            .when_some(staged, |this, staged| {
+                // Conflicted rows only warn: staging one would mark it
+                // resolved, which is the merge milestone's call to offer.
+                let path = stageable_path(file);
+                this.children(path.map(|path| {
+                    div()
+                        .id(("stage-toggle", index))
+                        .flex_none()
+                        .px(px(5.0))
+                        .rounded(px(4.0))
+                        .text_size(px(12.0))
+                        .text_color(self.theme.text_faint)
+                        .cursor_pointer()
+                        .hover(|style| {
+                            style
+                                .bg(self.theme.bg_hover)
+                                .text_color(self.theme.text_primary)
+                        })
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            cx.stop_propagation();
+                            this.edit_index(vec![path.clone()], staged, cx);
+                        }))
+                        .child(if staged { "−" } else { "+" })
+                }))
+            })
     }
+}
+
+/// The path a stage or unstage should name; conflicted rows get none.
+fn stageable_path(file: &ChangedFile) -> Option<sourcefour_model::RepoPath> {
+    if file.status == sourcefour_model::ChangeKind::Unknown {
+        return None;
+    }
+    file.new_path.clone().or_else(|| file.old_path.clone())
 }

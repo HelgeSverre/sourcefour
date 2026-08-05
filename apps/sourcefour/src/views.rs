@@ -748,6 +748,43 @@ impl SourcefourWindow {
         self.working_tree_status = Some(status);
     }
 
+    /// Applies one stage or unstage through the user's Git, then re-reads
+    /// status. Failures land in the status bar like any other operation.
+    pub(super) fn edit_index(
+        &mut self,
+        paths: Vec<sourcefour_model::RepoPath>,
+        unstage: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let Some(location) = self.location.clone() else {
+            return;
+        };
+        if paths.is_empty() {
+            return;
+        }
+        cx.spawn(async move |this, cx| {
+            let outcome = cx
+                .background_executor()
+                .spawn(async move {
+                    if unstage {
+                        sourcefour_git::unstage_paths(&location, &paths)
+                    } else {
+                        sourcefour_git::stage_paths(&location, &paths)
+                    }
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                if let Err(failure) = outcome {
+                    this.op_status = Some((false, failure.user.message));
+                }
+                this.load_working_tree_status(cx);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     /// Selects the pinned working-tree row.
     pub(super) fn select_working_tree(&mut self, cx: &mut gpui::Context<Self>) {
         self.history.selected = Some(crate::history::Selection::WorkingTree);
