@@ -446,6 +446,11 @@ fn main() {
    - `sourcefour ~/code/project` takes a path
 3. Press `?` for the key map.
 
+| Key | Does | Where |
+| :--- | :---: | ---: |
+| `j` | next row | history |
+| `?` | key map | anywhere |
+
 > History loads in batches, so the first rows paint before the walk finishes.
 
 ---
@@ -457,7 +462,7 @@ fn main() {
 
 /// The document's old side: what [`PREVIEW_MARKDOWN`] grew out of, so the
 /// rendered before/after visibly differ — no code section yet, a plainer
-/// paragraph, and no badge row.
+/// paragraph, no key table, and no badge row.
 pub(crate) const PREVIEW_MARKDOWN_OLD: &str = r"# Sourcefour
 
 A Git history browser you launch from your terminal. Run `sourcefour` in any

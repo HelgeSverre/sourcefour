@@ -16,7 +16,7 @@ use gpui::{
     Div, Font, FontWeight, Hsla, IntoElement, StatefulInteractiveElement, StyledText, TextRun,
     Window, div, prelude::*, px,
 };
-use sourcefour_doc::{DocBlock, DocBlockKind, DocSpan, DocumentKind};
+use sourcefour_doc::{CellAlignment, DocBlock, DocBlockKind, DocSpan, DocumentKind};
 use sourcefour_git::{DocSource, ImageResolution};
 use sourcefour_model::{DiffContent, RepoLocation, RepoPath};
 
@@ -342,7 +342,7 @@ impl SourcefourWindow {
                 .mt(px(8.0))
                 .text_size(px(12.5))
                 .child(self.preview_spans(spans, font, self.theme.text_secondary)),
-            DocBlockKind::Code { language, text } => self.preview_code(language.as_deref(), text),
+            DocBlockKind::Code { text, .. } => self.preview_code(text),
             DocBlockKind::Quote { blocks } => div()
                 .mt(px(10.0))
                 .pl(px(12.0))
@@ -364,6 +364,11 @@ impl SourcefourWindow {
                 .h(px(1.0))
                 .bg(self.theme.border),
             DocBlockKind::Image { src, alt } => self.preview_image(src, alt, preview),
+            DocBlockKind::Table {
+                alignments,
+                header,
+                rows,
+            } => self.preview_table(alignments, header, rows, font),
         }
     }
 
@@ -443,28 +448,9 @@ impl SourcefourWindow {
 
     /// A fenced or indented code block, clipped rather than wrapped: folding
     /// code at an arbitrary column reads worse than losing its right edge.
-    fn preview_code(&self, language: Option<&str>, text: &str) -> Div {
-        // Tables render as their source until a real table renderer exists;
-        // the caption keeps that honest instead of passing them off as code.
-        let table = language == Some("table");
+    fn preview_code(&self, text: &str) -> Div {
         div()
             .mt(px(10.0))
-            .flex()
-            .flex_col()
-            .when(table, |this| {
-                this.child(
-                    div()
-                        .pb(px(3.0))
-                        .text_size(px(9.5))
-                        .text_color(self.theme.text_faint)
-                        .child("table · shown as source"),
-                )
-            })
-            .child(self.preview_code_body(text))
-    }
-
-    fn preview_code_body(&self, text: &str) -> Div {
-        div()
             .px(px(10.0))
             .py(px(8.0))
             .rounded(px(5.0))
@@ -475,6 +461,84 @@ impl SourcefourWindow {
             .text_size(px(11.0))
             .text_color(self.theme.text_secondary)
             .child(text.to_owned())
+    }
+
+    /// A table: a washed header row over body rows, inside one rounded frame.
+    ///
+    /// Columns share the width evenly — a cell's own text never widens it.
+    /// Measuring the widest cell per column and distributing by that is the
+    /// upgrade, once a table with one long column asks for it.
+    fn preview_table(
+        &self,
+        alignments: &[CellAlignment],
+        header: &[Vec<DocSpan>],
+        rows: &[Vec<Vec<DocSpan>>],
+        font: &Font,
+    ) -> Div {
+        let mut strong = font.clone();
+        strong.weight = FontWeight::SEMIBOLD;
+        div()
+            .mt(px(10.0))
+            .border_1()
+            .border_color(self.theme.border)
+            .rounded(px(5.0))
+            .overflow_hidden()
+            .flex()
+            .flex_col()
+            .child(
+                div()
+                    .flex()
+                    .bg(self.theme.bg_chrome)
+                    .children(header.iter().enumerate().map(|(column, spans)| {
+                        self.preview_cell(
+                            spans,
+                            alignments.get(column),
+                            &strong,
+                            self.theme.text_primary,
+                        )
+                    })),
+            )
+            .children(rows.iter().map(|row| {
+                div()
+                    .flex()
+                    .border_t_1()
+                    .border_color(self.theme.border)
+                    // A row shorter than the header renders what it has; flex
+                    // spreads the cells over the width either way.
+                    .children(row.iter().enumerate().map(|(column, spans)| {
+                        self.preview_cell(
+                            spans,
+                            alignments.get(column),
+                            font,
+                            self.theme.text_secondary,
+                        )
+                    }))
+            }))
+    }
+
+    /// One cell, justified by its column's alignment and clipped at its edge.
+    fn preview_cell(
+        &self,
+        spans: &[DocSpan],
+        alignment: Option<&CellAlignment>,
+        font: &Font,
+        color: Hsla,
+    ) -> Div {
+        div()
+            .flex_1()
+            .min_w(px(1.0))
+            .px(px(8.0))
+            .py(px(4.0))
+            .flex()
+            .overflow_hidden()
+            .text_size(px(11.5))
+            .map(|cell| match alignment {
+                Some(CellAlignment::Center) => cell.justify_center(),
+                Some(CellAlignment::Right) => cell.justify_end(),
+                // A column past the delimiter row's end reads as left.
+                Some(CellAlignment::Left) | None => cell,
+            })
+            .child(self.preview_spans(spans, font, color))
     }
 
     /// A list, one marker column beside each item's own blocks.
@@ -654,6 +718,7 @@ mod tests {
         assert!(has(|kind| matches!(kind, DocBlockKind::Code { .. })));
         assert!(has(|kind| matches!(kind, DocBlockKind::Quote { .. })));
         assert!(has(|kind| matches!(kind, DocBlockKind::List { .. })));
+        assert!(has(|kind| matches!(kind, DocBlockKind::Table { .. })));
         assert!(has(|kind| matches!(kind, DocBlockKind::Rule)));
         assert!(has(|kind| matches!(kind, DocBlockKind::Image { .. })));
         assert_eq!(

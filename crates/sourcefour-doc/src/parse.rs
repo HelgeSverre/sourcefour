@@ -2,21 +2,20 @@
 
 use std::{mem, ops::Range};
 
-use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
+use pulldown_cmark::{Alignment, CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 
-use crate::model::{DocBlock, DocBlockKind, DocSpan};
+use crate::model::{CellAlignment, DocBlock, DocBlockKind, DocSpan};
 
 /// Parses Markdown into blocks.
 ///
-/// Strikethrough and tables are enabled; a table degrades to a `Code` block
-/// holding its own source until a renderer for tables exists. Raw HTML and
-/// footnote markers are dropped, since the preview cannot render either.
+/// Strikethrough and tables are enabled. Raw HTML and footnote markers are
+/// dropped, since the preview cannot render either.
 pub fn parse_markdown(text: &str) -> Vec<DocBlock> {
     let mut options = Options::empty();
     options.insert(Options::ENABLE_STRIKETHROUGH);
     options.insert(Options::ENABLE_TABLES);
 
-    let mut builder = Builder::new(text);
+    let mut builder = Builder::default();
     let mut events = Parser::new_ext(text, options).into_offset_iter();
     while let Some((event, range)) = events.next() {
         builder.event(event, range, &mut events);
@@ -38,6 +37,16 @@ enum Frame {
     Item {
         blocks: Vec<DocBlock>,
     },
+    /// The header row is the one before `End(TableHead)`; every later row is
+    /// a body row, so the frame needs no flag to tell them apart.
+    Table {
+        alignments: Vec<CellAlignment>,
+        header: Vec<Vec<DocSpan>>,
+        rows: Vec<Vec<Vec<DocSpan>>>,
+        /// Cells harvested since the last row ended.
+        current_row: Vec<Vec<DocSpan>>,
+        range: Range<usize>,
+    },
 }
 
 /// The inline marks in effect at one point in the event stream.
@@ -55,8 +64,8 @@ struct Style {
 /// nested source cannot overflow it. Inline events accumulate into `spans`
 /// until a block boundary flushes them, which is what lets a tight list item's
 /// bare text become a paragraph without a `Paragraph` event of its own.
-struct Builder<'s> {
-    source: &'s str,
+#[derive(Default)]
+struct Builder {
     blocks: Vec<DocBlock>,
     stack: Vec<Frame>,
     spans: Vec<DocSpan>,
@@ -72,21 +81,7 @@ struct Builder<'s> {
     covered: Option<Range<usize>>,
 }
 
-impl<'s> Builder<'s> {
-    fn new(source: &'s str) -> Self {
-        Self {
-            source,
-            blocks: Vec::new(),
-            stack: Vec::new(),
-            spans: Vec::new(),
-            styles: Vec::new(),
-            images: Vec::new(),
-            heading: None,
-            opened: None,
-            covered: None,
-        }
-    }
-
+impl Builder {
     fn finish(mut self) -> Vec<DocBlock> {
         self.flush();
         self.blocks
@@ -128,14 +123,33 @@ impl<'s> Builder<'s> {
             Event::Start(Tag::Image { dest_url, .. }) => {
                 self.cover(range.clone());
                 let alt = take_text(events, TagEnd::Image);
-                self.images.push(DocBlock {
-                    kind: DocBlockKind::Image {
-                        src: dest_url.into_string(),
-                        alt,
-                    },
-                    source_range: range,
-                });
+                if matches!(self.stack.last(), Some(Frame::Table { .. })) {
+                    // A cell holds spans, not blocks. Lifting the image out
+                    // would drop it after the whole table with nothing left
+                    // saying which cell wrote it, so the alt text stands in.
+                    self.push_run(&alt, false);
+                } else {
+                    self.images.push(DocBlock {
+                        kind: DocBlockKind::Image {
+                            src: dest_url.into_string(),
+                            alt,
+                        },
+                        source_range: range,
+                    });
+                }
             }
+            // Cell content arrives as the inline events above, so these
+            // boundaries must not reach the flushing arm below: a flush would
+            // turn the cell being read into a paragraph of its own.
+            Event::Start(Tag::TableHead | Tag::TableRow | Tag::TableCell) => {}
+            Event::End(TagEnd::TableCell) => {
+                let spans = self.take_spans();
+                if let Some(Frame::Table { current_row, .. }) = self.stack.last_mut() {
+                    current_row.push(spans);
+                }
+            }
+            Event::End(TagEnd::TableHead) => self.end_row(true),
+            Event::End(TagEnd::TableRow) => self.end_row(false),
             other => {
                 self.flush();
                 self.block(other, range, events);
@@ -212,23 +226,31 @@ impl<'s> Builder<'s> {
                     source_range: range,
                 });
             }
-            Event::Start(Tag::Table(_)) => {
-                let text = self
-                    .source
-                    .get(range.clone())
-                    .unwrap_or_default()
-                    .trim_end()
-                    .to_owned();
-                skip_to(events, TagEnd::Table);
-                // The language marks the degradation, so a renderer can say
-                // "this was a table" instead of passing it off as code.
-                self.push_block(DocBlock {
-                    kind: DocBlockKind::Code {
-                        language: Some(String::from("table")),
-                        text,
-                    },
-                    source_range: range,
-                });
+            Event::Start(Tag::Table(alignments)) => self.stack.push(Frame::Table {
+                alignments: alignments.into_iter().map(cell_alignment).collect(),
+                header: Vec::new(),
+                rows: Vec::new(),
+                current_row: Vec::new(),
+                range,
+            }),
+            Event::End(TagEnd::Table) => {
+                if let Some(Frame::Table {
+                    alignments,
+                    header,
+                    rows,
+                    range,
+                    ..
+                }) = self.stack.pop()
+                {
+                    self.push_block(DocBlock {
+                        kind: DocBlockKind::Table {
+                            alignments,
+                            header,
+                            rows,
+                        },
+                        source_range: range,
+                    });
+                }
             }
             Event::Rule => self.push_block(DocBlock {
                 kind: DocBlockKind::Rule,
@@ -260,6 +282,24 @@ impl<'s> Builder<'s> {
 
         for image in images {
             self.push_block(image);
+        }
+    }
+
+    /// Closes the row being read, as the header row or as a body row.
+    fn end_row(&mut self, is_header: bool) {
+        if let Some(Frame::Table {
+            header,
+            rows,
+            current_row,
+            ..
+        }) = self.stack.last_mut()
+        {
+            let row = mem::take(current_row);
+            if is_header {
+                *header = row;
+            } else {
+                rows.push(row);
+            }
         }
     }
 
@@ -321,8 +361,9 @@ impl<'s> Builder<'s> {
     fn push_block(&mut self, block: DocBlock) {
         match self.stack.last_mut() {
             Some(Frame::Quote { blocks, .. } | Frame::Item { blocks }) => blocks.push(block),
-            // A list holds only items, so nothing else can land here.
-            Some(Frame::List { .. }) | None => self.blocks.push(block),
+            // A list holds only items and a table only spans, so nothing can
+            // land in either.
+            Some(Frame::List { .. } | Frame::Table { .. }) | None => self.blocks.push(block),
         }
     }
 }
@@ -343,15 +384,13 @@ where
     text
 }
 
-/// Discards events through an element's end tag.
-fn skip_to<'e, I>(events: &mut I, end: TagEnd)
-where
-    I: Iterator<Item = (Event<'e>, Range<usize>)>,
-{
-    for (event, _) in events.by_ref() {
-        if matches!(event, Event::End(tag) if tag == end) {
-            break;
-        }
+/// An unmarked column renders left-aligned, so the model says so outright
+/// rather than carrying a fourth case every renderer would collapse anyway.
+fn cell_alignment(alignment: Alignment) -> CellAlignment {
+    match alignment {
+        Alignment::None | Alignment::Left => CellAlignment::Left,
+        Alignment::Center => CellAlignment::Center,
+        Alignment::Right => CellAlignment::Right,
     }
 }
 
@@ -369,7 +408,32 @@ fn heading_level(level: HeadingLevel) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::parse_markdown;
-    use crate::model::{DocBlock, DocBlockKind, DocSpan};
+    use crate::model::{CellAlignment, DocBlock, DocBlockKind, DocSpan};
+
+    /// Alignments, header cells, body rows — a borrowed `DocBlockKind::Table`.
+    type TableParts<'a> = (
+        &'a [CellAlignment],
+        &'a [Vec<DocSpan>],
+        &'a [Vec<Vec<DocSpan>>],
+    );
+
+    /// The three parts of the one table a block holds, or a panic.
+    fn table(block: &DocBlock) -> TableParts<'_> {
+        let DocBlockKind::Table {
+            alignments,
+            header,
+            rows,
+        } = &block.kind
+        else {
+            panic!("a table, got {block:?}");
+        };
+        (alignments, header, rows)
+    }
+
+    /// A cell's text, ignoring style.
+    fn cell(spans: &[DocSpan]) -> String {
+        spans.iter().map(|span| span.text.as_str()).collect()
+    }
 
     /// Renders spans as `text|flags`, one flag letter per set attribute.
     fn runs(spans: &[DocSpan]) -> Vec<String> {
@@ -402,6 +466,7 @@ mod tests {
             DocBlockKind::Code { text, .. } => text.clone(),
             DocBlockKind::Quote { .. }
             | DocBlockKind::List { .. }
+            | DocBlockKind::Table { .. }
             | DocBlockKind::Rule
             | DocBlockKind::Image { .. } => String::new(),
         }
@@ -596,25 +661,94 @@ mod tests {
     }
 
     #[test]
-    fn tables_degrade_to_a_code_block_holding_their_source() {
+    fn tables_parse_into_structure() {
         let source = "| a | b |\n|---|---|\n| 1 | 2 |\n";
         let blocks = parse_markdown(source);
-        let [
-            DocBlock {
-                kind: DocBlockKind::Code { language, text },
-                ..
-            },
-        ] = blocks.as_slice()
-        else {
-            panic!("one code block, got {blocks:?}");
+        let [block] = blocks.as_slice() else {
+            panic!("one table, got {blocks:?}");
+        };
+        let (alignments, header, rows) = table(block);
+
+        assert_eq!(alignments, [CellAlignment::Left, CellAlignment::Left]);
+        assert_eq!(
+            header.iter().map(|spans| cell(spans)).collect::<Vec<_>>(),
+            ["a", "b"]
+        );
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            rows[0].iter().map(|spans| cell(spans)).collect::<Vec<_>>(),
+            ["1", "2"]
+        );
+        assert_eq!(
+            source.get(block.source_range.clone()),
+            Some(source),
+            "the range slices the table's own source"
+        );
+    }
+
+    #[test]
+    fn table_rows_keep_their_cells_and_the_styling_inside_them() {
+        let blocks = parse_markdown(
+            "| name | note |\n|---|---|\n| **bold** | plain |\n| `code` | more |\n\nafter\n",
+        );
+        let [table_block, paragraph] = blocks.as_slice() else {
+            panic!("a table and a paragraph, got {blocks:?}");
+        };
+        let (_, header, rows) = table(table_block);
+
+        assert_eq!(header.len(), 2);
+        assert_eq!(rows.len(), 2);
+        assert!(rows.iter().all(|row| row.len() == 2));
+        assert_eq!(runs(&rows[0][0]), ["bold|b"]);
+        assert_eq!(runs(&rows[1][0]), ["code|c"]);
+        assert_eq!(
+            plain(paragraph),
+            "after",
+            "the table leaves no run behind for the next block to pick up"
+        );
+    }
+
+    #[test]
+    fn the_delimiter_row_decides_each_column_s_alignment() {
+        let blocks =
+            parse_markdown("| a | b | c | d |\n| :--- | :---: | ---: | --- |\n| 1 | 2 | 3 | 4 |\n");
+        let [block] = blocks.as_slice() else {
+            panic!("one table, got {blocks:?}");
         };
 
         assert_eq!(
-            language.as_deref(),
-            Some("table"),
-            "the degradation is marked, not passed off as plain code"
+            table(block).0,
+            [
+                CellAlignment::Left,
+                CellAlignment::Center,
+                CellAlignment::Right,
+                CellAlignment::Left,
+            ]
         );
-        assert_eq!(text, source.trim_end());
+    }
+
+    #[test]
+    fn an_escaped_pipe_stays_inside_its_cell() {
+        let blocks = parse_markdown("| a | b |\n|---|---|\n| one \\| two | three |\n");
+        let [block] = blocks.as_slice() else {
+            panic!("one table, got {blocks:?}");
+        };
+        let (_, _, rows) = table(block);
+
+        assert_eq!(
+            rows[0].iter().map(|spans| cell(spans)).collect::<Vec<_>>(),
+            ["one | two", "three"]
+        );
+    }
+
+    #[test]
+    fn an_image_in_a_cell_becomes_its_alt_text() {
+        let blocks = parse_markdown("| icon |\n|---|\n| ![the logo](logo.png) |\n");
+        let [block] = blocks.as_slice() else {
+            panic!("one table and no lifted image, got {blocks:?}");
+        };
+
+        assert_eq!(cell(&table(block).2[0][0]), "the logo");
     }
 
     #[test]

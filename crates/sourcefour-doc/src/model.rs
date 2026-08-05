@@ -57,6 +57,33 @@ pub enum DocBlockKind {
         /// Alt text, empty when the image has none.
         alt: String,
     },
+    /// A table, its cells holding spans rather than blocks.
+    ///
+    /// A cell is inline content only — Markdown gives it no way to hold a
+    /// list or a code block, so nothing here recurses.
+    Table {
+        /// One entry per column, from the delimiter row.
+        alignments: Vec<CellAlignment>,
+        /// One spans-vec per header cell.
+        header: Vec<Vec<DocSpan>>,
+        /// Body rows, each a row of cells, each cell a run of spans. A row
+        /// may be shorter than `alignments`; the source decides.
+        rows: Vec<Vec<Vec<DocSpan>>>,
+    },
+}
+
+/// One table column's alignment, from the delimiter row.
+///
+/// An unmarked column is `Left`, which is what a renderer would do with it
+/// anyway; the model carries no "unspecified" the renderer must decide about.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CellAlignment {
+    /// `:---`, or no marker at all.
+    Left,
+    /// `:---:`.
+    Center,
+    /// `---:`.
+    Right,
 }
 
 /// One styled text run inside a block.
@@ -133,9 +160,11 @@ fn collect_image_sources<'a>(blocks: &'a [DocBlock], sources: &mut Vec<&'a str>)
                     collect_image_sources(item, sources);
                 }
             }
+            // A table cell holds spans, and a span cannot be an image.
             DocBlockKind::Heading { .. }
             | DocBlockKind::Paragraph { .. }
             | DocBlockKind::Code { .. }
+            | DocBlockKind::Table { .. }
             | DocBlockKind::Rule => {}
         }
     }
