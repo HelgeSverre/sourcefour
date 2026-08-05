@@ -153,8 +153,8 @@ pub(crate) fn run(request: &LaunchRequest) -> ExitCode {
 /// History navigation keys, declared once rather than matched ad hoc (§8.5).
 fn history_keymap() -> Vec<gpui::KeyBinding> {
     use crate::views::{
-        CloseActionsRun, CloseDiff, CloseSettings, FilterEnter, FilterEscape, FocusDetails,
-        FocusFilter, NextActionsJob, NextActionsStep, OpenSettings, PageDown, PageUp,
+        CloseActionsRun, CloseDiff, CloseSettings, CopyPreviewSelection, FilterEnter, FilterEscape,
+        FocusDetails, FocusFilter, NextActionsJob, NextActionsStep, OpenSettings, PageDown, PageUp,
         PrevActionsJob, PrevActionsStep, SelectFirstCommit, SelectLastLoadedCommit,
         SelectNextCommit, SelectPreviousCommit, ToggleDetails,
     };
@@ -170,6 +170,7 @@ fn history_keymap() -> Vec<gpui::KeyBinding> {
         gpui::KeyBinding::new("escape", FilterEscape, Some("FilterInput")),
         gpui::KeyBinding::new("enter", FilterEnter, Some("FilterInput")),
         gpui::KeyBinding::new("escape", CloseDiff, Some("Diff")),
+        gpui::KeyBinding::new("cmd-c", CopyPreviewSelection, Some("Diff")),
         gpui::KeyBinding::new("space", ToggleDetails, Some("History")),
         gpui::KeyBinding::new("enter", FocusDetails, Some("History")),
         // Settings, the macOS way (§ settings overlay).

@@ -105,6 +105,11 @@ pub(crate) struct SourcefourWindow {
     diff_focus: FocusHandle,
     /// Scroll position of the diff overlay's line list.
     diff_scroll: UniformListScrollHandle,
+    /// The text one block of the rendered preview has selected, if any.
+    preview_selection: Option<preview::PreviewSelection>,
+    /// Text layouts of the preview blocks this frame drew, so a drag can map
+    /// a window position back to a byte index.
+    preview_layouts: preview::PreviewLayouts,
     /// The user's persisted configuration (settings.json).
     settings: crate::settings::AppSettings,
     /// The settings overlay's visible section, while open.
@@ -192,6 +197,7 @@ actions!(
         FilterEscape,
         FilterEnter,
         CloseDiff,
+        CopyPreviewSelection,
         ToggleDetails,
         FocusDetails,
         OpenSettings,
@@ -216,6 +222,8 @@ enum Drag {
     DiffBar,
     /// The image juxtapose divider.
     ImageSlider,
+    /// A selection being drawn across one preview block's text.
+    PreviewText,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -369,6 +377,8 @@ impl SourcefourWindow {
             diff_request: 0,
             diff_focus: cx.focus_handle(),
             diff_scroll: UniformListScrollHandle::new(),
+            preview_selection: None,
+            preview_layouts: preview::PreviewLayouts::default(),
             settings: initial_settings(launch.demo),
             settings_view: None,
             settings_focus: cx.focus_handle(),
@@ -1199,7 +1209,16 @@ impl SourcefourWindow {
             cx.notify();
         }))
         .on_action(cx.listener(|this, _: &CloseDiff, window, cx| {
-            this.close_diff(window, cx);
+            // Escape gives back the preview's selection first; the overlay
+            // closes on the next one.
+            if this.clear_preview_selection() {
+                cx.notify();
+            } else {
+                this.close_diff(window, cx);
+            }
+        }))
+        .on_action(cx.listener(|this, _: &CopyPreviewSelection, _, cx| {
+            this.copy_preview_selection(cx);
         }))
         .on_action(cx.listener(|this, _: &ToggleDetails, _, cx| {
             this.details_collapsed = !this.details_collapsed;
@@ -1278,6 +1297,9 @@ impl SourcefourWindow {
                 self.scrub_image(x);
                 cx.notify();
             }
+            Some(Drag::PreviewText) => {
+                self.drag_preview_selection(gpui::point(px(x), px(y)), cx);
+            }
         }
     }
 
@@ -1290,7 +1312,8 @@ impl SourcefourWindow {
                 self.persist_ui_state(cx);
                 cx.notify();
             }
-            Some(Drag::DiffBar | Drag::ImageSlider) => cx.notify(),
+            // A text selection outlives the drag that drew it.
+            Some(Drag::DiffBar | Drag::ImageSlider | Drag::PreviewText) => cx.notify(),
         }
     }
 }

@@ -24,7 +24,7 @@ use sourcefour_doc::{CellAlignment, DocBlock, DocBlockKind, DocSpan, DocumentKin
 use sourcefour_git::{DocSource, ImageResolution};
 use sourcefour_model::{DiffContent, RepoLocation, RepoPath};
 
-use crate::theme::MONO_FONT;
+use crate::theme::{MONO_FONT, Theme};
 
 use super::SourcefourWindow;
 use super::diff::{DiffOrigin, DiffView, render_image};
@@ -75,7 +75,7 @@ pub(super) struct PreviewState {
 ///
 /// Also names the pane, because both panes are on screen at once and the
 /// element ids under them must not collide.
-#[derive(Clone, Copy, Eq, PartialEq)]
+#[derive(Clone, Copy, Eq, Hash, PartialEq)]
 pub(super) enum PreviewSide {
     Old,
     New,
@@ -98,7 +98,7 @@ impl PreviewSide {
 /// frames — which is what an element id and, later, a selection need. Nested
 /// ordinals fold into one number by [`NESTED_STRIDE`], and the item's own
 /// element id scopes the result, so an address is unique in its pane.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Eq, Hash, PartialEq)]
 pub(super) struct BlockId {
     /// The top-level block this one sits under — the list item's index.
     item: usize,
@@ -132,6 +132,51 @@ impl BlockId {
     }
 }
 
+/// The text one press, or one drag, has selected in one preview block.
+///
+/// One block at a time: a drag that leaves the block it started in keeps
+/// extending inside that block rather than reaching into the next. The panes
+/// are virtualized lists, so a block that scrolled away has no layout left to
+/// measure a position against, and a selection spanning blocks would have to
+/// carry text the pane is no longer drawing.
+pub(super) struct PreviewSelection {
+    /// The pane the selection belongs to.
+    side: PreviewSide,
+    /// The block inside that pane.
+    block: BlockId,
+    /// That block's whole text, as the runs were built from it, so a copy
+    /// survives the block scrolling out of the pane.
+    text: String,
+    /// Byte index the press landed on.
+    anchor: usize,
+    /// Byte index the drag has reached; dragging backwards selects too.
+    head: usize,
+}
+
+impl PreviewSelection {
+    /// The highlighted range, whichever way the drag went.
+    fn range(&self) -> std::ops::Range<usize> {
+        self.anchor.min(self.head)..self.anchor.max(self.head)
+    }
+
+    /// The selected text; empty for a press that never dragged. Both bounds
+    /// came from [`clamp_to_char_boundary`], so the slice cannot split a
+    /// character.
+    fn selected(&self) -> &str {
+        &self.text[self.range()]
+    }
+}
+
+/// The text layouts of the blocks one frame drew, by pane and block.
+///
+/// A `TextLayout` is `Arc`-backed state the element fills in as it lays out
+/// and paints, so registering the handle while a block is built hands the drag
+/// the same layout the frame goes on to paint. Cleared where the panes are
+/// built, so a lookup only ever finds this frame's blocks — a drag reads back
+/// the block its press landed in, which is a block the frame painted.
+pub(super) type PreviewLayouts =
+    std::cell::RefCell<HashMap<(PreviewSide, BlockId), gpui::TextLayout>>;
+
 /// One side's document as the background load hands it over.
 ///
 /// Separate from [`PreviewDoc`] because a `ListState` is `Rc`-backed and
@@ -155,6 +200,13 @@ pub(super) struct PreviewDoc {
     /// screen instead of the document. Holds the scroll position, so it is
     /// built once per loaded document and never per frame.
     list: gpui::ListState,
+    /// Which pane draws this document, so a block under it can name itself
+    /// in the selection and in the layout registry.
+    side: PreviewSide,
+    /// The window that owns the preview. A block's own mouse handler runs
+    /// outside any listener the window registered, so it reaches back through
+    /// this to set the selection.
+    view: gpui::WeakEntity<SourcefourWindow>,
 }
 
 impl PreviewDoc {
@@ -173,15 +225,20 @@ impl PreviewDoc {
                 parse.blocks.len(),
                 gpui::ListAlignment::Top,
                 px(OVERDRAW),
-                move |index, window, cx| {
-                    view.upgrade().map_or_else(
-                        || div().into_any_element(),
-                        |view| view.read(cx).preview_item(side, index, window),
-                    )
+                {
+                    let view = view.clone();
+                    move |index, window, cx| {
+                        view.upgrade().map_or_else(
+                            || div().into_any_element(),
+                            |view| view.read(cx).preview_item(side, index, window),
+                        )
+                    }
                 },
             ),
             blocks: parse.blocks,
             images: parse.images,
+            side,
+            view,
         }
     }
 }
@@ -380,6 +437,141 @@ fn demo_parse() -> (PreviewParse, PreviewParse) {
     )
 }
 
+/// One block's text and the runs that style it.
+///
+/// Pure, so the styling is testable without a window and the selection wash
+/// stays a transform over the runs rather than a branch woven through them.
+fn spans_to_runs(
+    spans: &[DocSpan],
+    font: &Font,
+    color: Hsla,
+    theme: &Theme,
+) -> (String, Vec<TextRun>) {
+    let mut text = String::new();
+    let mut runs = Vec::with_capacity(spans.len());
+    for span in spans {
+        if span.text.is_empty() {
+            continue;
+        }
+        runs.push(span_run(span, font, color, theme));
+        text.push_str(&span.text);
+    }
+    (text, runs)
+}
+
+/// One styled run. A run carries font, colour, and decorations but no box,
+/// so inline code gets its wash and its family without the usual padding.
+fn span_run(span: &DocSpan, font: &Font, color: Hsla, theme: &Theme) -> TextRun {
+    let mut font = font.clone();
+    if span.code {
+        font.family = MONO_FONT.into();
+    }
+    if span.bold {
+        font.weight = FontWeight::SEMIBOLD;
+    }
+    if span.italic {
+        font.style = gpui::FontStyle::Italic;
+    }
+    let color = if span.link.is_some() {
+        theme.accent
+    } else if span.code {
+        theme.text_primary
+    } else {
+        color
+    };
+    TextRun {
+        len: span.text.len(),
+        font,
+        color,
+        background_color: span.code.then_some(theme.bg_list),
+        underline: span.link.is_some().then(|| gpui::UnderlineStyle {
+            thickness: px(1.0),
+            color: None,
+            wavy: false,
+        }),
+        strikethrough: span.strike.then(|| gpui::StrikethroughStyle {
+            thickness: px(1.0),
+            color: None,
+        }),
+    }
+}
+
+/// The runs with `range` washed in `background`, split where the range cuts
+/// through a run. A selection is a run split rather than a painted quad,
+/// because gpui lays text out inside one element and a quad would have to
+/// follow the wrapping.
+///
+/// The indices are the caller's: they must already sit on character
+/// boundaries of the text the runs were built from — [`clamp_to_char_boundary`]
+/// is what puts them there.
+fn highlight_runs(
+    runs: Vec<TextRun>,
+    range: std::ops::Range<usize>,
+    background: Hsla,
+) -> Vec<TextRun> {
+    if range.is_empty() {
+        return runs;
+    }
+    let mut washed = Vec::with_capacity(runs.len() + 2);
+    let mut offset = 0;
+    for run in runs {
+        let end = offset + run.len;
+        // Both bounds inside this run, so a range reaching past either side
+        // of it contributes nothing there.
+        let start = range.start.clamp(offset, end);
+        let stop = range.end.clamp(offset, end);
+        for (len, inside) in [
+            (start - offset, false),
+            (stop - start, true),
+            (end - stop, false),
+        ] {
+            if len == 0 {
+                continue;
+            }
+            washed.push(TextRun {
+                len,
+                background_color: if inside {
+                    Some(background)
+                } else {
+                    run.background_color
+                },
+                ..run.clone()
+            });
+        }
+        offset = end;
+    }
+    washed
+}
+
+/// `index` moved back to the character boundary at or before it, and never
+/// past the end of the text.
+///
+/// Every index taken from a pointer position goes through here: one landing
+/// inside a multi-byte character would panic the slice a copy takes and cut a
+/// glyph in half in the runs.
+fn clamp_to_char_boundary(text: &str, mut index: usize) -> usize {
+    if index >= text.len() {
+        return text.len();
+    }
+    while !text.is_char_boundary(index) {
+        index -= 1;
+    }
+    index
+}
+
+/// The byte index one window position falls on inside a laid-out block.
+///
+/// `index_for_position` answers `Err` with the nearest index when the position
+/// is outside the text, which is what a drag past the last line wants. Both
+/// sides are window coordinates: a layout keeps the bounds it was painted at,
+/// and gpui's own interactive text hands it the event position unchanged.
+fn index_at(layout: &gpui::TextLayout, text: &str, position: gpui::Point<gpui::Pixels>) -> usize {
+    let index = layout
+        .index_for_position(position)
+        .unwrap_or_else(|nearest| nearest);
+    clamp_to_char_boundary(text, index)
+}
+
 /// The rendered document: one list item per top-level block, so a frame
 /// costs what is on screen rather than what the document holds.
 ///
@@ -395,6 +587,8 @@ impl SourcefourWindow {
     /// Switches the open diff between its lines and its rendered document,
     /// starting the document's load the first time the preview is asked for.
     pub(super) fn toggle_preview(&mut self, show: bool, cx: &mut gpui::Context<Self>) {
+        // A selection belongs to the rendered document that is on screen.
+        self.clear_preview_selection();
         let Some(view) = self.diff_view.as_mut() else {
             return;
         };
@@ -463,6 +657,62 @@ impl SourcefourWindow {
             view.preview = Some(state);
         }
         cx.notify();
+    }
+
+    /// Extends the open selection to where a held drag has reached.
+    ///
+    /// Only the block the press landed in is measured, and only while this
+    /// frame drew it: a drag that left the block keeps the nearest index
+    /// inside it, which is what `index_for_position` answers with.
+    pub(super) fn drag_preview_selection(
+        &mut self,
+        position: gpui::Point<gpui::Pixels>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let Some((side, block)) = self
+            .preview_selection
+            .as_ref()
+            .map(|selection| (selection.side, selection.block))
+        else {
+            return;
+        };
+        let layout = self.preview_layouts.borrow().get(&(side, block)).cloned();
+        let (Some(layout), Some(selection)) = (layout, self.preview_selection.as_mut()) else {
+            return;
+        };
+        let head = index_at(&layout, &selection.text, position);
+        if selection.head != head {
+            selection.head = head;
+            cx.notify();
+        }
+    }
+
+    /// Puts the selected text on the clipboard. A press that never dragged
+    /// selected nothing, and copies nothing.
+    pub(super) fn copy_preview_selection(&self, cx: &mut gpui::App) {
+        let Some(selected) = self
+            .preview_selection
+            .as_ref()
+            .map(PreviewSelection::selected)
+            .filter(|selected| !selected.is_empty())
+        else {
+            return;
+        };
+        cx.write_to_clipboard(gpui::ClipboardItem::new_string(selected.to_owned()));
+    }
+
+    /// Drops the selection, reporting whether anything was highlighted.
+    ///
+    /// Escape asks before it closes the overlay, so the first Escape gives
+    /// back the highlight and the second closes; a press that never dragged
+    /// has nothing to give back and closes on the first.
+    pub(super) fn clear_preview_selection(&mut self) -> bool {
+        let highlighted = self
+            .preview_selection
+            .as_ref()
+            .is_some_and(|selection| !selection.range().is_empty());
+        self.preview_selection = None;
+        highlighted
     }
 
     /// The Source/Preview control, left of the layout control it mirrors.
@@ -553,11 +803,13 @@ impl SourcefourWindow {
         id: BlockId,
     ) -> Div {
         match &block.kind {
-            DocBlockKind::Heading { level, spans } => self.preview_heading(*level, spans, font),
+            DocBlockKind::Heading { level, spans } => {
+                self.preview_heading(*level, spans, font, preview, id)
+            }
             DocBlockKind::Paragraph { spans } => div()
                 .mt(px(8.0))
                 .text_size(px(12.5))
-                .child(self.preview_spans(spans, font, self.theme.text_secondary)),
+                .child(self.selectable_text(spans, font, self.theme.text_secondary, preview, id)),
             DocBlockKind::Code { text, .. } => self.preview_code(text, id),
             DocBlockKind::Quote { blocks } => div()
                 .mt(px(10.0))
@@ -582,13 +834,20 @@ impl SourcefourWindow {
                 alignments,
                 header,
                 rows,
-            } => self.preview_table(alignments, header, rows, font),
+            } => self.preview_table(alignments, header, rows, font, preview, id),
         }
     }
 
     /// A heading, sized by its level; the whole line carries the weight so a
     /// bold run inside one changes nothing.
-    fn preview_heading(&self, level: u8, spans: &[DocSpan], font: &Font) -> Div {
+    fn preview_heading(
+        &self,
+        level: u8,
+        spans: &[DocSpan],
+        font: &Font,
+        preview: &PreviewDoc,
+        id: BlockId,
+    ) -> Div {
         let size = match level {
             1 => 20.0,
             2 => 17.0,
@@ -603,61 +862,67 @@ impl SourcefourWindow {
             .mt(px(20.0))
             .mb(px(2.0))
             .text_size(px(size))
-            .child(self.preview_spans(spans, &heading, self.theme.text_primary))
+            .child(self.selectable_text(spans, &heading, self.theme.text_primary, preview, id))
     }
 
-    /// A block of styled runs as one wrapping paragraph.
+    /// A block of styled runs as one wrapping paragraph, selectable by a
+    /// press and a drag across it.
     ///
     /// Every mark lands on a text run rather than a nested element, because
-    /// gpui wraps text inside one element and never across two.
-    fn preview_spans(&self, spans: &[DocSpan], font: &Font, color: Hsla) -> StyledText {
-        let mut text = String::new();
-        let mut runs = Vec::with_capacity(spans.len());
-        for span in spans {
-            if span.text.is_empty() {
-                continue;
-            }
-            runs.push(self.span_run(span, font, color));
-            text.push_str(&span.text);
-        }
-        StyledText::new(text).with_runs(runs)
-    }
-
-    /// One styled run. A run carries font, colour, and decorations but no box,
-    /// so inline code gets its wash and its family without the usual padding.
-    fn span_run(&self, span: &DocSpan, font: &Font, color: Hsla) -> TextRun {
-        let mut font = font.clone();
-        if span.code {
-            font.family = MONO_FONT.into();
-        }
-        if span.bold {
-            font.weight = FontWeight::SEMIBOLD;
-        }
-        if span.italic {
-            font.style = gpui::FontStyle::Italic;
-        }
-        let color = if span.link.is_some() {
-            self.theme.accent
-        } else if span.code {
-            self.theme.text_primary
-        } else {
-            color
+    /// gpui wraps text inside one element and never across two — and the
+    /// selection washes runs for the same reason.
+    fn selectable_text(
+        &self,
+        spans: &[DocSpan],
+        font: &Font,
+        color: Hsla,
+        preview: &PreviewDoc,
+        id: BlockId,
+    ) -> Div {
+        let (text, runs) = spans_to_runs(spans, font, color, &self.theme);
+        let text = gpui::SharedString::from(text);
+        let selected = self
+            .preview_selection
+            .as_ref()
+            .filter(|selection| selection.side == preview.side && selection.block == id)
+            .map(PreviewSelection::range);
+        let runs = match selected {
+            Some(range) => highlight_runs(runs, range, self.theme.accent.opacity(0.35)),
+            None => runs,
         };
-        TextRun {
-            len: span.text.len(),
-            font,
-            color,
-            background_color: span.code.then_some(self.theme.bg_list),
-            underline: span.link.is_some().then(|| gpui::UnderlineStyle {
-                thickness: px(1.0),
-                color: None,
-                wavy: false,
-            }),
-            strikethrough: span.strike.then(|| gpui::StrikethroughStyle {
-                thickness: px(1.0),
-                color: None,
-            }),
-        }
+        let element = StyledText::new(text.clone()).with_runs(runs);
+        let layout = element.layout().clone();
+        self.preview_layouts
+            .borrow_mut()
+            .insert((preview.side, id), layout.clone());
+        let view = preview.view.clone();
+        let side = preview.side;
+        div()
+            .cursor_text()
+            .on_mouse_down(
+                gpui::MouseButton::Left,
+                move |event: &gpui::MouseDownEvent, _, cx| {
+                    // The press fixes the anchor; the drag it may turn into is
+                    // routed by the overlay's own move handler, since a drag
+                    // leaves this block long before it ends.
+                    let index = index_at(&layout, &text, event.position);
+                    view.update(cx, |this, cx| {
+                        this.preview_selection = Some(PreviewSelection {
+                            side,
+                            block: id,
+                            text: text.to_string(),
+                            anchor: index,
+                            head: index,
+                        });
+                        this.drag = Some(super::Drag::PreviewText);
+                        cx.notify();
+                    })
+                    .ok();
+                    // The overlay closes on a click that reaches its backdrop.
+                    cx.stop_propagation();
+                },
+            )
+            .child(element)
     }
 
     /// A fenced or indented code block, clipped rather than wrapped: folding
@@ -719,6 +984,8 @@ impl SourcefourWindow {
         header: &[Vec<DocSpan>],
         rows: &[Vec<Vec<DocSpan>>],
         font: &Font,
+        preview: &PreviewDoc,
+        id: BlockId,
     ) -> Div {
         let mut strong = font.clone();
         strong.weight = FontWeight::SEMIBOLD;
@@ -743,10 +1010,14 @@ impl SourcefourWindow {
                             alignments.get(column),
                             &strong,
                             self.theme.text_primary,
+                            preview,
+                            // A cell is its own selectable block, addressed by
+                            // its place in the grid: the header is row zero.
+                            id.child(0).child(column),
                         )
                     })),
             )
-            .children(rows.iter().map(|row| {
+            .children(rows.iter().enumerate().map(|(row_index, row)| {
                 div()
                     .flex()
                     .border_t_1()
@@ -759,6 +1030,8 @@ impl SourcefourWindow {
                             alignments.get(column),
                             font,
                             self.theme.text_secondary,
+                            preview,
+                            id.child(row_index + 1).child(column),
                         )
                     }))
             }))
@@ -771,6 +1044,8 @@ impl SourcefourWindow {
         alignment: Option<&CellAlignment>,
         font: &Font,
         color: Hsla,
+        preview: &PreviewDoc,
+        id: BlockId,
     ) -> Div {
         div()
             .flex_1()
@@ -786,7 +1061,7 @@ impl SourcefourWindow {
                 // A column past the delimiter row's end reads as left.
                 Some(CellAlignment::Left) | None => cell,
             })
-            .child(self.preview_spans(spans, font, color))
+            .child(self.selectable_text(spans, font, color, preview, id))
     }
 
     /// A list, one marker column beside each item's own blocks.
@@ -882,15 +1157,232 @@ impl SourcefourWindow {
 
 #[cfg(test)]
 mod tests {
+    use gpui::{FontWeight, Hsla, TextRun};
     use sourcefour_doc::{DocBlockKind, DocSpan};
     use sourcefour_model::{DiffParent, FileDiffRequest, Oid, RepoPath};
 
+    use crate::theme::{MONO_FONT, Theme};
+
     use super::{
-        ABSENT_NOTICE, DiffOrigin, DocSource, doc_source, document_blocks, stress_repeats,
+        ABSENT_NOTICE, DiffOrigin, DocSource, clamp_to_char_boundary, doc_source, document_blocks,
+        highlight_runs, spans_to_runs, stress_repeats,
     };
 
     fn path(text: &str) -> RepoPath {
         RepoPath(text.as_bytes().to_vec())
+    }
+
+    /// The wash a selection paints, distinct from anything the palette hands
+    /// a run, so a test can tell the two apart.
+    const WASH: Hsla = Hsla {
+        h: 0.6,
+        s: 0.9,
+        l: 0.6,
+        a: 0.35,
+    };
+
+    /// Plain runs of the given byte lengths, nothing washed.
+    fn runs(lengths: &[usize]) -> Vec<TextRun> {
+        lengths
+            .iter()
+            .map(|&len| TextRun {
+                len,
+                font: gpui::font("Helvetica"),
+                color: gpui::black(),
+                background_color: None,
+                underline: None,
+                strikethrough: None,
+            })
+            .collect()
+    }
+
+    /// What a split left behind: each run's length and whether it is washed.
+    fn shape(runs: &[TextRun]) -> Vec<(usize, bool)> {
+        runs.iter()
+            .map(|run| (run.len, run.background_color == Some(WASH)))
+            .collect()
+    }
+
+    fn span(text: &str) -> DocSpan {
+        DocSpan {
+            text: String::from(text),
+            ..DocSpan::default()
+        }
+    }
+
+    #[test]
+    fn a_selection_on_run_boundaries_washes_whole_runs() {
+        let washed = highlight_runs(runs(&[3, 4, 5]), 3..7, WASH);
+
+        assert_eq!(shape(&washed), vec![(3, false), (4, true), (5, false)]);
+    }
+
+    #[test]
+    fn a_selection_inside_one_run_splits_it_in_three() {
+        let washed = highlight_runs(runs(&[10]), 3..6, WASH);
+
+        assert_eq!(shape(&washed), vec![(3, false), (3, true), (4, false)]);
+    }
+
+    #[test]
+    fn a_selection_over_everything_washes_every_run() {
+        let washed = highlight_runs(runs(&[2, 3]), 0..5, WASH);
+
+        assert_eq!(shape(&washed), vec![(2, true), (3, true)]);
+    }
+
+    #[test]
+    fn an_empty_selection_leaves_the_runs_alone() {
+        let washed = highlight_runs(runs(&[2, 3]), 4..4, WASH);
+
+        assert_eq!(shape(&washed), vec![(2, false), (3, false)]);
+    }
+
+    #[test]
+    fn a_selection_past_the_text_stops_at_its_end() {
+        let washed = highlight_runs(runs(&[2, 3]), 3..99, WASH);
+
+        assert_eq!(
+            shape(&washed),
+            vec![(2, false), (1, false), (2, true)],
+            "no run may be emitted empty, and none may reach past the text"
+        );
+    }
+
+    #[test]
+    fn a_split_never_loses_a_byte() {
+        for range in [0..0, 0..11, 1..3, 2..7, 6..11, 4..99] {
+            let washed = highlight_runs(runs(&[6, 5]), range.clone(), WASH);
+            let total: usize = washed.iter().map(|run| run.len).sum();
+
+            assert_eq!(total, 11, "{range:?} changed the text length");
+            assert!(washed.iter().all(|run| run.len > 0));
+        }
+    }
+
+    #[test]
+    fn runs_over_multibyte_text_split_exactly_where_the_caller_says() {
+        // "æøå 🌍": 2 + 2 + 2 + 1 + 4 bytes, as two runs of 6 and 5.
+        let text = "æøå 🌍";
+        let washed = highlight_runs(runs(&[6, 5]), 2..7, WASH);
+
+        assert_eq!(
+            shape(&washed),
+            vec![(2, false), (4, true), (1, true), (4, false)]
+        );
+        assert_eq!(&text[2..7], "øå ", "the split must follow the byte indices");
+        assert_eq!(
+            shape(&highlight_runs(runs(&[6, 5]), 1..3, WASH)),
+            vec![(1, false), (2, true), (3, false), (5, false)],
+            "the function trusts its caller: clamping indices is the caller's job"
+        );
+    }
+
+    #[test]
+    fn a_byte_index_snaps_back_to_the_character_it_landed_in() {
+        let text = "æøå 🌍";
+
+        assert_eq!(clamp_to_char_boundary(text, 0), 0);
+        assert_eq!(clamp_to_char_boundary(text, 1), 0);
+        assert_eq!(clamp_to_char_boundary(text, 2), 2);
+        assert_eq!(clamp_to_char_boundary(text, 7), 7);
+        assert_eq!(clamp_to_char_boundary(text, 8), 7);
+        assert_eq!(clamp_to_char_boundary(text, 10), 7);
+        assert_eq!(clamp_to_char_boundary(text, 11), 11);
+        assert_eq!(clamp_to_char_boundary(text, 99), 11);
+        assert_eq!(clamp_to_char_boundary("", 4), 0);
+    }
+
+    #[test]
+    fn every_clamped_index_is_one_the_text_can_be_sliced_at() {
+        let text = "æ 🌍 ok";
+
+        for index in 0..=text.len() + 3 {
+            let clamped = clamp_to_char_boundary(text, index);
+
+            assert!(text.is_char_boundary(clamped), "{index} landed mid-glyph");
+            assert!(clamped <= index.min(text.len()));
+            let _ = &text[..clamped];
+        }
+    }
+
+    #[test]
+    fn spans_become_one_string_and_one_run_each() {
+        let theme = Theme::dark();
+        let (text, runs) = spans_to_runs(
+            &[span("æøå"), span(""), span(" tail")],
+            &gpui::font("Helvetica"),
+            theme.text_secondary,
+            &theme,
+        );
+
+        assert_eq!(text, "æøå tail");
+        assert_eq!(
+            runs.iter().map(|run| run.len).collect::<Vec<_>>(),
+            vec![6, 5],
+            "an empty span contributes no run"
+        );
+        assert_eq!(runs.iter().map(|run| run.len).sum::<usize>(), text.len());
+    }
+
+    #[test]
+    fn a_run_carries_the_marks_its_span_had() {
+        let theme = Theme::dark();
+        let (_, runs) = spans_to_runs(
+            &[
+                DocSpan {
+                    text: String::from("code"),
+                    code: true,
+                    ..DocSpan::default()
+                },
+                DocSpan {
+                    text: String::from("link"),
+                    link: Some(String::from("https://example.com")),
+                    ..DocSpan::default()
+                },
+                DocSpan {
+                    text: String::from("bold"),
+                    bold: true,
+                    ..DocSpan::default()
+                },
+                DocSpan {
+                    text: String::from("gone"),
+                    italic: true,
+                    strike: true,
+                    ..DocSpan::default()
+                },
+            ],
+            &gpui::font("Helvetica"),
+            theme.text_secondary,
+            &theme,
+        );
+
+        assert_eq!(runs[0].font.family, MONO_FONT);
+        assert_eq!(runs[0].background_color, Some(theme.bg_list));
+        assert_eq!(runs[1].color, theme.accent);
+        assert!(runs[1].underline.is_some());
+        assert_eq!(runs[2].font.weight, FontWeight::SEMIBOLD);
+        assert_eq!(runs[3].font.style, gpui::FontStyle::Italic);
+        assert!(runs[3].strikethrough.is_some());
+    }
+
+    #[test]
+    fn the_selection_wash_replaces_the_one_a_run_already_carried() {
+        let theme = Theme::dark();
+        let (text, runs) = spans_to_runs(
+            &[DocSpan {
+                text: String::from("code"),
+                code: true,
+                ..DocSpan::default()
+            }],
+            &gpui::font("Helvetica"),
+            theme.text_secondary,
+            &theme,
+        );
+        let washed = highlight_runs(runs, 0..text.len(), WASH);
+
+        assert_eq!(shape(&washed), vec![(4, true)]);
+        assert_eq!(washed[0].font.family, MONO_FONT, "the marks stay");
     }
 
     #[test]

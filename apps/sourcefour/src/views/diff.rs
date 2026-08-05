@@ -157,6 +157,7 @@ impl SourcefourWindow {
     /// Closes the diff overlay, returning focus to the history.
     pub(crate) fn close_diff(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) {
         self.diff_view = None;
+        self.clear_preview_selection();
         self.focus.focus(window);
         cx.notify();
     }
@@ -367,6 +368,9 @@ impl SourcefourWindow {
             Some(DiffContent::Text { .. }) if preview::showing(view) => match &view.preview {
                 Some(preview) => {
                     let started = std::time::Instant::now();
+                    // A layout belongs to the frame that painted it; the
+                    // blocks below register this frame's as they build.
+                    self.preview_layouts.borrow_mut().clear();
                     let panes = div()
                         .size_full()
                         .flex()
