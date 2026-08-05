@@ -366,10 +366,20 @@ impl SourcefourWindow {
                     )
                     .child(
                         div()
-                            .text_size(px(11.0))
-                            .text_color(self.theme.text_faint)
-                            .child("The working tree follows your terminal: stage and commit land here next."),
-                    ),
+                            .mt(px(6.0))
+                            .h(px(30.0))
+                            .flex()
+                            .items_center()
+                            .px(px(10.0))
+                            .rounded(px(6.0))
+                            .border_1()
+                            .border_color(self.theme.border_strong)
+                            .bg(self.theme.bg_list)
+                            .text_size(px(12.0))
+                            .text_color(self.theme.text_primary)
+                            .child(self.commit_input.clone()),
+                    )
+                    .child(self.commit_button(summary.staged, cx)),
             )
             .child(div().w(px(1.0)).flex_none().bg(self.theme.border))
             .child(
@@ -406,6 +416,54 @@ impl SourcefourWindow {
                     ),
             )
             .into_any_element()
+    }
+
+    /// The commit affordance: enabled once something is staged and the
+    /// summary has words; the label says which is missing otherwise.
+    fn commit_button(&self, staged: usize, cx: &mut gpui::Context<Self>) -> Div {
+        let summary_empty = self.commit_input.read(cx).content.trim().is_empty();
+        let ready = staged > 0 && !summary_empty && !self.committing;
+        let label = if self.committing {
+            "Committing…"
+        } else {
+            "Commit"
+        };
+        let reason = match (staged, summary_empty) {
+            (0, _) => Some("Nothing staged yet"),
+            (_, true) => Some("Write a summary line"),
+            _ => None,
+        };
+        div()
+            .flex()
+            .items_center()
+            .gap(px(10.0))
+            .child(
+                div()
+                    .id("commit-button")
+                    .px(px(14.0))
+                    .py(px(5.0))
+                    .rounded(px(6.0))
+                    .text_size(px(11.5))
+                    .when(ready, |this| {
+                        this.cursor_pointer()
+                            .bg(self.theme.accent)
+                            .text_color(self.theme.text_on_accent)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.start_commit(cx);
+                            }))
+                    })
+                    .when(!ready, |this| {
+                        this.bg(self.theme.bg_hover)
+                            .text_color(self.theme.text_faint)
+                    })
+                    .child(label),
+            )
+            .children(reason.map(|reason| {
+                div()
+                    .text_size(px(10.5))
+                    .text_color(self.theme.text_faint)
+                    .child(reason)
+            }))
     }
 
     /// One section of the working-tree file list: header plus rows.

@@ -751,6 +751,8 @@ pub enum OperationKind {
     CreateBranch,
     /// Create and check out a branch.
     CreateAndCheckoutBranch,
+    /// Record the staged changes as a commit.
+    Commit,
 }
 
 /// Progress emitted while an explicit Git operation is alive.

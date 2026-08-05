@@ -50,6 +50,10 @@ use diff::{DiffMode, DiffView};
 use github::{Cached, GithubChecks};
 use sidebar::{SidebarSections, head_label};
 
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent view-state flags on the one window root"
+)]
 pub(crate) struct SourcefourWindow {
     /// Repository name, stable across the repository's worktrees.
     name: String,
@@ -83,6 +87,10 @@ pub(crate) struct SourcefourWindow {
     /// The working tree's uncommitted state, when read (§6.14 limits how
     /// fresh it can be: reloads, activation, and operations refresh it).
     working_tree_status: Option<sourcefour_model::WorkingTreeStatus>,
+    /// The commit summary line being written.
+    commit_input: gpui::Entity<crate::text_input::TextInput>,
+    /// Whether a commit is running; the button disables while one is.
+    committing: bool,
     /// Token for the newest status read; stale completions bail out.
     status_request: u64,
     /// Token for the newest detail/files request; stale completions bail out.
@@ -351,6 +359,8 @@ impl SourcefourWindow {
             files: None,
             files_for: None,
             working_tree_status: None,
+            commit_input: Self::plain_input("Summary of the change", cx),
+            committing: false,
             status_request: 0,
             files_request: 0,
             diff_view: None,
@@ -746,6 +756,57 @@ impl SourcefourWindow {
                 .map(|row| crate::history::Selection::Commit(row.oid));
         }
         self.working_tree_status = Some(status);
+    }
+
+    /// Runs `git commit` with the summary line, through the §10 runner:
+    /// hooks and signing apply, and a failure lands in the status bar with
+    /// the hook's own words.
+    pub(super) fn start_commit(&mut self, cx: &mut gpui::Context<Self>) {
+        if self.committing {
+            return;
+        }
+        let summary = self.commit_input.read(cx).content.trim().to_string();
+        if summary.is_empty() {
+            return;
+        }
+        let Some(location) = self.location.clone() else {
+            return;
+        };
+        self.committing = true;
+        cx.spawn(async move |this, cx| {
+            let outcome = cx
+                .background_executor()
+                .spawn(async move {
+                    let cancelled = std::sync::atomic::AtomicBool::new(false);
+                    sourcefour_git::commit(&location, &summary, &DiscardSink, &cancelled)
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                this.committing = false;
+                match outcome {
+                    Ok(sourcefour_model::OperationOutcome::Succeeded { summary, .. }) => {
+                        this.op_status = Some((true, summary));
+                        this.commit_input
+                            .update(cx, |input, cx| input.set_text("", cx));
+                        // The new commit appears without waiting for the
+                        // watcher's next poll; status re-reads with it.
+                        this.begin_reload(cx);
+                    }
+                    Ok(sourcefour_model::OperationOutcome::Failed { error, .. }) => {
+                        this.op_status = Some((false, error.user.message));
+                        this.load_working_tree_status(cx);
+                    }
+                    Ok(sourcefour_model::OperationOutcome::Cancelled { .. }) => {}
+                    Err(failure) => {
+                        this.op_status = Some((false, failure.user.message));
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+        cx.notify();
     }
 
     /// Applies one stage or unstage through the user's Git, then re-reads
@@ -1289,6 +1350,13 @@ impl Render for SourcefourWindow {
         }
         element
     }
+}
+
+/// A sink for operations whose progress no interface element shows yet.
+struct DiscardSink;
+
+impl sourcefour_git::OperationSink for DiscardSink {
+    fn report(&self, _: sourcefour_model::OperationProgress) {}
 }
 
 /// True when a click stayed put — a slider or scrollbar drag released
