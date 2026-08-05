@@ -1386,7 +1386,7 @@ impl SourcefourWindow {
                             .relative()
                             .border_1()
                             .border_color(self.theme.border)
-                            .bg(gpui::black().opacity(0.18))
+                            .bg(self.theme.recessed())
                             .children([0.25_f32, 0.5, 0.75].map(|fraction| {
                                 div()
                                     .absolute()

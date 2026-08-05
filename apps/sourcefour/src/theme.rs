@@ -50,6 +50,7 @@
 //! | helper                      | use it for                                |
 //! |-----------------------------|-------------------------------------------|
 //! | `scrim()`                   | the backdrop behind every overlay         |
+//! | `recessed()`                | inset surfaces: plot wells, code fences   |
 //! | `gutter_rule()`             | line-number ↔ code divider in diffs       |
 //! | `tint_added()`/`removed()`  | washes behind diff lines                  |
 //! | `chip_border()`/`chip_fill()` | tinted badges: CURRENT, refs, PRs, chips |
@@ -113,6 +114,14 @@ impl Theme {
     #[expect(clippy::unused_self, reason = "a palette role, kept on Theme")]
     pub(crate) fn scrim(&self) -> Hsla {
         gpui::black().opacity(0.55)
+    }
+
+    /// A well sunk into whatever surface it sits on: the Actions timeline
+    /// plot, a preview's code fence. Black at 18% rather than a surface of
+    /// its own, so one value recesses equally over chrome, panel, and list.
+    #[expect(clippy::unused_self, reason = "a palette role, kept on Theme")]
+    pub(crate) fn recessed(&self) -> Hsla {
+        gpui::black().opacity(0.18)
     }
 
     /// The divider between line numbers and code in the diff overlay —

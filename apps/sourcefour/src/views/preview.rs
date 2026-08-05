@@ -54,6 +54,10 @@ const IMAGE_HEIGHT: f32 = 420.0;
 /// reaches already-measured content instead of popping.
 const OVERDRAW: f32 = 400.0;
 
+/// The hover group every code fence joins, so a fence can reveal its own
+/// copy control without each one inventing a name.
+const CODE_GROUP: &str = "preview-code";
+
 /// Ordinals a block may have at one nesting level before its ids alias its
 /// parent's. Documents the pane draws stay far under it; a list of a thousand
 /// items would have to nest inside a single top-level block to collide.
@@ -119,6 +123,12 @@ impl BlockId {
     /// The list item's element id, which scopes every id under it.
     fn item_id(self) -> gpui::ElementId {
         ("preview-item", self.item).into()
+    }
+
+    /// The element id of one control on this block. Unique in the pane
+    /// because [`Self::item_id`] scopes it.
+    fn element(self, name: &'static str) -> gpui::ElementId {
+        (name, self.nested).into()
     }
 }
 
@@ -544,7 +554,7 @@ impl SourcefourWindow {
                 .mt(px(8.0))
                 .text_size(px(12.5))
                 .child(self.preview_spans(spans, font, self.theme.text_secondary)),
-            DocBlockKind::Code { text, .. } => self.preview_code(text),
+            DocBlockKind::Code { text, .. } => self.preview_code(text, id),
             DocBlockKind::Quote { blocks } => div()
                 .mt(px(10.0))
                 .pl(px(12.0))
@@ -648,19 +658,50 @@ impl SourcefourWindow {
 
     /// A fenced or indented code block, clipped rather than wrapped: folding
     /// code at an arbitrary column reads worse than losing its right edge.
-    fn preview_code(&self, text: &str) -> Div {
+    ///
+    /// Recessed rather than `bg_list`, since the pane it sits on is already
+    /// that surface and a fence must read as sunk into it.
+    fn preview_code(&self, text: &str, id: BlockId) -> Div {
         div()
+            .relative()
+            // Every fence answers to one group name: gpui resolves a hover
+            // group to the innermost element that registered it, so the fence
+            // under the pointer is the one that reveals its control.
+            .group(CODE_GROUP)
             .mt(px(10.0))
             .px(px(10.0))
             .py(px(8.0))
             .rounded(px(5.0))
-            .bg(self.theme.bg_list)
+            .bg(self.theme.recessed())
             .overflow_x_hidden()
             .whitespace_nowrap()
             .font_family(MONO_FONT)
             .text_size(px(11.0))
             .text_color(self.theme.text_secondary)
             .child(text.to_owned())
+            .child(self.preview_copy(text, id))
+    }
+
+    /// The fence's copy control: absent until the fence is hovered, then the
+    /// same word the Actions log footer offers.
+    fn preview_copy(&self, text: &str, id: BlockId) -> gpui::Stateful<Div> {
+        let text = text.to_owned();
+        div()
+            .id(id.element("preview-copy"))
+            .absolute()
+            .top(px(4.0))
+            .right(px(6.0))
+            .cursor_pointer()
+            .text_size(px(10.0))
+            .text_color(self.theme.accent)
+            .invisible()
+            .group_hover(CODE_GROUP, Styled::visible)
+            .on_click(move |_, _, cx| {
+                // The fence sits inside the overlay's own click handling.
+                cx.stop_propagation();
+                cx.write_to_clipboard(gpui::ClipboardItem::new_string(text.clone()));
+            })
+            .child("copy")
     }
 
     /// A table: a washed header row over body rows, inside one rounded frame.
