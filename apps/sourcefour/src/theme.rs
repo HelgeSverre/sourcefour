@@ -42,8 +42,10 @@
 //! `text_on_accent` on accent-filled controls.
 //!
 //! Status colors: `green` success/additions · `red` failure/deletions ·
-//! `orange` in-progress/warnings · `purple` tags/detached · `accent`
-//! interaction and selection. `graph_lanes` recycles them for lanes.
+//! `orange` in-progress/warnings · `purple` tags/detached · `cyan` the
+//! hue nothing else claims, spent on a graph lane and on what an Actions
+//! log's escapes call cyan · `accent` interaction and selection.
+//! `graph_lanes` recycles them for lanes.
 //!
 //! # Derived modifiers
 //!
@@ -104,6 +106,7 @@ pub(crate) struct Theme {
     pub(crate) orange: Hsla,
     pub(crate) purple: Hsla,
     pub(crate) red: Hsla,
+    pub(crate) cyan: Hsla,
     /// Sized by the model so a graph color index can never fall outside it.
     pub(crate) graph_lanes: [Hsla; GRAPH_COLOR_COUNT as usize],
 }
@@ -195,6 +198,7 @@ impl Theme {
             orange,
             purple,
             red,
+            cyan,
             graph_lanes: [accent, green, orange, purple, red, cyan],
         }
     }

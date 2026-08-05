@@ -172,8 +172,13 @@ fn meter_fill(theme: &crate::theme::Theme, status: CheckStatus) -> gpui::Hsla {
     }
 }
 
-/// How one log line tints.
+/// How one log line tints. A colored diagnostic wears its escapes ahead of
+/// the word, so a line carrying any is read stripped; a plain one is not
+/// copied.
 fn line_tint(text: &str) -> LineTint {
+    if text.contains('\u{1b}') {
+        return line_tint(&sourcefour_github::strip_ansi(text));
+    }
     if text.starts_with("error") || text.contains("##[error]") {
         LineTint::Error
     } else if text.starts_with("warning") {
@@ -187,6 +192,33 @@ enum LineTint {
     Error,
     Warning,
     Plain,
+}
+
+/// Where an escape's color lands in the palette. A bright hue takes its
+/// base hue: the strip already reads as one set of status colors, and a
+/// second red would only be noise.
+fn ansi_color(theme: &crate::theme::Theme, color: sourcefour_github::AnsiColor) -> gpui::Hsla {
+    use sourcefour_github::AnsiColor as Ansi;
+    match color {
+        Ansi::Red | Ansi::BrightRed => theme.red,
+        Ansi::Green | Ansi::BrightGreen => theme.green,
+        Ansi::Yellow | Ansi::BrightYellow => theme.orange,
+        Ansi::Blue | Ansi::BrightBlue => theme.accent,
+        Ansi::Magenta | Ansi::BrightMagenta => theme.purple,
+        Ansi::Cyan | Ansi::BrightCyan => theme.cyan,
+        Ansi::White | Ansi::BrightWhite => theme.text_primary,
+        Ansi::Black | Ansi::BrightBlack => theme.text_faint,
+        // A truecolor escape names its own hue; nothing in the palette
+        // stands in for it.
+        Ansi::Rgb(red, green, blue) => {
+            gpui::rgb((u32::from(red) << 16) | (u32::from(green) << 8) | u32::from(blue)).into()
+        }
+    }
+}
+
+/// A run a terminal would draw with no styling at all.
+fn unstyled(run: &sourcefour_github::AnsiRun) -> bool {
+    run.color.is_none() && !run.bold && !run.dim && !run.italic && !run.underline
 }
 
 /// The §12.4 capture fixture: the mockup's failed Windows run, seeded so
@@ -322,6 +354,10 @@ fn demo_jobs() -> Vec<WorkflowJob> {
 }
 
 /// The demo windows job's log, matching the mockup's failing clippy step.
+///
+/// Two lines carry the escapes cargo really writes — the green status word
+/// and the diagnostic header — so the capture covers both the styled runs
+/// and the error jump finding a word an escape hides.
 fn demo_log() -> Vec<String> {
     [
         "2024-08-02T10:00:04Z ##[group]Run actions/checkout@v4",
@@ -329,7 +365,8 @@ fn demo_log() -> Vec<String> {
         "2024-08-02T10:00:12Z ##[group]Run dtolnay/rust-toolchain@stable",
         "2024-08-02T10:00:51Z installed rustc 1.97.0",
         "2024-08-02T10:00:54Z     Checking sourcefour v0.1.0 (D:\\a\\sourcefour\\apps\\sourcefour)",
-        "2024-08-02T10:01:40Z error[E0308]: mismatched types",
+        "2024-08-02T10:00:56Z \x1b[1m\x1b[32m    Checking\x1b[0m sourcefour-git v0.1.0 (D:\\a\\sourcefour\\crates\\sourcefour-git)",
+        "2024-08-02T10:01:40Z \x1b[0m\x1b[1m\x1b[38;5;9merror[E0308]\x1b[0m\x1b[1m: mismatched types\x1b[0m",
         "2024-08-02T10:01:40Z   --> apps\\sourcefour\\src\\views\\chrome.rs:221:36",
         "2024-08-02T10:01:40Z     |",
         "2024-08-02T10:01:40Z 221 |    .unwrap_or_else(|| WorktreeId(String::from(\"active\"))),",
@@ -1256,12 +1293,24 @@ impl SourcefourWindow {
                     return Vec::new();
                 };
                 let shown = end - start;
-                let all = lines.join("\n");
+                // What the clipboard gets is what the eye reads: escapes
+                // are stripped, and a line without any is not copied.
+                let all = lines
+                    .iter()
+                    .map(|line| {
+                        if line.contains('\u{1b}') {
+                            sourcefour_github::strip_ansi(line)
+                        } else {
+                            line.clone()
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
                 let list = uniform_list(
                     cx.entity(),
                     "actions-log",
                     shown,
-                    move |this, range, _window, _cx| {
+                    move |this, range, window, _cx| {
                         let Some((start, end, _)) = this.actions_log_window() else {
                             return Vec::new();
                         };
@@ -1277,7 +1326,7 @@ impl SourcefourWindow {
                             .filter_map(|offset| {
                                 lines.get(start + offset).filter(|_| start + offset < end)
                             })
-                            .map(|line| this.actions_log_line(line))
+                            .map(|line| this.actions_log_line(line, window))
                             .collect()
                     },
                 )
@@ -1354,7 +1403,7 @@ impl SourcefourWindow {
     }
 
     /// One virtualized log line: faint timestamp, tinted text.
-    fn actions_log_line(&self, line: &str) -> Div {
+    fn actions_log_line(&self, line: &str, window: &Window) -> Div {
         let (timestamp, text) = sourcefour_github::split_timestamp(line);
         let tint = match line_tint(text) {
             LineTint::Error => self.theme.red,
@@ -1382,7 +1431,68 @@ impl SourcefourWindow {
                         clock % 60
                     ))
             }))
-            .child(div().text_color(tint).child(text.to_owned()))
+            .child(self.log_text(text, tint, window))
+    }
+
+    /// A log line's text: one tinted string, unless its escapes named a
+    /// style — then the runs carry their own colors. Lines without an
+    /// escape, which is nearly all of them, never reach the parser.
+    fn log_text(&self, text: &str, tint: gpui::Hsla, window: &Window) -> gpui::AnyElement {
+        let tinted = |text: String| div().text_color(tint).child(text).into_any_element();
+        let runs = text
+            .contains('\u{1b}')
+            .then(|| sourcefour_github::parse_ansi_line(text));
+        match runs.as_deref() {
+            None => tinted(text.to_owned()),
+            Some([]) => tinted(String::new()),
+            Some([only]) if unstyled(only) => tinted(only.text.clone()),
+            Some(runs) => self.styled_log_text(runs, tint, window),
+        }
+    }
+
+    /// The runs as gpui text runs. The base font comes from the window so
+    /// the line keeps the strip's shaping, with the family forced to mono
+    /// because a run carries its own font and the row's family never
+    /// reaches it. A run naming no color takes the line's tint, so an error
+    /// line's uncolored tail still reads red.
+    fn styled_log_text(
+        &self,
+        runs: &[sourcefour_github::AnsiRun],
+        tint: gpui::Hsla,
+        window: &Window,
+    ) -> gpui::AnyElement {
+        let mut base = window.text_style().font();
+        base.family = MONO_FONT.into();
+        let mut text = String::new();
+        let mut styled = Vec::with_capacity(runs.len());
+        for run in runs {
+            let mut font = base.clone();
+            if run.bold {
+                font.weight = FontWeight::SEMIBOLD;
+            }
+            if run.italic {
+                font.style = gpui::FontStyle::Italic;
+            }
+            let color = run
+                .color
+                .map_or(tint, |color| ansi_color(&self.theme, color));
+            styled.push(gpui::TextRun {
+                len: run.text.len(),
+                font,
+                color: if run.dim { color.opacity(0.6) } else { color },
+                background_color: None,
+                underline: run.underline.then(|| gpui::UnderlineStyle {
+                    thickness: px(1.0),
+                    color: None,
+                    wavy: false,
+                }),
+                strikethrough: None,
+            });
+            text.push_str(&run.text);
+        }
+        gpui::StyledText::new(text)
+            .with_runs(styled)
+            .into_any_element()
     }
 
     /// The wall-clock strip: every job as a bar on the run's time axis.
@@ -1491,7 +1601,28 @@ impl SourcefourWindow {
 mod tests {
     use sourcefour_model::{CheckConclusion, CheckStatus, WorkflowJob, WorkflowStep};
 
-    use super::{bar_fraction, default_job, default_step, demo_view, fmt_duration};
+    use super::{
+        LineTint, bar_fraction, default_job, default_step, demo_log, demo_view, fmt_duration,
+        line_tint,
+    };
+
+    #[test]
+    fn escapes_never_hide_what_a_line_is() {
+        assert!(matches!(
+            line_tint("\x1b[0m\x1b[1m\x1b[38;5;9merror[E0308]\x1b[0m: mismatched types"),
+            LineTint::Error
+        ));
+        assert!(matches!(
+            line_tint("\x1b[1;33mwarning\x1b[0m: unused import"),
+            LineTint::Warning
+        ));
+        assert!(matches!(line_tint("     Checking"), LineTint::Plain));
+        assert_eq!(
+            sourcefour_github::first_error(&demo_log()),
+            Some(6),
+            "the demo's first error is the colored one, not the summary below it"
+        );
+    }
 
     #[test]
     fn collapsing_hides_the_focused_step() {
