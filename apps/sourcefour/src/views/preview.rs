@@ -829,7 +829,7 @@ impl SourcefourWindow {
                 .mb(px(4.0))
                 .h(px(1.0))
                 .bg(self.theme.border),
-            DocBlockKind::Image { src, alt } => self.preview_image(src, alt, preview),
+            DocBlockKind::Image { src, alt } => self.preview_image(src, alt, preview, id),
             DocBlockKind::Table {
                 alignments,
                 header,
@@ -1108,11 +1108,18 @@ impl SourcefourWindow {
 
     /// One image block: the picture when it resolved, a framed note when it
     /// did not, and its alt text beneath either.
-    fn preview_image(&self, src: &str, alt: &str, preview: &PreviewDoc) -> Div {
+    fn preview_image(&self, src: &str, alt: &str, preview: &PreviewDoc, id: BlockId) -> Div {
         let body = match preview.images.get(src) {
             // Both bounds are absolute for the same reason the column is: a
             // relative maximum leaves the image with no width to fit into.
+            //
+            // The id is what makes an animated GIF advance: gpui only steps
+            // frames for an element it can keep state against. It has to be the
+            // block's address rather than the image's own id — one document can
+            // reference the same source twice, and `images` hands both the same
+            // `Arc`, so two elements would share one frame counter.
             Some(PreviewImage::Loaded(image)) => gpui::img(image.clone())
+                .id(id.element("preview-image"))
                 .max_w(px(CONTENT_WIDTH - 2.0 * CONTENT_PADDING))
                 .max_h(px(IMAGE_HEIGHT))
                 .object_fit(gpui::ObjectFit::Contain)

@@ -146,6 +146,22 @@ pub(super) fn render_image(bytes: Option<&[u8]>, format: &str) -> Option<Arc<gpu
     })
 }
 
+/// One image element in a diff pane, identified so gpui will animate it.
+///
+/// gpui only steps a multi-frame image forward for an element it can keep
+/// state against, so a bare `img` leaves every animated GIF on frame zero. The
+/// id carries the image's own identity: it must stay the same across frames
+/// (or the animation restarts every paint) and differ between the two images
+/// the slider shows at once, which the wrapper's process-unique counter gives
+/// for free. It also keeps a stale frame index off a shorter image — gpui
+/// indexes its frame list bare.
+///
+/// An id alone adds no hitbox, so the slider's drag handling is untouched.
+fn media_image(image: Arc<gpui::Image>) -> gpui::Stateful<gpui::Img> {
+    let id = image.id;
+    gpui::img(image).id(("diff-image", id))
+}
+
 impl SourcefourWindow {
     /// Height of one rendered diff line in either layout, derived from the
     /// line-height setting. The `uniform_list` rows and the scrollbar math
@@ -644,7 +660,7 @@ impl SourcefourWindow {
             .justify_center()
             .p(px(28.0))
             .child(match image {
-                Some(image) => gpui::img(image)
+                Some(image) => media_image(image)
                     .size_full()
                     .object_fit(gpui::ObjectFit::Contain)
                     .into_any_element(),
@@ -793,7 +809,7 @@ impl SourcefourWindow {
             .justify_center()
             .p(px(28.0))
             .children(image.map(|image| {
-                gpui::img(image)
+                media_image(image)
                     .size_full()
                     .object_fit(gpui::ObjectFit::Contain)
             }))
