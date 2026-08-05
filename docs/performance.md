@@ -60,6 +60,28 @@ Raw output: `fixtures/stress/2026-08-04-percentiles.txt`.
 Budgets: discovery + metadata p95 < 80 ms ✓; first 256 rows p95 < 150 ms ✓.
 Startup is measured in the record below; scroll frame timing is not.
 
+## Run record — 2026-08-05 startup phase breakdown
+
+Phase probes (`startup_phase()` in `apps/sourcefour/src/app.rs`, printed under
+`SOURCEFOUR_STARTUP_LOG=1`) split the first-frame time. Sampled 3 runs of the
+release `--demo` build on the 2026-08-04 machine, under interactive load — the
+absolute numbers run hot, the shares are the finding. Raw:
+`fixtures/stress/2026-08-05-startup-phases.txt`.
+
+| Phase | Share of first frame | What it is |
+| --- | --- | --- |
+| `main` → resolve | ~0 ms | argument parse, launch resolve |
+| resolve → gpui run loop | ~50 ms | `Application::new()`, AppKit/Metal init |
+| keymaps, menus | ~10 ms | Sourcefour setup |
+| `open_window` + view built | ~30 ms | NSWindow creation; view construction is a sliver |
+| render → first present | remainder (~90 ms+) | layout, glyph/SVG raster, pipeline warmup |
+
+Conclusion: Sourcefour's own code is roughly 10–15 ms of the total; the rest is
+framework platform init and first-frame rendering. No app-side easy wins exist
+without upstream gpui work. The owner accepts p50 < 150 ms (2026-08-05); the
+2026-08-04 record (p50 133 ms) is within that, while the original < 100 ms
+budget line remains recorded as missed.
+
 ## Run record — 2026-08-04 startup
 
 Same machine and toolchain as above, release build, warm caches;

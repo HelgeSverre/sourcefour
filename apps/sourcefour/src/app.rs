@@ -85,15 +85,24 @@ impl Launch {
     }
 }
 
+/// §12.5 phase probe; prints only under `SOURCEFOUR_STARTUP_LOG`.
+fn startup_phase(name: &str) {
+    if std::env::var_os("SOURCEFOUR_STARTUP_LOG").is_some() {
+        eprintln!("phase {name} {}", crate::since_process_start());
+    }
+}
+
 pub(crate) fn run(request: &LaunchRequest) -> ExitCode {
     let size_override = request.window;
     let launch = Launch::resolve(request);
+    startup_phase("resolved");
     let failed = matches!(launch, Launch::Failed(_));
     let opened = Arc::new(AtomicBool::new(false));
     let opened_in_app = Arc::clone(&opened);
     Application::new()
         .with_assets(SourcefourAssets::new())
         .run(move |cx: &mut App| {
+            startup_phase("gpui-run");
             // One invocation is one window: closing it closes Sourcefour.
             cx.on_window_closed(|cx| {
                 if cx.windows().is_empty() {
@@ -111,6 +120,7 @@ pub(crate) fn run(request: &LaunchRequest) -> ExitCode {
                 name: SharedString::from("Sourcefour"),
                 items: vec![MenuItem::action("Quit Sourcefour", Quit)],
             }]);
+            startup_phase("pre-window");
             let result = match launch {
                 Launch::Window(window) => {
                     let (width, height) = size_override.unwrap_or((INITIAL_WIDTH, INITIAL_HEIGHT));
@@ -129,6 +139,7 @@ pub(crate) fn run(request: &LaunchRequest) -> ExitCode {
                     .map(|_| ())
                 }
             };
+            startup_phase("window-opened");
             if let Err(error) = result {
                 tracing::error!(%error, "could not open Sourcefour window");
             } else {

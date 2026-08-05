@@ -1,0 +1,6 @@
+startup phase samples (ms since main), release build, --demo 1280x800
+machine under interactive load (browser, players open) — use ratios, not absolutes
+run 1: resolved 0 | gpui-run 49 | pre-window 58 | window-opened 89 | first-frame 203
+run 2: resolved 0 | gpui-run 59 | pre-window 69 | window-opened 96 | first-frame 205
+run 3: resolved 0 | gpui-run 53 | pre-window 63 | window-opened 88 | first-frame 175
+probes: apps/sourcefour/src/app.rs startup_phase(), SOURCEFOUR_STARTUP_LOG=1
