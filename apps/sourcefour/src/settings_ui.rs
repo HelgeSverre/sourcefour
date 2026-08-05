@@ -8,7 +8,7 @@
 use gpui::{Div, FocusableWrapper, FontWeight, div, prelude::*, px, svg};
 
 use crate::{
-    settings::{AppSettings, AuthMethod, DateDisplay},
+    settings::{AppSettings, AuthMethod, DateDisplay, Density},
     theme::Theme,
     views::SourcefourWindow,
 };
@@ -255,6 +255,15 @@ fn general_cards(view: &SettingsView<'_>, cx: &mut gpui::Context<SourcefourWindo
                     apply: |settings, family| {
                         settings.appearance.mono_font = family.map(String::from);
                     },
+                }
+                .row(theme, cx),
+                Choice {
+                    id: "history-density",
+                    name: "History density",
+                    description: "How much room each commit gets in the list.",
+                    choices: &[("Cozy", Density::Cozy), ("Compact", Density::Compact)],
+                    active: view.settings.history.density,
+                    apply: |settings, density| settings.history.density = density,
                 }
                 .row(theme, cx),
                 Choice {

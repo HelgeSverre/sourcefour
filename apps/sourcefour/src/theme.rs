@@ -74,6 +74,9 @@ pub(crate) const TITLEBAR_HEIGHT: f32 = 38.0;
 pub(crate) const TOOLBAR_HEIGHT: f32 = 46.0;
 pub(crate) const SIDEBAR_WIDTH: f32 = 236.0;
 pub(crate) const HEADER_HEIGHT: f32 = 26.0;
+/// A cozy history row; `history.density` picks between this and compact,
+/// and [`crate::settings::HistorySettings::row_height`] is what the list
+/// reads.
 pub(crate) const HISTORY_ROW_HEIGHT: f32 = 30.0;
 pub(crate) const GRAPH_WIDTH: f32 = 76.0;
 pub(crate) const DETAILS_HEIGHT: f32 = 268.0;

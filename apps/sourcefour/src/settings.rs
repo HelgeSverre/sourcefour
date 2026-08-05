@@ -16,6 +16,7 @@ pub(crate) struct AppSettings {
     pub(crate) appearance: AppearanceSettings,
     pub(crate) git: GitSettings,
     pub(crate) github: GithubSettings,
+    pub(crate) history: HistorySettings,
     pub(crate) diff: DiffSettings,
     pub(crate) video: VideoSettings,
 }
@@ -89,6 +90,40 @@ pub(crate) enum AuthMethod {
     #[default]
     #[serde(other)]
     Off,
+}
+
+/// The commit list's own shape (§4.4).
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[serde(default)]
+pub(crate) struct HistorySettings {
+    pub(crate) density: Density,
+}
+
+impl HistorySettings {
+    /// One history row's height in px, which the list, the virtualization
+    /// math and the graph's node centering all read — a row is only ever as
+    /// tall as one number says.
+    pub(crate) fn row_height(&self) -> f32 {
+        match self.density {
+            Density::Cozy => crate::theme::HISTORY_ROW_HEIGHT,
+            // Six px off the row buys four more commits on the shortest
+            // window the app opens, and the 12.5px subject still fits.
+            Density::Compact => 24.0,
+        }
+    }
+}
+
+/// How much room a commit gets in the history list.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum Density {
+    /// More commits per screen, less air around each.
+    Compact,
+    /// The roomy default; also what unknown future values read as, which is
+    /// why it is last — `serde(other)` only sits on the final variant.
+    #[default]
+    #[serde(other)]
+    Cozy,
 }
 
 /// The diff overlay's typography (§6.11).
@@ -165,8 +200,8 @@ impl AppSettings {
 #[cfg(test)]
 mod tests {
     use super::{
-        AppSettings, AppearanceSettings, AuthMethod, DateDisplay, DiffSettings, GitSettings,
-        GithubSettings, VideoSettings,
+        AppSettings, AppearanceSettings, AuthMethod, DateDisplay, Density, DiffSettings,
+        GitSettings, GithubSettings, HistorySettings, VideoSettings,
     };
 
     #[test]
@@ -182,6 +217,9 @@ mod tests {
             github: GithubSettings {
                 enabled: true,
                 auth_method: AuthMethod::Token,
+            },
+            history: HistorySettings {
+                density: Density::Compact,
             },
             diff: DiffSettings::default(),
             video: VideoSettings {
@@ -294,6 +332,51 @@ mod tests {
                 ffmpeg_dir: Some(std::path::PathBuf::from("/opt/ffmpeg/bin")),
             },
             "a future key inside the section is ignored, not fatal"
+        );
+        Ok(())
+    }
+
+    #[test]
+    #[expect(
+        clippy::float_cmp,
+        reason = "row_height returns the exact constants this test names"
+    )]
+    fn a_history_density_survives_a_file_that_predates_it() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let directory = tempfile::TempDir::new()?;
+        let path = directory.path().join("settings.json");
+        std::fs::write(&path, r#"{"diff": {"line_height": 1.7}}"#)?;
+        assert_eq!(
+            AppSettings::load_from(&path).history,
+            HistorySettings::default(),
+            "a file written before the section reads as the roomy list"
+        );
+        assert_eq!(HistorySettings::default().row_height(), 30.0);
+        assert_eq!(
+            HistorySettings {
+                density: Density::Compact
+            }
+            .row_height(),
+            24.0
+        );
+
+        std::fs::write(
+            &path,
+            r#"{"history": {"density": "compact", "columns": ["hash"]}}"#,
+        )?;
+        assert_eq!(
+            AppSettings::load_from(&path).history,
+            HistorySettings {
+                density: Density::Compact
+            },
+            "a future key inside the section is ignored, not fatal"
+        );
+
+        std::fs::write(&path, r#"{"history": {"density": "microscopic"}}"#)?;
+        assert_eq!(
+            AppSettings::load_from(&path).history.density,
+            Density::Cozy,
+            "a future density reads as Cozy, not a parse failure"
         );
         Ok(())
     }

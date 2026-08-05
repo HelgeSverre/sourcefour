@@ -10,7 +10,7 @@ use crate::{
     graph_paint::{HALO_OPACITY, HALO_RADIUS, NODE_RADIUS, STROKE_WIDTH, Shape, row_shapes},
     history::{HistoryState, display_date},
     panels::Splitter,
-    theme::{HEADER_HEIGHT, HISTORY_ROW_HEIGHT, SPLITTER_WIDTH, Theme},
+    theme::{HEADER_HEIGHT, SPLITTER_WIDTH, Theme},
 };
 
 use super::{ColumnVisibility, SourcefourWindow, row_count_as_f32, usize_from_f32};
@@ -28,19 +28,20 @@ fn paint_graph(
     bounds: gpui::Bounds<gpui::Pixels>,
     history: &HistoryState,
     scroll: &UniformListScrollHandle,
+    row_height: f32,
     theme: &Theme,
     window: &mut Window,
 ) {
     let viewport = bounds.size.height.0;
-    let content = row_count_as_f32(history.visible_len()) * HISTORY_ROW_HEIGHT;
+    let content = row_count_as_f32(history.visible_len()) * row_height;
     // Mirror the list's own clamp so rubber-band overscroll cannot shear the
     // graph away from the rows it annotates.
     let scroll_top =
         (-scroll.0.borrow().base_handle.offset().y.0).clamp(0.0, (content - viewport).max(0.0));
-    let first = usize_from_f32((scroll_top / HISTORY_ROW_HEIGHT).floor());
+    let first = usize_from_f32((scroll_top / row_height).floor());
     let last = history
         .visible_len()
-        .min(first + usize_from_f32((viewport / HISTORY_ROW_HEIGHT).ceil()) + 1);
+        .min(first + usize_from_f32((viewport / row_height).ceil()) + 1);
     window.with_content_mask(Some(gpui::ContentMask { bounds }), |window| {
         for index in first..last {
             let Some(graph) = history.layout_at(index) else {
@@ -49,8 +50,8 @@ fn paint_graph(
             let is_head = history
                 .row_at(index)
                 .is_some_and(|row| row.labels.iter().any(|label| label.is_head));
-            let row_top = row_count_as_f32(index) * HISTORY_ROW_HEIGHT - scroll_top;
-            for shape in row_shapes(row_top, HISTORY_ROW_HEIGHT, graph, is_head) {
+            let row_top = row_count_as_f32(index) * row_height - scroll_top;
+            for shape in row_shapes(row_top, row_height, graph, is_head) {
                 paint_shape(bounds.origin, shape, theme, window);
             }
         }
@@ -183,11 +184,19 @@ impl SourcefourWindow {
         let entity = cx.entity();
         let scroll = self.list_scroll.clone();
         let theme = self.theme;
+        let row_height = self.settings.history.row_height();
         Some(
             gpui::canvas(
                 |_, _, _| (),
                 move |bounds, (), window, cx| {
-                    paint_graph(bounds, &entity.read(cx).history, &scroll, &theme, window);
+                    paint_graph(
+                        bounds,
+                        &entity.read(cx).history,
+                        &scroll,
+                        row_height,
+                        &theme,
+                        window,
+                    );
                 },
             )
             .absolute()
@@ -304,13 +313,13 @@ impl SourcefourWindow {
         let Some(row) = self.history.row_at(index) else {
             return div()
                 .id(("commit-missing", index))
-                .h(px(HISTORY_ROW_HEIGHT));
+                .h(px(self.settings.history.row_height()));
         };
         let selected = self.history.selected_commit() == Some(row.oid);
         let oid = row.oid;
         div()
             .id(("commit", index))
-            .h(px(HISTORY_ROW_HEIGHT))
+            .h(px(self.settings.history.row_height()))
             // Without a full-width row the subject sizes to its text and every
             // later column drifts, so the header no longer lines up with it.
             .w_full()
@@ -384,7 +393,7 @@ impl SourcefourWindow {
             });
         div()
             .id("working-tree-row")
-            .h(px(HISTORY_ROW_HEIGHT))
+            .h(px(self.settings.history.row_height()))
             .w_full()
             .flex()
             .items_center()
