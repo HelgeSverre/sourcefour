@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 #[serde(default)]
 pub(crate) struct AppSettings {
     pub(crate) appearance: AppearanceSettings,
+    pub(crate) git: GitSettings,
     pub(crate) github: GithubSettings,
     pub(crate) diff: DiffSettings,
     pub(crate) video: VideoSettings,
@@ -53,6 +54,16 @@ pub(crate) enum DateDisplay {
     #[default]
     #[serde(other)]
     Relative,
+}
+
+/// What the user's own Git is asked to do on their behalf (§6.12).
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[serde(default)]
+pub(crate) struct GitSettings {
+    /// Whether a fetch also drops the remote-tracking refs whose branches
+    /// are gone from the remote. Off by default: deleting refs is not what
+    /// someone who pressed Fetch asked for.
+    pub(crate) fetch_prune: bool,
 }
 
 /// The GitHub integration's configuration (§ post-v1 integrations).
@@ -154,8 +165,8 @@ impl AppSettings {
 #[cfg(test)]
 mod tests {
     use super::{
-        AppSettings, AppearanceSettings, AuthMethod, DateDisplay, DiffSettings, GithubSettings,
-        VideoSettings,
+        AppSettings, AppearanceSettings, AuthMethod, DateDisplay, DiffSettings, GitSettings,
+        GithubSettings, VideoSettings,
     };
 
     #[test]
@@ -167,6 +178,7 @@ mod tests {
                 date_display: DateDisplay::Absolute,
                 mono_font: Some(String::from("JetBrains Mono")),
             },
+            git: GitSettings { fetch_prune: true },
             github: GithubSettings {
                 enabled: true,
                 auth_method: AuthMethod::Token,
@@ -281,6 +293,33 @@ mod tests {
             VideoSettings {
                 ffmpeg_dir: Some(std::path::PathBuf::from("/opt/ffmpeg/bin")),
             },
+            "a future key inside the section is ignored, not fatal"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_git_section_survives_a_file_that_predates_it() -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::TempDir::new()?;
+        let path = directory.path().join("settings.json");
+        std::fs::write(&path, r#"{"diff": {"line_height": 1.7}}"#)?;
+        assert_eq!(
+            AppSettings::load_from(&path).git,
+            GitSettings::default(),
+            "a file written before the section prunes nothing"
+        );
+        assert!(
+            !GitSettings::default().fetch_prune,
+            "a fetch that deletes local refs is never the unasked-for default"
+        );
+
+        std::fs::write(
+            &path,
+            r#"{"git": {"fetch_prune": true, "rebase_on_pull": true}}"#,
+        )?;
+        assert_eq!(
+            AppSettings::load_from(&path).git,
+            GitSettings { fetch_prune: true },
             "a future key inside the section is ignored, not fatal"
         );
         Ok(())

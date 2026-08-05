@@ -257,6 +257,15 @@ fn general_cards(view: &SettingsView<'_>, cx: &mut gpui::Context<SourcefourWindo
                     },
                 }
                 .row(theme, cx),
+                Choice {
+                    id: "fetch-prune",
+                    name: "Prune on fetch",
+                    description: "Drop remote branches here once the remote has deleted them.",
+                    choices: &[("Off", false), ("On", true)],
+                    active: view.settings.git.fetch_prune,
+                    apply: |settings, prune| settings.git.fetch_prune = prune,
+                }
+                .row(theme, cx),
             ],
         ),
         card(theme, vec![video_row(view.settings, theme)]),

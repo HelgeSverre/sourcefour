@@ -253,7 +253,7 @@ impl SourcefourWindow {
         let request = FetchRequest {
             worktree: self.active_worktree_id(),
             remote: None,
-            prune: false,
+            prune: self.settings.git.fetch_prune,
         };
         let latest = Arc::new(Mutex::new(None));
         let cancel = Arc::new(AtomicBool::new(false));
