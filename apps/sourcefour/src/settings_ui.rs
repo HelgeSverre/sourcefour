@@ -14,15 +14,17 @@ use crate::{settings::AppSettings, settings::AuthMethod, theme::Theme, views::So
 pub(crate) enum SettingsSection {
     #[default]
     GitHub,
+    Diffs,
     About,
 }
 
 impl SettingsSection {
-    const ALL: [Self; 2] = [Self::GitHub, Self::About];
+    const ALL: [Self; 3] = [Self::GitHub, Self::Diffs, Self::About];
 
     fn title(self) -> &'static str {
         match self {
             Self::GitHub => "GitHub",
+            Self::Diffs => "Diffs",
             Self::About => "About",
         }
     }
@@ -210,6 +212,7 @@ fn content(
                     SettingsSection::GitHub => {
                         github_cards(settings, connection, token_input, theme, cx)
                     }
+                    SettingsSection::Diffs => diffs_cards(settings, theme, cx),
                     SettingsSection::About => about_cards(theme, cx),
                 }),
         )
@@ -364,6 +367,32 @@ fn button(
         })
         .on_click(cx.listener(move |this, _, _, cx| on_click(this, cx)))
         .child(label)
+}
+
+/// Diff overlay typography: line height as a unitless multiplier, offered as
+/// two presets. The settings file itself accepts any number; only this
+/// control is preset-based.
+fn diffs_cards(
+    settings: &AppSettings,
+    theme: &Theme,
+    cx: &mut gpui::Context<SourcefourWindow>,
+) -> Vec<Div> {
+    vec![card(
+        theme,
+        vec![row(
+            theme,
+            "Line height",
+            "Spacing between diff lines, as a multiple of the mono font size.",
+            segmented(
+                theme,
+                "diff-line-height",
+                &[("Standard", 1.55), ("Comfortable", 1.8)],
+                settings.diff.line_height,
+                cx,
+                |settings, height| settings.diff.line_height = height,
+            ),
+        )],
+    )]
 }
 
 fn about_cards(theme: &Theme, cx: &mut gpui::Context<SourcefourWindow>) -> Vec<Div> {

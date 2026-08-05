@@ -110,10 +110,14 @@ fn render_image(bytes: Option<&[u8]>, format: &str) -> Option<Arc<gpui::Image>> 
     })
 }
 
-/// Height of one rendered diff line in either layout.
-const DIFF_ROW_HEIGHT: f32 = 20.0;
-
 impl SourcefourWindow {
+    /// Height of one rendered diff line in either layout, derived from the
+    /// line-height setting. The `uniform_list` rows and the scrollbar math
+    /// must use this same number or scrolling desynchronizes.
+    fn diff_row_height(&self) -> f32 {
+        self.settings.diff.row_height()
+    }
+
     /// Closes the diff overlay, returning focus to the history.
     pub(crate) fn close_diff(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) {
         self.diff_view = None;
@@ -696,7 +700,7 @@ impl SourcefourWindow {
     pub(super) fn split_row_view(&self, row: &crate::diff_split::SplitRow) -> Div {
         if let Some(hunk) = &row.hunk {
             return div()
-                .h(px(20.0))
+                .h(px(self.diff_row_height()))
                 .w_full()
                 .flex()
                 .items_center()
@@ -708,7 +712,7 @@ impl SourcefourWindow {
                 .child(hunk.clone());
         }
         div()
-            .h(px(20.0))
+            .h(px(self.diff_row_height()))
             .w_full()
             .flex()
             .child(self.split_half(row.left.as_ref(), false))
@@ -728,6 +732,7 @@ impl SourcefourWindow {
                 .w(px(1.0))
                 .flex_none()
                 .h_full()
+                .mr(px(6.0))
                 .bg(self.theme.gutter_rule())
         };
         let Some(side) = side else {
@@ -792,7 +797,7 @@ impl SourcefourWindow {
         let handle = self.diff_scroll.0.borrow();
         let bounds = handle.base_handle.bounds();
         let viewport = bounds.size.height.0;
-        let content = row_count_as_f32(rows) * DIFF_ROW_HEIGHT;
+        let content = row_count_as_f32(rows) * self.diff_row_height();
         if viewport <= 0.0 || content <= viewport {
             return None;
         }
@@ -840,7 +845,7 @@ impl SourcefourWindow {
         let handle = self.diff_scroll.0.borrow();
         let bounds = handle.base_handle.bounds();
         let viewport = bounds.size.height.0;
-        let content = row_count_as_f32(rows) * DIFF_ROW_HEIGHT;
+        let content = row_count_as_f32(rows) * self.diff_row_height();
         if viewport <= 0.0 || content <= viewport {
             return;
         }
@@ -891,14 +896,14 @@ impl SourcefourWindow {
             self.theme.gutter_rule()
         };
         div()
-            .h(px(20.0))
+            .h(px(self.diff_row_height()))
             .w_full()
             .flex()
             .items_center()
             .when_some(background, gpui::Styled::bg)
             .child(number(line.old_line))
             .child(number(line.new_line))
-            .child(div().w(px(1.0)).flex_none().h_full().bg(rule))
+            .child(div().w(px(1.0)).flex_none().h_full().mr(px(6.0)).bg(rule))
             .child(
                 div()
                     .w(px(14.0))

@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 #[serde(default)]
 pub(crate) struct AppSettings {
     pub(crate) github: GithubSettings,
+    pub(crate) diff: DiffSettings,
 }
 
 /// The GitHub integration's configuration (§ post-v1 integrations).
@@ -38,6 +39,31 @@ pub(crate) enum AuthMethod {
     #[default]
     #[serde(other)]
     Off,
+}
+
+/// The diff overlay's typography (§6.11).
+///
+/// `line_height` is a unitless multiplier of the mono font size, the
+/// convention Zed, VS Code, and `JetBrains` all use — never a pixel value, so
+/// the number stays meaningful if the font size ever changes.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(default)]
+pub(crate) struct DiffSettings {
+    pub(crate) line_height: f32,
+}
+
+impl Default for DiffSettings {
+    fn default() -> Self {
+        Self { line_height: 1.55 }
+    }
+}
+
+impl DiffSettings {
+    /// One diff row's height in px. 11.0 is the diff mono font size; the
+    /// clamp keeps a hand-edited settings.json sane.
+    pub(crate) fn row_height(&self) -> f32 {
+        (11.0 * self.line_height.clamp(1.0, 3.0)).round()
+    }
 }
 
 impl AppSettings {
@@ -76,7 +102,7 @@ impl AppSettings {
 
 #[cfg(test)]
 mod tests {
-    use super::{AppSettings, AuthMethod, GithubSettings};
+    use super::{AppSettings, AuthMethod, DiffSettings, GithubSettings};
 
     #[test]
     fn settings_round_trip_through_their_file() -> Result<(), Box<dyn std::error::Error>> {
@@ -87,6 +113,7 @@ mod tests {
                 enabled: true,
                 auth_method: AuthMethod::Token,
             },
+            diff: DiffSettings::default(),
         };
 
         settings.save_to(&path)?;
@@ -133,5 +160,52 @@ mod tests {
             "a future auth method reads as Off, not a parse failure"
         );
         Ok(())
+    }
+
+    #[test]
+    fn diff_defaults_round_trip_through_json() -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::TempDir::new()?;
+        let path = directory.path().join("settings.json");
+        let settings = AppSettings::default();
+
+        settings.save_to(&path)?;
+        let loaded = AppSettings::load_from(&path);
+
+        assert_eq!(loaded, settings);
+        Ok(())
+    }
+
+    #[test]
+    fn unknown_fields_inside_diff_are_tolerated() -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::TempDir::new()?;
+        let path = directory.path().join("settings.json");
+        std::fs::write(&path, r#"{"diff": {"line_height": 1.7, "wrap": true}}"#)?;
+
+        let loaded = AppSettings::load_from(&path);
+
+        assert_eq!(loaded.diff, DiffSettings { line_height: 1.7 });
+        Ok(())
+    }
+
+    #[test]
+    fn line_height_parses_from_a_json_document() -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::TempDir::new()?;
+        let path = directory.path().join("settings.json");
+        std::fs::write(&path, r#"{"diff": {"line_height": 1.8}}"#)?;
+
+        let loaded = AppSettings::load_from(&path);
+
+        assert_eq!(loaded.diff, DiffSettings { line_height: 1.8 });
+        Ok(())
+    }
+
+    #[test]
+    #[expect(
+        clippy::float_cmp,
+        reason = "row_height is computed from the exact constants this test compares against"
+    )]
+    fn row_height_clamps_to_a_sane_range() {
+        assert_eq!(DiffSettings { line_height: 0.5 }.row_height(), 11.0);
+        assert_eq!(DiffSettings { line_height: 99.0 }.row_height(), 33.0);
     }
 }
