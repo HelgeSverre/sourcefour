@@ -298,6 +298,9 @@ impl SourcefourWindow {
         now: i64,
         cx: &mut gpui::Context<Self>,
     ) -> gpui::Stateful<Div> {
+        if index == 0 && self.history.working_tree_row_visible() {
+            return self.working_tree_row(cx);
+        }
         let Some(row) = self.history.row_at(index) else {
             return div()
                 .id(("commit-missing", index))
@@ -363,6 +366,65 @@ impl SourcefourWindow {
                 this.load_selected_files(cx);
                 cx.notify();
             }))
+    }
+
+    /// The pinned working-tree row: dirty counts, one click from committing.
+    fn working_tree_row(&self, cx: &mut gpui::Context<Self>) -> gpui::Stateful<Div> {
+        let selected = self.history.selected == Some(crate::history::Selection::WorkingTree);
+        let summary = self
+            .history
+            .working_tree
+            .unwrap_or(sourcefour_model::WorkingTreeSummary {
+                staged: 0,
+                unstaged: 0,
+            });
+        div()
+            .id("working-tree-row")
+            .h(px(HISTORY_ROW_HEIGHT))
+            .w_full()
+            .flex()
+            .items_center()
+            .bg(if selected {
+                self.theme.bg_selected
+            } else {
+                self.theme.bg_list
+            })
+            .hover(|style| style.bg(self.theme.bg_hover))
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.select_working_tree(cx);
+            }))
+            .child(div().w(px(self.panels.graph)).h_full().flex_none())
+            .child(
+                div()
+                    .flex_none()
+                    .mr(px(8.0))
+                    .size(px(7.0))
+                    .rounded_full()
+                    .bg(self.theme.orange),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(1.0))
+                    .overflow_hidden()
+                    .text_ellipsis()
+                    .whitespace_nowrap()
+                    .text_size(px(12.0))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(self.theme.text_primary)
+                    .child("Uncommitted changes"),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .pr(px(12.0))
+                    .text_size(px(11.0))
+                    .text_color(self.theme.text_secondary)
+                    .child(format!(
+                        "{} staged · {} unstaged",
+                        summary.staged, summary.unstaged
+                    )),
+            )
     }
 
     /// One ref label chip: HEAD, branch, remote branch, or tag (§6.6).

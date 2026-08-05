@@ -5,7 +5,9 @@
 use std::collections::HashSet;
 
 use sourcefour_graph::GraphState;
-use sourcefour_model::{BranchSnapshot, CommitRow, GitTime, GraphRow, HistoryScope, Oid};
+use sourcefour_model::{
+    BranchSnapshot, CommitRow, GitTime, GraphRow, HistoryScope, Oid, WorkingTreeSummary,
+};
 
 /// Rows of the loaded tail within which the next batch is requested (§6.9).
 const PREFETCH_ROWS: usize = 30;
@@ -47,6 +49,9 @@ pub(crate) struct HistoryState {
     /// session/generation envelope cannot catch this case: a same-window scope
     /// switch changes neither.
     pub(crate) epoch: u64,
+    /// Uncommitted-change counts; `Some` pins the working-tree row at
+    /// display index 0. Scope changes keep it: the tree is scope-independent.
+    pub(crate) working_tree: Option<WorkingTreeSummary>,
     /// The §4.7 filter query, verbatim.
     pub(crate) filter: String,
     /// Loaded-row indices matching the filter; `None` when not filtering.
@@ -125,13 +130,14 @@ impl HistoryState {
         self.visible.is_some()
     }
 
-    /// Rows the list should render right now.
+    /// Rows the list should render right now, the working-tree row included.
     pub(crate) fn visible_len(&self) -> usize {
-        self.visible.as_ref().map_or(self.rows.len(), Vec::len)
+        self.visible.as_ref().map_or(self.rows.len(), Vec::len) + self.offset()
     }
 
     /// The commit shown at a display position.
     pub(crate) fn row_at(&self, index: usize) -> Option<&CommitRow> {
+        let index = index.checked_sub(self.offset())?;
         match &self.visible {
             Some(visible) => self.rows.get(*visible.get(index)?),
             None => self.rows.get(index),
@@ -140,11 +146,31 @@ impl HistoryState {
 
     /// The graph row shown at a display position.
     pub(crate) fn layout_at(&self, index: usize) -> Option<&GraphRow> {
+        let index = index.checked_sub(self.offset())?;
         if self.visible.is_some() {
             self.filtered_layout.get(index)
         } else {
             self.layout.get(index)
         }
+    }
+
+    /// Whether the pinned working-tree row is showing. Filtering hides it:
+    /// §4.7 searches commits.
+    pub(crate) fn working_tree_row_visible(&self) -> bool {
+        self.working_tree.is_some() && !self.is_filtering()
+    }
+
+    /// Display rows the working-tree row shifts the commits by.
+    fn offset(&self) -> usize {
+        usize::from(self.working_tree_row_visible())
+    }
+
+    /// What lives at a display position, commit or tree.
+    fn selection_at(&self, index: usize) -> Option<Selection> {
+        if self.working_tree_row_visible() && index == 0 {
+            return Some(Selection::WorkingTree);
+        }
+        Some(Selection::Commit(self.row_at(index)?.oid))
     }
 
     /// The selected commit, when the selection is one.
@@ -157,13 +183,17 @@ impl HistoryState {
 
     /// The selection's position in the current view, if visible.
     pub(crate) fn selected_display_index(&self) -> Option<usize> {
+        if self.selected == Some(Selection::WorkingTree) {
+            return self.working_tree_row_visible().then_some(0);
+        }
         let selected = self.selected_commit()?;
-        match &self.visible {
+        let commit_index = match &self.visible {
             Some(visible) => visible
                 .iter()
                 .position(|&index| self.rows[index].oid == selected),
             None => self.rows.iter().position(|row| row.oid == selected),
-        }
+        }?;
+        Some(commit_index + self.offset())
     }
 
     /// Discards everything when the scope changes.
@@ -215,14 +245,13 @@ impl HistoryState {
         if target == current && self.selected_display_index().is_some() {
             return None;
         }
-        self.selected = Some(Selection::Commit(self.row_at(target)?.oid));
+        self.selected = Some(self.selection_at(target)?);
         Some(target)
     }
 
     /// Selects a display position in the current view, if it exists.
     pub(crate) fn select_index(&mut self, index: usize) -> Option<usize> {
-        let row = self.row_at(index)?;
-        self.selected = Some(Selection::Commit(row.oid));
+        self.selected = Some(self.selection_at(index)?);
         Some(index)
     }
 }
@@ -458,6 +487,65 @@ mod tests {
             true,
         );
         state
+    }
+
+    #[test]
+    fn the_working_tree_row_takes_display_index_zero() {
+        let mut state = loaded(3);
+        state.working_tree = Some(summary(1, 2));
+
+        assert_eq!(state.visible_len(), 4, "one extra display row");
+        assert!(state.row_at(0).is_none(), "the row is not a commit");
+        assert!(state.layout_at(0).is_none(), "and paints no graph");
+        assert_eq!(state.row_at(1).map(|row| row.oid), Some(oid(0)));
+        assert!(state.layout_at(1).is_some());
+
+        assert_eq!(state.select_index(0), Some(0));
+        assert_eq!(state.selected, Some(Selection::WorkingTree));
+        assert_eq!(state.selected_display_index(), Some(0));
+        assert_eq!(state.selected_commit(), None);
+
+        assert_eq!(state.select_index(1), Some(1));
+        assert_eq!(state.selected_commit(), Some(oid(0)));
+        assert_eq!(state.selected_display_index(), Some(1));
+    }
+
+    #[test]
+    fn arrows_walk_through_the_working_tree_row() {
+        let mut state = loaded(2);
+        state.working_tree = Some(summary(0, 1));
+        state.select_index(1);
+
+        assert_eq!(state.move_selection(-1), Some(0), "up reaches the tree");
+        assert_eq!(state.selected, Some(Selection::WorkingTree));
+        assert_eq!(state.move_selection(-1), None, "clamped at the top");
+        assert_eq!(state.move_selection(1), Some(1), "down returns to commits");
+        assert_eq!(state.selected_commit(), Some(oid(0)));
+        assert_eq!(state.move_selection(10), Some(2), "clamped at the end");
+        assert_eq!(state.selected_commit(), Some(oid(1)));
+    }
+
+    #[test]
+    fn filtering_hides_the_working_tree_row() {
+        let mut state = loaded(3);
+        state.working_tree = Some(summary(1, 1));
+        state.select_index(0);
+
+        state.set_filter("commit 1");
+        assert_eq!(state.visible_len(), 1, "the filter searches commits only");
+        assert_eq!(state.row_at(0).map(|row| row.oid), Some(oid(1)));
+        assert_eq!(
+            state.selected_display_index(),
+            None,
+            "a working-tree selection has no place in a filtered view"
+        );
+
+        state.set_filter("");
+        assert_eq!(state.selected_display_index(), Some(0));
+    }
+
+    fn summary(staged: usize, unstaged: usize) -> sourcefour_model::WorkingTreeSummary {
+        sourcefour_model::WorkingTreeSummary { staged, unstaged }
     }
 
     #[test]

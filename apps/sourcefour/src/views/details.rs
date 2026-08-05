@@ -204,6 +204,11 @@ impl SourcefourWindow {
     }
 
     pub(super) fn details(&self, cx: &mut gpui::Context<Self>) -> gpui::AnyElement {
+        if !self.details_collapsed
+            && self.history.selected == Some(crate::history::Selection::WorkingTree)
+        {
+            return self.working_tree_details(cx);
+        }
         let lines = self.detail_lines();
         if self.details_collapsed {
             return self.collapsed_details(&lines.hash, &lines.subject, cx);
@@ -321,6 +326,104 @@ impl SourcefourWindow {
                             .map(|(index, file)| self.file_row(index, &file, cx)),
                     ),
             )
+    }
+
+    /// The details pane while the working tree is selected: what is staged,
+    /// what is not. Read-only until stage/commit land.
+    fn working_tree_details(&self, cx: &mut gpui::Context<Self>) -> gpui::AnyElement {
+        let status = self.working_tree_status.clone().unwrap_or_default();
+        let summary = status.summary();
+        div()
+            .h(px(self.panels.details))
+            .flex_none()
+            .flex()
+            .bg(self.theme.bg_panel)
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(1.0))
+                    .flex()
+                    .flex_col()
+                    .gap(px(6.0))
+                    .px(px(14.0))
+                    .pt(px(10.0))
+                    .child(
+                        div()
+                            .text_size(px(13.0))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(self.theme.text_primary)
+                            .child("Uncommitted changes"),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(11.5))
+                            .text_color(self.theme.text_secondary)
+                            .child(format!(
+                                "{} · {}",
+                                counted(summary.staged, "staged file"),
+                                counted(summary.unstaged, "unstaged file")
+                            )),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(11.0))
+                            .text_color(self.theme.text_faint)
+                            .child("The working tree follows your terminal: stage and commit land here next."),
+                    ),
+            )
+            .child(div().w(px(1.0)).flex_none().bg(self.theme.border))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(1.0))
+                    .flex()
+                    .flex_col()
+                    .px(px(14.0))
+                    .pt(px(10.0))
+                    .child(
+                        div()
+                            .id("working-tree-files-scroll")
+                            .flex_grow()
+                            .min_h(px(0.0))
+                            .overflow_y_scroll()
+                            .pb(px(6.0))
+                            .children(self.working_tree_section("STAGED", summary.staged, &status.staged, 0, cx))
+                            .children(self.working_tree_section(
+                                "UNSTAGED",
+                                summary.unstaged,
+                                &status.unstaged,
+                                status.staged.len(),
+                                cx,
+                            )),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    /// One section of the working-tree file list: header plus rows.
+    fn working_tree_section(
+        &self,
+        label: &'static str,
+        count: usize,
+        files: &[ChangedFile],
+        id_offset: usize,
+        cx: &mut gpui::Context<Self>,
+    ) -> Vec<gpui::AnyElement> {
+        let mut rows = vec![
+            div()
+                .pb(px(6.0))
+                .pt(px(4.0))
+                .text_size(px(10.0))
+                .font_weight(FontWeight::BOLD)
+                .text_color(self.theme.text_faint)
+                .child(format!("{label} · {}", counted(count, "file")))
+                .into_any_element(),
+        ];
+        rows.extend(files.iter().enumerate().map(|(index, file)| {
+            self.file_row(id_offset + index, file, cx)
+                .into_any_element()
+        }));
+        rows
     }
 
     /// Switches the comparison parent and reloads files for the selection.

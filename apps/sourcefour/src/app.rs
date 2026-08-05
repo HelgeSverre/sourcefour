@@ -122,12 +122,12 @@ pub(crate) fn run(request: &LaunchRequest) -> ExitCode {
             }]);
             startup_phase("pre-window");
             let result = match launch {
-                Launch::Window(window) => {
+                Launch::Window(launch) => {
                     let (width, height) = size_override.unwrap_or((INITIAL_WIDTH, INITIAL_HEIGHT));
                     let options =
                         window_options(width, height, Some((MINIMUM_WIDTH, MINIMUM_HEIGHT)), cx);
-                    cx.open_window(options, move |_window, cx| {
-                        cx.new(|cx| SourcefourWindow::new(window, cx))
+                    cx.open_window(options, move |window, cx| {
+                        cx.new(|cx| SourcefourWindow::new(launch, window, cx))
                     })
                     .map(|_| ())
                 }

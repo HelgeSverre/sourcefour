@@ -43,6 +43,10 @@ impl MetadataWatcher {
         let common = location.common_dir.clone();
         let ref_paths = vec![
             location.git_dir.join("HEAD"),
+            // The index lives in the Git directory, so §6.14's no-worktree
+            // rule holds: staging or committing in a terminal must surface,
+            // edits to tracked files need not.
+            location.git_dir.join("index"),
             common.join("refs"),
             common.join("packed-refs"),
             common.join("config"),

@@ -80,6 +80,11 @@ pub(crate) struct SourcefourWindow {
     files: Option<CommitFiles>,
     /// The commit the current detail/files load belongs to, requested or done.
     files_for: Option<sourcefour_model::Oid>,
+    /// The working tree's uncommitted state, when read (§6.14 limits how
+    /// fresh it can be: reloads, activation, and operations refresh it).
+    working_tree_status: Option<sourcefour_model::WorkingTreeStatus>,
+    /// Token for the newest status read; stale completions bail out.
+    status_request: u64,
     /// Token for the newest detail/files request; stale completions bail out.
     files_request: u64,
     /// The open diff overlay, if any (§6.11).
@@ -319,7 +324,12 @@ fn usize_from_f32(value: f32) -> usize {
 }
 
 impl SourcefourWindow {
-    pub(crate) fn new(launch: WindowLaunch, cx: &mut gpui::Context<Self>) -> Self {
+    pub(crate) fn new(
+        launch: WindowLaunch,
+        gpui_window: &mut gpui::Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> Self {
+        Self::watch_activation(gpui_window, cx);
         let session = RepoSessionId::new();
         let generation = Generation(0);
         let mut window = Self {
@@ -340,6 +350,8 @@ impl SourcefourWindow {
             detail: None,
             files: None,
             files_for: None,
+            working_tree_status: None,
+            status_request: 0,
             files_request: 0,
             diff_view: None,
             diff_request: 0,
@@ -405,16 +417,7 @@ impl SourcefourWindow {
         })
         .detach();
         if launch.demo {
-            // The fixture is seeded as if a traversal had already completed, so
-            // every capture goes through the real rendering path (§12.4).
-            window.repo = LoadState::Ready(demo::snapshot());
-            window.history.reset(HistoryScope::AllRefs);
-            let (rows, layout) = demo::history();
-            window.history.extend(rows, layout, false);
-            window.detail = Some(demo::detail());
-            window.files = Some(demo::files());
-            window.files_for = window.history.selected_commit();
-            window.seed_scene(launch.scene);
+            window.seed_demo(launch.scene);
         } else if let Some(location) = launch.location {
             window.repo = LoadState::Loading {
                 started_at: std::time::Instant::now(),
@@ -424,6 +427,33 @@ impl SourcefourWindow {
             Self::watch_metadata(location, cx);
         }
         window
+    }
+
+    /// Seeds the deterministic capture fixture as if a traversal had
+    /// already completed, so every capture goes through the real rendering
+    /// path (§12.4).
+    fn seed_demo(&mut self, scene: demo::Scene) {
+        self.repo = LoadState::Ready(demo::snapshot());
+        self.history.reset(HistoryScope::AllRefs);
+        let (rows, layout) = demo::history();
+        self.history.extend(rows, layout, false);
+        self.detail = Some(demo::detail());
+        self.files = Some(demo::files());
+        self.files_for = self.history.selected_commit();
+        self.seed_scene(scene);
+    }
+
+    /// Refreshes the working tree when the window becomes active again.
+    ///
+    /// §6.14 forbids watching the worktree, so returning to the window is
+    /// the moment edits made elsewhere become visible.
+    fn watch_activation(gpui_window: &mut gpui::Window, cx: &mut gpui::Context<Self>) {
+        cx.observe_window_activation(gpui_window, |this, gpui_window, cx| {
+            if gpui_window.is_window_active() && !this.demo {
+                this.load_working_tree_status(cx);
+            }
+        })
+        .detach();
     }
 
     /// Re-reads metadata when refs or worktrees change outside the application.
@@ -526,6 +556,7 @@ impl SourcefourWindow {
                         this.start_history(scope, cx);
                         this.history.selected = selected;
                         this.refresh_github(cx);
+                        this.load_working_tree_status(cx);
                     }
                     cx.notify();
                     applied
@@ -668,6 +699,61 @@ impl SourcefourWindow {
             self.load_selected_files(cx);
             cx.notify();
         }
+    }
+
+    /// Reads the working tree's status off the render thread.
+    ///
+    /// Called on every snapshot apply, on window activation, and when the
+    /// working-tree row is selected; a stale token drops superseded results.
+    pub(super) fn load_working_tree_status(&mut self, cx: &mut gpui::Context<Self>) {
+        let Some(location) = self.location.clone() else {
+            return;
+        };
+        self.status_request += 1;
+        let token = self.status_request;
+        cx.spawn(async move |this, cx| {
+            let status = cx
+                .background_executor()
+                .spawn(async move { sourcefour_git::working_tree_status(&location) })
+                .await;
+            this.update(cx, |this, cx| {
+                if this.status_request != token {
+                    return;
+                }
+                match status {
+                    Ok(status) => this.apply_working_tree_status(status),
+                    Err(failure) => {
+                        tracing::error!(%failure, "working tree status could not load");
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn apply_working_tree_status(&mut self, status: sourcefour_model::WorkingTreeStatus) {
+        self.history.working_tree = (!status.is_clean()).then(|| status.summary());
+        // A tree that went clean under a working-tree selection falls back
+        // to the newest commit rather than pointing at a vanished row.
+        if self.history.selected == Some(crate::history::Selection::WorkingTree)
+            && self.history.working_tree.is_none()
+        {
+            self.history.selected = self
+                .history
+                .row_at(0)
+                .map(|row| crate::history::Selection::Commit(row.oid));
+        }
+        self.working_tree_status = Some(status);
+    }
+
+    /// Selects the pinned working-tree row.
+    pub(super) fn select_working_tree(&mut self, cx: &mut gpui::Context<Self>) {
+        self.history.selected = Some(crate::history::Selection::WorkingTree);
+        self.load_selected_files(cx);
+        self.load_working_tree_status(cx);
+        cx.notify();
     }
 
     /// Loads the selected commit's changed files after a short debounce.
@@ -831,6 +917,15 @@ impl SourcefourWindow {
     fn seed_scene(&mut self, scene: demo::Scene) {
         let mode = match scene {
             demo::Scene::Overview => return,
+            demo::Scene::Commit => {
+                let status = demo::working_tree_status();
+                self.history.working_tree = Some(status.summary());
+                self.working_tree_status = Some(status);
+                self.history.selected = Some(crate::history::Selection::WorkingTree);
+                self.detail = None;
+                self.files = None;
+                return;
+            }
             demo::Scene::Settings => {
                 self.settings_view = Some(crate::settings_ui::SettingsSection::default());
                 return;

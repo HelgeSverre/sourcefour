@@ -87,6 +87,41 @@ const COMMITS: [(&str, &str, i64, &[usize]); 18] = [
 ];
 
 /// The metadata sidebar's state, shaped like the supplied mockup.
+/// The §12.4 working-tree fixture: a believable mid-feature state.
+pub(crate) fn working_tree_status() -> sourcefour_model::WorkingTreeStatus {
+    use sourcefour_model::{ChangeKind, ChangedFile, RepoPath};
+    let file = |old: Option<&str>, new: Option<&str>, status| ChangedFile {
+        old_path: old.map(|path| RepoPath(path.as_bytes().to_vec())),
+        new_path: new.map(|path| RepoPath(path.as_bytes().to_vec())),
+        status,
+        additions: None,
+        deletions: None,
+        is_binary: false,
+    };
+    sourcefour_model::WorkingTreeStatus {
+        staged: vec![
+            file(
+                Some("apps/sourcefour/src/views.rs"),
+                Some("apps/sourcefour/src/views.rs"),
+                ChangeKind::Modified,
+            ),
+            file(
+                None,
+                Some("crates/sourcefour-git/src/status.rs"),
+                ChangeKind::Added,
+            ),
+        ],
+        unstaged: vec![
+            file(
+                Some("apps/sourcefour/src/theme.rs"),
+                Some("apps/sourcefour/src/theme.rs"),
+                ChangeKind::Modified,
+            ),
+            file(None, Some("docs/commit-notes.md"), ChangeKind::Added),
+        ],
+    }
+}
+
 pub(crate) fn snapshot() -> RepoSnapshot {
     RepoSnapshot {
         location: RepoLocation {
@@ -315,11 +350,14 @@ pub(crate) enum Scene {
     Settings,
     /// The Actions run detail overlay on a failed run.
     Actions,
+    /// The working-tree row selected, staged and unstaged files listed.
+    Commit,
 }
 
 impl Scene {
     /// Every scene name `--scene` accepts, for the usage line.
-    pub(crate) const NAMES: &'static str = "overview, diff, split, image, settings, actions";
+    pub(crate) const NAMES: &'static str =
+        "overview, diff, split, image, settings, actions, commit";
 
     pub(crate) fn from_name(name: &str) -> Option<Self> {
         match name {
@@ -329,6 +367,7 @@ impl Scene {
             "image" => Some(Self::Image),
             "settings" => Some(Self::Settings),
             "actions" => Some(Self::Actions),
+            "commit" => Some(Self::Commit),
             _ => None,
         }
     }

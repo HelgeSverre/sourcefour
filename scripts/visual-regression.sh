@@ -24,7 +24,7 @@ captures=()
 for size in "${sizes[@]}"; do
   captures+=("overview $size")
 done
-captures+=("diff 1280 800" "split 1280 800" "image 1280 800" "settings 1280 800" "actions 1280 800")
+captures+=("diff 1280 800" "split 1280 800" "image 1280 800" "settings 1280 800" "actions 1280 800" "commit 1280 800")
 
 failures=0
 for capture in "${captures[@]}"; do
