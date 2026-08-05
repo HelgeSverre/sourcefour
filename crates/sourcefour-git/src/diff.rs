@@ -505,7 +505,7 @@ mod tests {
         // The join the two halves leave untested: a blob that only exists in
         // the object database, spilled to disk and decoded. Skipped where
         // there is no decoder, which is also what the viewer does there.
-        let Some(ffmpeg) = crate::media::probe_tool() else {
+        let Some(ffmpeg) = crate::media::ffmpeg_path(None) else {
             return Ok(());
         };
         let repository = TempRepo::init();

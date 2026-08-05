@@ -38,6 +38,7 @@ pub use crate::{
     fetch::fetch,
     files::commit_files,
     history::{FIRST_BATCH_ROWS, GixHistoryCursor, NEXT_BATCH_ROWS},
+    media::ffmpeg_path,
     pull::pull,
     push::push,
     refs::{References, references},

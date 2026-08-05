@@ -222,10 +222,13 @@ fn seconds_as_millis(seconds: f64) -> Option<u64> {
     (millis.is_finite() && (0.0..=CEILING).contains(&millis)).then_some(millis as u64)
 }
 
-/// The `ffmpeg` this machine will decode with, for tests that need one too.
-#[cfg(test)]
-pub(crate) fn probe_tool() -> Option<PathBuf> {
-    tools(None).map(|(ffmpeg, _)| ffmpeg.clone())
+/// The `ffmpeg` this machine will decode with, if any.
+///
+/// The same search and the same once-per-process answer [`probe`] uses, so a
+/// settings row that asks whether posters will work costs one lookup at most,
+/// and asking is itself what fixes the resolution for the session.
+pub fn ffmpeg_path(ffmpeg_dir: Option<&Path>) -> Option<PathBuf> {
+    tools(ffmpeg_dir).map(|(ffmpeg, _)| ffmpeg.clone())
 }
 
 /// Both tools, found once per process, or nothing when either is absent.
@@ -444,7 +447,7 @@ mod tests {
 
     #[test]
     fn a_real_clip_yields_a_poster_and_its_facts() {
-        let Some(ffmpeg) = probe_tool() else {
+        let Some(ffmpeg) = ffmpeg_path(None) else {
             return;
         };
         // Generated rather than committed: the test already requires ffmpeg,

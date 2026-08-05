@@ -377,22 +377,49 @@ fn diffs_cards(
     theme: &Theme,
     cx: &mut gpui::Context<SourcefourWindow>,
 ) -> Vec<Div> {
-    vec![card(
-        theme,
-        vec![row(
+    vec![
+        card(
             theme,
-            "Line height",
-            "Spacing between diff lines, as a multiple of the mono font size.",
-            segmented(
+            vec![row(
                 theme,
-                "diff-line-height",
-                &[("Standard", 1.55), ("Comfortable", 1.8)],
-                settings.diff.line_height,
-                cx,
-                |settings, height| settings.diff.line_height = height,
-            ),
-        )],
-    )]
+                "Line height",
+                "Spacing between diff lines, as a multiple of the mono font size.",
+                segmented(
+                    theme,
+                    "diff-line-height",
+                    &[("Standard", 1.55), ("Comfortable", 1.8)],
+                    settings.diff.line_height,
+                    cx,
+                    |settings, height| settings.diff.line_height = height,
+                ),
+            )],
+        ),
+        card(theme, vec![video_row(settings, theme)]),
+    ]
+}
+
+/// Whether a video diff will show a frame, and how to say where the decoder
+/// is when the search did not find it.
+///
+/// Read-only by design: the path is a rescue for an unusual install, not a
+/// setting worth a text field in front of everyone who will never need it.
+/// The lookup is the probe's own and answers once per session, so asking here
+/// is what fixes the answer for the diffs that follow.
+fn video_row(settings: &AppSettings, theme: &Theme) -> Div {
+    let found = sourcefour_git::ffmpeg_path(settings.video.ffmpeg_dir.as_deref()).is_some();
+    row(
+        theme,
+        "Video posters",
+        r#"Set "video": { "ffmpeg_dir": "/path/to/bin" } in settings.json."#,
+        value_text(
+            theme,
+            if found {
+                "ffmpeg · found"
+            } else {
+                "ffmpeg · not found"
+            },
+        ),
+    )
 }
 
 fn about_cards(theme: &Theme, cx: &mut gpui::Context<SourcefourWindow>) -> Vec<Div> {

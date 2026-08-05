@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 pub(crate) struct AppSettings {
     pub(crate) github: GithubSettings,
     pub(crate) diff: DiffSettings,
+    pub(crate) video: VideoSettings,
 }
 
 /// The GitHub integration's configuration (§ post-v1 integrations).
@@ -66,6 +67,18 @@ impl DiffSettings {
     }
 }
 
+/// Where the video tools live, when the usual places are not where they are.
+///
+/// A directory rather than a binary: `ffmpeg` and `ffprobe` are installed
+/// side by side, and naming one would leave the other still to find. Unset is
+/// the normal case — the search covers `PATH` and the standard prefixes on its
+/// own, and this exists for the install that is somewhere else entirely.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[serde(default)]
+pub(crate) struct VideoSettings {
+    pub(crate) ffmpeg_dir: Option<std::path::PathBuf>,
+}
+
 impl AppSettings {
     /// Reads settings, falling back to defaults on any failure: a missing or
     /// corrupt file must never block the window.
@@ -102,7 +115,7 @@ impl AppSettings {
 
 #[cfg(test)]
 mod tests {
-    use super::{AppSettings, AuthMethod, DiffSettings, GithubSettings};
+    use super::{AppSettings, AuthMethod, DiffSettings, GithubSettings, VideoSettings};
 
     #[test]
     fn settings_round_trip_through_their_file() -> Result<(), Box<dyn std::error::Error>> {
@@ -114,6 +127,9 @@ mod tests {
                 auth_method: AuthMethod::Token,
             },
             diff: DiffSettings::default(),
+            video: VideoSettings {
+                ffmpeg_dir: Some(std::path::PathBuf::from("/opt/ffmpeg/bin")),
+            },
         };
 
         settings.save_to(&path)?;
@@ -196,6 +212,32 @@ mod tests {
         let loaded = AppSettings::load_from(&path);
 
         assert_eq!(loaded.diff, DiffSettings { line_height: 1.8 });
+        Ok(())
+    }
+
+    #[test]
+    fn a_video_directory_survives_a_file_that_predates_it() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let directory = tempfile::TempDir::new()?;
+        let path = directory.path().join("settings.json");
+        std::fs::write(&path, r#"{"diff": {"line_height": 1.7}}"#)?;
+        assert_eq!(
+            AppSettings::load_from(&path).video,
+            VideoSettings::default(),
+            "a file written before the section reads as no override"
+        );
+
+        std::fs::write(
+            &path,
+            r#"{"video": {"ffmpeg_dir": "/opt/ffmpeg/bin", "codec": "av1"}}"#,
+        )?;
+        assert_eq!(
+            AppSettings::load_from(&path).video,
+            VideoSettings {
+                ffmpeg_dir: Some(std::path::PathBuf::from("/opt/ffmpeg/bin")),
+            },
+            "a future key inside the section is ignored, not fatal"
+        );
         Ok(())
     }
 

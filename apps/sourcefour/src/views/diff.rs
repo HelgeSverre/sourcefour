@@ -338,10 +338,13 @@ impl SourcefourWindow {
         let token = self.diff_request;
         self.diff_scroll = UniformListScrollHandle::new();
         self.diff_focus.focus(window);
+        let ffmpeg_dir = self.settings.video.ffmpeg_dir.clone();
         cx.spawn(async move |this, cx| {
             let diff = cx
                 .background_executor()
-                .spawn(async move { sourcefour_git::file_diff(&location, &request, None) })
+                .spawn(async move {
+                    sourcefour_git::file_diff(&location, &request, ffmpeg_dir.as_deref())
+                })
                 .await;
             this.update(cx, |this, cx| {
                 this.set_diff_content(token, diff.map(|diff| diff.content), cx);
@@ -390,13 +393,19 @@ impl SourcefourWindow {
         let token = self.diff_request;
         self.diff_scroll = UniformListScrollHandle::new();
         self.diff_focus.focus(window);
+        let ffmpeg_dir = self.settings.video.ffmpeg_dir.clone();
         cx.spawn(async move |this, cx| {
-            let content =
-                cx.background_executor()
-                    .spawn(async move {
-                        sourcefour_git::worktree_file_diff(&location, &path, staged, None)
-                    })
-                    .await;
+            let content = cx
+                .background_executor()
+                .spawn(async move {
+                    sourcefour_git::worktree_file_diff(
+                        &location,
+                        &path,
+                        staged,
+                        ffmpeg_dir.as_deref(),
+                    )
+                })
+                .await;
             this.update(cx, |this, cx| {
                 this.set_diff_content(token, content, cx);
             })

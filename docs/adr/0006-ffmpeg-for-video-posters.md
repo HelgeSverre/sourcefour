@@ -2,8 +2,24 @@
 
 ## Status
 
-Accepted, with a stated replacement. The seam this decision creates is the
-point of it.
+Accepted, amended 2026-08-06. The seam this decision creates is the point of
+it, and the replacement is still stated.
+
+The amendment is about finding the tools, not about which tools. "From `PATH`"
+turned out to mean "from whatever `PATH` the process was launched with", and a
+bundle opened from Finder inherits launchd's — `/usr/bin:/bin:/usr/sbin:/sbin`
+— which holds no ffmpeg anyone installed. Every video degraded to the metadata
+card on machines that had a decoder, and this ADR's "absence is a normal
+outcome" was covering for it. The lookup is now an ordered search: a directory
+named in settings, then `PATH`, then the prefixes the package managers use
+(`/opt/homebrew/bin`, `/usr/local/bin`, `/opt/local/bin`, `~/.local/bin`), each
+candidate confirmed by running it. Absence is still a normal outcome, but it is
+now a stated one: `VideoInfo::tools_missing` separates "nothing here to ask"
+from "asked, and the container would not say", and only the first earns a line
+on the card — "Install ffmpeg to see a preview frame" — because only the first
+is something the reader can act on. `video.ffmpeg_dir` in settings.json covers
+the install that is somewhere else entirely; the Diffs section reports whether
+the search found anything.
 
 ## Context
 
@@ -33,15 +49,24 @@ binary-distribution licensing is unresolved for a signed, notarized `.pkg`.
 
 ## Decision
 
-`crates/sourcefour-git/src/media.rs` shells out to `ffprobe` and `ffmpeg` from
-`PATH`. Everything above it sees two functions and a `VideoInfo`:
+`crates/sourcefour-git/src/media.rs` shells out to `ffprobe` and `ffmpeg`,
+found by the search the amendment above describes. Everything above it sees two
+functions and a `VideoInfo`:
 
 ```rust
 pub(crate) fn video_format(path: &[u8]) -> Option<String>
-pub(crate) fn probe(bytes: &[u8], format: &str) -> (Option<Vec<u8>>, VideoInfo)
+pub(crate) fn probe(
+    bytes: &[u8],
+    format: &str,
+    ffmpeg_dir: Option<&Path>,
+) -> (Option<Vec<u8>>, VideoInfo)
 ```
 
-Nothing outside that module knows a subprocess exists. `DiffContent::Video`
+Nothing outside that module knows a subprocess exists, beyond the directory to
+look in — threaded from settings through `file_diff` — and `ffmpeg_path`, which
+the settings page asks to say whether posters will work. Both name a tool, not a
+process, and a pure-Rust decoder would answer the second and ignore the first.
+`DiffContent::Video`
 carries a PNG poster per side, so `render_image`, `ensure_images`,
 `image_split_view` and `image_slider_view` all work on it unchanged — a video
 comparison is an image comparison with a caption.
@@ -90,6 +115,39 @@ Revisit when any of these becomes true:
   worth its size.
 - The security surface stops being acceptable — for instance if the viewer ever
   opens repositories the user did not choose.
+
+## Pure-Rust replacement, researched 2026-08
+
+The landscape moved since this was written, enough to record where it now
+stands. Not enough to act on.
+
+Demuxing is solved. `re_mp4` reads MP4 and MOV under MIT in about 6,600 lines;
+`matroska-demuxer` reads WebM and MKV under Zlib/MIT/Apache in about 3,500.
+Both are small enough to read in an afternoon, and either would give duration
+and dimensions with no decoder at all.
+
+Decoding is where it splits by codec:
+
+- **H.264 has two viable pure-Rust decoders.** `rust_h264` covers Baseline,
+  Main and High with both entropy coders, CAVLC and CABAC, and has NEON paths.
+  `rusty_h264` is openh264 rebuilt in Rust under BSD-2 with
+  `forbid(unsafe_code)` — the same lint this workspace sets — and tests
+  bit-exact against Cisco's output, which is the strongest correctness claim
+  any of these make.
+- **AV1 is upstream `rav1d`, BSD-2, with the assembly turned off.** The
+  assembly is what makes dav1d fast, and it is also what this workspace's
+  `forbid` rules out. `rav1d-safe` exists and is the wrong door: its additions
+  are AGPL-3.0 or a commercial license, which an MIT application cannot take.
+- **HEVC and VP9 have nothing mature.** A screen recording from a recent iPhone
+  is HEVC, so this is not an exotic gap.
+
+The cost of the ones that do exist: roughly 150,000 to 200,000 lines entering
+the build, 30 to 60 seconds on a cold release build, and 2 to 4 MB of binary.
+For a card that today says the file's size and duration.
+
+So the revisit conditions above stand, with one sharpened: a pure-Rust route
+covering H.264 and AV1 exists now, and the thing still missing is HEVC — plus a
+reason to spend a minute of every release build on posters.
 
 A partial step is available and deliberately not taken: parsing the ISO-BMFF box
 tree in about forty lines of safe Rust would give MP4 and MOV duration and
