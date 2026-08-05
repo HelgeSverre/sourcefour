@@ -11,8 +11,6 @@ use gpui::{
 };
 use sourcefour_model::{CheckConclusion, CheckStatus, WorkflowJob, WorkflowRun};
 
-use crate::theme::MONO_FONT;
-
 use super::{SourcefourWindow, github::check_glyph, row_count_as_f32};
 
 /// Row height of one virtualized log line.
@@ -937,7 +935,7 @@ impl SourcefourWindow {
                     .rounded(px(4.0))
                     .border_1()
                     .border_color(self.theme.border_strong)
-                    .font_family(MONO_FONT)
+                    .font_family(self.mono_font())
                     .text_size(px(10.0))
                     .text_color(self.theme.text_secondary)
                     .child(view.run.sha.chars().take(7).collect::<String>()),
@@ -1416,7 +1414,7 @@ impl SourcefourWindow {
             .items_center()
             .gap(px(8.0))
             .px(px(16.0))
-            .font_family(MONO_FONT)
+            .font_family(self.mono_font())
             .text_size(px(10.5))
             .whitespace_nowrap()
             .children(timestamp.map(|seconds| {
@@ -1462,7 +1460,7 @@ impl SourcefourWindow {
         window: &Window,
     ) -> gpui::AnyElement {
         let mut base = window.text_style().font();
-        base.family = MONO_FONT.into();
+        base.family = self.mono_font();
         let mut text = String::new();
         let mut styled = Vec::with_capacity(runs.len());
         for run in runs {

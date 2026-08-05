@@ -17,8 +17,6 @@ use sourcefour_model::{
     VideoInfo,
 };
 
-use crate::theme::MONO_FONT;
-
 use super::{
     Drag, SourcefourWindow, change_color, change_letter, counted,
     preview::{self, PreviewSide, PreviewState},
@@ -1098,7 +1096,7 @@ impl SourcefourWindow {
                 .items_center()
                 .px(px(10.0))
                 .bg(self.theme.bg_hover)
-                .font_family(MONO_FONT)
+                .font_family(self.mono_font())
                 .text_size(px(11.0))
                 .text_color(self.theme.accent)
                 .child(hunk.clone());
@@ -1144,7 +1142,7 @@ impl SourcefourWindow {
                     .w(px(44.0))
                     .flex_none()
                     .pr(px(6.0))
-                    .font_family(MONO_FONT)
+                    .font_family(self.mono_font())
                     .text_size(px(10.5))
                     .text_color(self.theme.text_faint)
                     .child(
@@ -1159,7 +1157,7 @@ impl SourcefourWindow {
                     .min_w(px(1.0))
                     .overflow_hidden()
                     .whitespace_nowrap()
-                    .font_family(MONO_FONT)
+                    .font_family(self.mono_font())
                     .text_size(px(11.0))
                     .text_color(text_color)
                     .child(side.text.clone()),
@@ -1280,7 +1278,7 @@ impl SourcefourWindow {
                 .w(px(44.0))
                 .flex_none()
                 .pr(px(6.0))
-                .font_family(MONO_FONT)
+                .font_family(self.mono_font())
                 .text_size(px(10.5))
                 .text_color(self.theme.text_faint)
                 .child(value.map_or_else(String::new, |value| value.to_string()))
@@ -1305,7 +1303,7 @@ impl SourcefourWindow {
                 div()
                     .w(px(14.0))
                     .flex_none()
-                    .font_family(MONO_FONT)
+                    .font_family(self.mono_font())
                     .text_size(px(11.0))
                     .text_color(text_color)
                     .child(marker),
@@ -1316,7 +1314,7 @@ impl SourcefourWindow {
                     .min_w(px(1.0))
                     .overflow_hidden()
                     .whitespace_nowrap()
-                    .font_family(MONO_FONT)
+                    .font_family(self.mono_font())
                     .text_size(px(11.0))
                     .text_color(text_color)
                     .child(line.text.clone()),

@@ -3,8 +3,6 @@
 use gpui::{Div, FontWeight, IntoElement, Window, div, prelude::*, px};
 use sourcefour_model::{HeadSnapshot, OperationOutcome};
 
-use crate::theme::MONO_FONT;
-
 use super::SourcefourWindow;
 
 /// The §6.13 create-branch dialog's state; the name lives in its input.
@@ -146,7 +144,7 @@ impl SourcefourWindow {
                                 .child("Create branch")
                                 .child(
                                     div()
-                                        .font_family(MONO_FONT)
+                                        .font_family(self.mono_font())
                                         .font_weight(FontWeight::NORMAL)
                                         .text_size(px(10.5))
                                         .text_color(self.theme.text_faint)

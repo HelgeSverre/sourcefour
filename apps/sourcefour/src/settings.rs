@@ -24,6 +24,22 @@ pub(crate) struct AppSettings {
 #[serde(default)]
 pub(crate) struct AppearanceSettings {
     pub(crate) date_display: DateDisplay,
+    /// The monospace family for diffs, hashes and logs; unset is the
+    /// platform's own.
+    ///
+    /// Any family the system can resolve is honored, so a hand-edit is a
+    /// first-class way to set this — the overlay only offers the common few.
+    /// A name nothing resolves is not an error: gpui walks its own fallback
+    /// stack instead, which on macOS reaches Helvetica, so a typo shows as
+    /// proportional code rather than as a crash or a blank pane.
+    pub(crate) mono_font: Option<String>,
+}
+
+impl AppearanceSettings {
+    /// The monospace family to render with: the override, or the platform's.
+    pub(crate) fn mono_font(&self) -> &str {
+        self.mono_font.as_deref().unwrap_or(crate::theme::MONO_FONT)
+    }
 }
 
 /// How a commit's timestamp is written.
@@ -149,6 +165,7 @@ mod tests {
         let settings = AppSettings {
             appearance: AppearanceSettings {
                 date_display: DateDisplay::Absolute,
+                mono_font: Some(String::from("JetBrains Mono")),
             },
             github: GithubSettings {
                 enabled: true,
@@ -270,6 +287,51 @@ mod tests {
     }
 
     #[test]
+    fn an_unset_mono_font_is_the_family_this_platform_ships() {
+        assert_eq!(
+            AppearanceSettings::default().mono_font(),
+            if cfg!(target_os = "macos") {
+                "Menlo"
+            } else if cfg!(target_os = "windows") {
+                "Consolas"
+            } else {
+                "monospace"
+            }
+        );
+        assert_eq!(
+            AppearanceSettings {
+                mono_font: Some(String::from("Fira Code")),
+                ..AppearanceSettings::default()
+            }
+            .mono_font(),
+            "Fira Code",
+            "a named family wins over the platform's"
+        );
+    }
+
+    #[test]
+    fn a_mono_font_the_presets_never_offered_round_trips() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let directory = tempfile::TempDir::new()?;
+        let path = directory.path().join("settings.json");
+        std::fs::write(&path, r#"{"appearance": {"mono_font": "Comic Mono"}}"#)?;
+
+        let loaded = AppSettings::load_from(&path);
+        assert_eq!(loaded.appearance.mono_font(), "Comic Mono");
+
+        loaded.save_to(&path)?;
+        assert_eq!(
+            AppSettings::load_from(&path)
+                .appearance
+                .mono_font
+                .as_deref(),
+            Some("Comic Mono"),
+            "a hand-edited family survives a save from the overlay"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn an_appearance_section_survives_a_file_that_predates_it()
     -> Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::TempDir::new()?;
@@ -289,6 +351,7 @@ mod tests {
             AppSettings::load_from(&path).appearance,
             AppearanceSettings {
                 date_display: DateDisplay::Absolute,
+                mono_font: None,
             },
             "a future key inside the section is ignored, not fatal"
         );

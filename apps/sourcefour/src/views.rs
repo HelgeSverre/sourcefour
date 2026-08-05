@@ -995,6 +995,13 @@ impl SourcefourWindow {
         }
     }
 
+    /// The monospace family every code, hash and log surface renders in,
+    /// as the text system wants it. One call per element rather than one
+    /// stored copy, so a family picked in the overlay is the next frame's.
+    pub(super) fn mono_font(&self) -> gpui::SharedString {
+        gpui::SharedString::from(self.settings.appearance.mono_font().to_owned())
+    }
+
     /// Saves panel sizes, section order, and collapse state off-thread.
     fn persist_ui_state(&self, cx: &gpui::Context<Self>) {
         // Demo interactions must never overwrite this user's real state.

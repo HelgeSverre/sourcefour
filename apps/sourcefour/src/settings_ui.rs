@@ -245,10 +245,42 @@ fn general_cards(view: &SettingsView<'_>, cx: &mut gpui::Context<SourcefourWindo
                     apply: |settings, display| settings.appearance.date_display = display,
                 }
                 .row(theme, cx),
+                Choice {
+                    id: "mono-font",
+                    name: "Monospace font",
+                    description: "Diffs, hashes and logs. Any installed family works from \
+                                  settings.json; these are the ones worth a button.",
+                    choices: MONO_PRESETS,
+                    active: active_mono_font(view.settings),
+                    apply: |settings, family| {
+                        settings.appearance.mono_font = family.map(String::from);
+                    },
+                }
+                .row(theme, cx),
             ],
         ),
         card(theme, vec![video_row(view.settings, theme)]),
     ]
+}
+
+/// The families the row offers. `None` is the platform's own, which is what
+/// an unset `appearance.mono_font` means.
+const MONO_PRESETS: &[(&str, Option<&'static str>)] = &[
+    ("System", None),
+    ("SF Mono", Some("SF Mono")),
+    ("JetBrains Mono", Some("JetBrains Mono")),
+    ("Fira Code", Some("Fira Code")),
+];
+
+/// Which preset the file currently holds, or a value none of them equals —
+/// a hand-edited family lights no segment rather than mislighting "System".
+fn active_mono_font(settings: &AppSettings) -> Option<&'static str> {
+    let configured = settings.appearance.mono_font.as_deref();
+    MONO_PRESETS
+        .iter()
+        .map(|&(_, preset)| preset)
+        .find(|preset| *preset == configured)
+        .unwrap_or(Some(""))
 }
 
 fn github_cards(view: &SettingsView<'_>, cx: &mut gpui::Context<SourcefourWindow>) -> Vec<Div> {

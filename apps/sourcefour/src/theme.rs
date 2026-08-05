@@ -78,8 +78,16 @@ pub(crate) const HISTORY_ROW_HEIGHT: f32 = 30.0;
 pub(crate) const GRAPH_WIDTH: f32 = 76.0;
 pub(crate) const DETAILS_HEIGHT: f32 = 268.0;
 pub(crate) const STATUS_HEIGHT: f32 = 26.0;
-/// The monospace family used for diff content and hashes.
-pub(crate) const MONO_FONT: &str = "Menlo";
+/// The monospace family used for diff content, hashes and logs, unless
+/// `appearance.mono_font` names another one. Each platform's is the one it
+/// ships, so the app never depends on a font it did not install.
+pub(crate) const MONO_FONT: &str = if cfg!(target_os = "macos") {
+    "Menlo"
+} else if cfg!(target_os = "windows") {
+    "Consolas"
+} else {
+    "monospace"
+};
 /// Thickness of every draggable panel divider.
 pub(crate) const SPLITTER_WIDTH: f32 = 3.0;
 pub(crate) const ERROR_WIDTH: f32 = 460.0;

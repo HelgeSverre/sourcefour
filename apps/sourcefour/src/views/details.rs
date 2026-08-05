@@ -4,7 +4,7 @@
 use gpui::{Div, FontWeight, IntoElement, div, prelude::*, px};
 use sourcefour_model::{ChangedFile, DiffParent};
 
-use crate::{history::display_date, theme::MONO_FONT};
+use crate::history::display_date;
 
 use super::{SourcefourWindow, change_color, change_letter, counted};
 
@@ -99,7 +99,7 @@ impl SourcefourWindow {
             .items_center()
             .gap(px(10.0))
             .text_size(px(12.0))
-            .font_family(MONO_FONT)
+            .font_family(self.mono_font())
             .text_color(self.theme.accent)
             .child(hash)
             .children((parent_choices.len() == 1).then(|| {
@@ -178,7 +178,7 @@ impl SourcefourWindow {
             .child(
                 div()
                     .flex_none()
-                    .font_family(MONO_FONT)
+                    .font_family(self.mono_font())
                     .text_size(px(11.0))
                     .text_color(self.theme.accent)
                     .child(hash),

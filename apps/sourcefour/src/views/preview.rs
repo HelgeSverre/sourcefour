@@ -24,7 +24,7 @@ use sourcefour_doc::{CellAlignment, DocBlock, DocBlockKind, DocSpan, DocumentKin
 use sourcefour_git::{DocSource, ImageResolution};
 use sourcefour_model::{DiffContent, RepoLocation, RepoPath};
 
-use crate::theme::{MONO_FONT, Theme};
+use crate::theme::Theme;
 
 use super::SourcefourWindow;
 use super::diff::{DiffOrigin, DiffView, render_image};
@@ -444,6 +444,7 @@ fn demo_parse() -> (PreviewParse, PreviewParse) {
 fn spans_to_runs(
     spans: &[DocSpan],
     font: &Font,
+    mono: &gpui::SharedString,
     color: Hsla,
     theme: &Theme,
 ) -> (String, Vec<TextRun>) {
@@ -453,7 +454,7 @@ fn spans_to_runs(
         if span.text.is_empty() {
             continue;
         }
-        runs.push(span_run(span, font, color, theme));
+        runs.push(span_run(span, font, mono, color, theme));
         text.push_str(&span.text);
     }
     (text, runs)
@@ -461,10 +462,16 @@ fn spans_to_runs(
 
 /// One styled run. A run carries font, colour, and decorations but no box,
 /// so inline code gets its wash and its family without the usual padding.
-fn span_run(span: &DocSpan, font: &Font, color: Hsla, theme: &Theme) -> TextRun {
+fn span_run(
+    span: &DocSpan,
+    font: &Font,
+    mono: &gpui::SharedString,
+    color: Hsla,
+    theme: &Theme,
+) -> TextRun {
     let mut font = font.clone();
     if span.code {
-        font.family = MONO_FONT.into();
+        font.family = mono.clone();
     }
     if span.bold {
         font.weight = FontWeight::SEMIBOLD;
@@ -879,7 +886,7 @@ impl SourcefourWindow {
         preview: &PreviewDoc,
         id: BlockId,
     ) -> Div {
-        let (text, runs) = spans_to_runs(spans, font, color, &self.theme);
+        let (text, runs) = spans_to_runs(spans, font, &self.mono_font(), color, &self.theme);
         let text = gpui::SharedString::from(text);
         let selected = self
             .preview_selection
@@ -944,7 +951,7 @@ impl SourcefourWindow {
             .bg(self.theme.recessed())
             .overflow_x_hidden()
             .whitespace_nowrap()
-            .font_family(MONO_FONT)
+            .font_family(self.mono_font())
             .text_size(px(11.0))
             .text_color(self.theme.text_secondary)
             .child(text.to_owned())
@@ -1168,7 +1175,7 @@ mod tests {
     use sourcefour_doc::{DocBlockKind, DocSpan};
     use sourcefour_model::{DiffParent, FileDiffRequest, Oid, RepoPath};
 
-    use crate::theme::{MONO_FONT, Theme};
+    use crate::theme::Theme;
 
     use super::{
         ABSENT_NOTICE, DiffOrigin, DocSource, clamp_to_char_boundary, doc_source, document_blocks,
@@ -1178,6 +1185,10 @@ mod tests {
     fn path(text: &str) -> RepoPath {
         RepoPath(text.as_bytes().to_vec())
     }
+
+    /// A mono family no platform default is, so a code span's font proves it
+    /// came from the caller rather than from a constant.
+    const MONO: &str = "Fira Code";
 
     /// The wash a selection paints, distinct from anything the palette hands
     /// a run, so a test can tell the two apart.
@@ -1319,6 +1330,7 @@ mod tests {
         let (text, runs) = spans_to_runs(
             &[span("æøå"), span(""), span(" tail")],
             &gpui::font("Helvetica"),
+            &MONO.into(),
             theme.text_secondary,
             &theme,
         );
@@ -1360,11 +1372,15 @@ mod tests {
                 },
             ],
             &gpui::font("Helvetica"),
+            &MONO.into(),
             theme.text_secondary,
             &theme,
         );
 
-        assert_eq!(runs[0].font.family, MONO_FONT);
+        assert_eq!(
+            runs[0].font.family, MONO,
+            "the mono family is the one the caller named"
+        );
         assert_eq!(runs[0].background_color, Some(theme.bg_list));
         assert_eq!(runs[1].color, theme.accent);
         assert!(runs[1].underline.is_some());
@@ -1383,13 +1399,14 @@ mod tests {
                 ..DocSpan::default()
             }],
             &gpui::font("Helvetica"),
+            &MONO.into(),
             theme.text_secondary,
             &theme,
         );
         let washed = highlight_runs(runs, 0..text.len(), WASH);
 
         assert_eq!(shape(&washed), vec![(4, true)]);
-        assert_eq!(washed[0].font.family, MONO_FONT, "the marks stay");
+        assert_eq!(washed[0].font.family, MONO, "the marks stay");
     }
 
     #[test]
