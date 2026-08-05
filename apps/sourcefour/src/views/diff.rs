@@ -8,12 +8,16 @@ use gpui::{
     prelude::*, px, uniform_list,
 };
 use sourcefour_model::{
-    ChangeKind, ChangedFile, DiffContent, DiffLine, DiffLineKind, FileDiffRequest,
+    ChangeKind, ChangedFile, DiffContent, DiffLine, DiffLineKind, FileDiffRequest, RepoPath,
 };
 
 use crate::theme::MONO_FONT;
 
-use super::{Drag, SourcefourWindow, change_color, change_letter, counted, row_count_as_f32};
+use super::{
+    Drag, SourcefourWindow, change_color, change_letter, counted,
+    preview::{self, PreviewState},
+    row_count_as_f32,
+};
 
 /// How the diff overlay lays out its lines.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -38,13 +42,44 @@ impl DiffMode {
     }
 }
 
+/// Where an open diff came from, so a preview can read the same file back
+/// out of the repository without re-deriving it from the display title.
+pub(super) enum DiffOrigin {
+    /// One file of a commit, against the selected parent.
+    Commit(FileDiffRequest),
+    /// One working-tree file, on whichever side of the index was clicked.
+    WorkingTree {
+        /// The file's repository-relative path.
+        path: RepoPath,
+        /// Whether the staged side is being shown.
+        staged: bool,
+    },
+}
+
+impl DiffOrigin {
+    /// The path the diff is showing, as the repository names it.
+    pub(super) fn path(&self) -> &RepoPath {
+        match self {
+            Self::Commit(request) => &request.path,
+            Self::WorkingTree { path, .. } => path,
+        }
+    }
+}
+
 /// One open file diff: header info plus content once loaded (§6.11).
 pub(super) struct DiffView {
     pub(super) title: String,
     pub(super) status: ChangeKind,
+    /// Where the file came from, for the preview's own read.
+    pub(super) origin: DiffOrigin,
     /// `None` while the read is in flight.
     pub(super) content: Option<DiffContent>,
     pub(super) mode: DiffMode,
+    /// Whether the rendered document replaces the diff lines. Session-only:
+    /// unlike the layout, nothing about a preview persists across launches.
+    pub(super) show_preview: bool,
+    /// The parsed document with its images, `None` until the load lands.
+    pub(super) preview: Option<PreviewState>,
     /// Side-by-side rows, computed once per content when split is shown.
     pub(super) split: Option<Vec<crate::diff_split::SplitRow>>,
     /// Renderable old-side image, wrapped once per content.
@@ -89,7 +124,7 @@ impl DiffView {
 }
 
 /// Wraps encoded image bytes as a gpui image with a fresh cache id.
-fn render_image(bytes: Option<&[u8]>, format: &str) -> Option<Arc<gpui::Image>> {
+pub(super) fn render_image(bytes: Option<&[u8]>, format: &str) -> Option<Arc<gpui::Image>> {
     use std::sync::atomic::{AtomicU64, Ordering};
     static NEXT_IMAGE_ID: AtomicU64 = AtomicU64::new(1);
     let format = match format {
@@ -152,8 +187,11 @@ impl SourcefourWindow {
         self.diff_view = Some(DiffView {
             title: request.path.display_lossy(),
             status: file.status,
+            origin: DiffOrigin::Commit(request.clone()),
             content: None,
             mode: self.preferred_diff_mode,
+            show_preview: false,
+            preview: None,
             split: None,
             before_image: None,
             after_image: None,
@@ -198,8 +236,14 @@ impl SourcefourWindow {
         self.diff_view = Some(DiffView {
             title: path.display_lossy(),
             status: file.status,
+            origin: DiffOrigin::WorkingTree {
+                path: path.clone(),
+                staged,
+            },
             content: None,
             mode: self.preferred_diff_mode,
+            show_preview: false,
+            preview: None,
             split: None,
             before_image: None,
             after_image: None,
@@ -250,6 +294,7 @@ impl SourcefourWindow {
     /// outside the panel.
     pub(super) fn diff_overlay(
         &self,
+        window: &Window,
         cx: &mut gpui::Context<Self>,
     ) -> Option<impl IntoElement + use<>> {
         let view = self.diff_view.as_ref()?;
@@ -257,7 +302,7 @@ impl SourcefourWindow {
             Some(DiffContent::Text { lines }) => lines.len(),
             _ => 0,
         };
-        let body = self.diff_body(view, line_count, cx);
+        let body = self.diff_body(view, line_count, window, cx);
         Some(
             super::modal_backdrop("diff-overlay", &self.theme)
                 .key_context("Diff")
@@ -298,7 +343,11 @@ impl SourcefourWindow {
                                 .min_h(px(1.0))
                                 .bg(self.theme.bg_list)
                                 .child(body)
-                                .children(self.diff_scrollbar(cx)),
+                                .children(if preview::showing(view) {
+                                    None
+                                } else {
+                                    self.diff_scrollbar(cx)
+                                }),
                         ),
                 ),
         )
@@ -309,13 +358,61 @@ impl SourcefourWindow {
         &self,
         view: &DiffView,
         line_count: usize,
+        window: &Window,
         cx: &mut gpui::Context<Self>,
     ) -> gpui::AnyElement {
         match &view.content {
             None => self.diff_notice("Computing diff…").into_any_element(),
+            // Preview rides beside the source, raw text left and the rendered
+            // document right; the source half keeps the scrub machinery.
+            Some(DiffContent::Text { .. }) if preview::showing(view) => {
+                let rendered: gpui::AnyElement = match &view.preview {
+                    Some(preview) => self.preview_pane(preview, window).into_any_element(),
+                    None => self.diff_notice("Rendering preview…").into_any_element(),
+                };
+                div()
+                    .size_full()
+                    .flex()
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(1.0))
+                            .relative()
+                            .child(self.diff_text_list(view, line_count, cx))
+                            .children(self.diff_scrollbar(cx)),
+                    )
+                    .child(div().w(px(1.0)).flex_none().bg(self.theme.border))
+                    .child(div().flex_1().min_w(px(1.0)).child(rendered))
+                    .into_any_element()
+            }
             Some(DiffContent::Text { lines }) if lines.is_empty() => {
                 self.diff_notice("No textual changes.").into_any_element()
             }
+            Some(DiffContent::Text { .. }) => self.diff_text_list(view, line_count, cx),
+            Some(DiffContent::Image { .. }) if view.mode == DiffMode::Split => {
+                self.image_split_view(view).into_any_element()
+            }
+            Some(DiffContent::Image { .. }) => self.image_slider_view(view, cx).into_any_element(),
+            Some(DiffContent::Binary { message } | DiffContent::Unavailable { message }) => {
+                self.diff_notice(message.clone()).into_any_element()
+            }
+            Some(DiffContent::TooLarge { lines, bytes, .. }) => self
+                .diff_notice(format!(
+                    "Diff too large to render safely ({lines} lines, {bytes} bytes) — \
+                     open it with an external tool."
+                ))
+                .into_any_element(),
+        }
+    }
+
+    /// The virtualized line list for text content, in the current layout.
+    fn diff_text_list(
+        &self,
+        view: &DiffView,
+        line_count: usize,
+        cx: &mut gpui::Context<Self>,
+    ) -> gpui::AnyElement {
+        match &view.content {
             Some(DiffContent::Text { .. }) if view.mode == DiffMode::Split => uniform_list(
                 cx.entity(),
                 "diff-split-rows",
@@ -355,19 +452,8 @@ impl SourcefourWindow {
             .track_scroll(self.diff_scroll.clone())
             .size_full()
             .into_any_element(),
-            Some(DiffContent::Image { .. }) if view.mode == DiffMode::Split => {
-                self.image_split_view(view).into_any_element()
-            }
-            Some(DiffContent::Image { .. }) => self.image_slider_view(view, cx).into_any_element(),
-            Some(DiffContent::Binary { message } | DiffContent::Unavailable { message }) => {
-                self.diff_notice(message.clone()).into_any_element()
-            }
-            Some(DiffContent::TooLarge { lines, bytes, .. }) => self
-                .diff_notice(format!(
-                    "Diff too large to render safely ({lines} lines, {bytes} bytes) — \
-                     open it with an external tool."
-                ))
-                .into_any_element(),
+            // Only text content reaches here; diff_body routed the rest.
+            _ => self.diff_notice("No textual changes.").into_any_element(),
         }
     }
 
@@ -408,6 +494,7 @@ impl SourcefourWindow {
                     .text_color(self.theme.text_primary)
                     .child(view.title.clone()),
             )
+            .children(preview::applies(view).then(|| self.preview_toggle(view.show_preview, cx)))
             .child(
                 div()
                     .flex_none()
@@ -464,15 +551,14 @@ impl SourcefourWindow {
             )
     }
 
-    /// One segment of the unified/split toggle.
-    pub(super) fn diff_mode_button(
+    /// The look of one segment in a header's segmented control, without the
+    /// action: every control in the overlay's header wears the same segment
+    /// and differs only in what clicking it does.
+    pub(super) fn segment_button(
         &self,
         label: &'static str,
-        mode: DiffMode,
-        active: DiffMode,
-        cx: &mut gpui::Context<Self>,
+        selected: bool,
     ) -> gpui::Stateful<Div> {
-        let selected = mode == active;
         div()
             .id(label)
             .px(px(9.0))
@@ -489,6 +575,18 @@ impl SourcefourWindow {
             } else {
                 self.theme.text_faint
             })
+            .child(label)
+    }
+
+    /// One segment of the unified/split toggle.
+    pub(super) fn diff_mode_button(
+        &self,
+        label: &'static str,
+        mode: DiffMode,
+        active: DiffMode,
+        cx: &mut gpui::Context<Self>,
+    ) -> gpui::Stateful<Div> {
+        self.segment_button(label, mode == active)
             .on_click(cx.listener(move |this, _, _, cx| {
                 if let Some(view) = &mut this.diff_view {
                     view.mode = mode;
@@ -498,7 +596,6 @@ impl SourcefourWindow {
                 this.persist_ui_state(cx);
                 cx.notify();
             }))
-            .child(label)
     }
 
     /// Side-by-side before/after panes for an image comparison (§6.11).
@@ -779,6 +876,11 @@ impl SourcefourWindow {
         let Some(view) = &self.diff_view else {
             return 0;
         };
+        // A preview scrolls natively, so it owns no rows and shows no
+        // scrollbar; reporting its blocks here would scrub the wrong list.
+        if preview::showing(view) {
+            return 0;
+        }
         match (&view.content, view.mode) {
             (Some(DiffContent::Text { .. }), DiffMode::Split) => {
                 view.split.as_ref().map_or(0, Vec::len)

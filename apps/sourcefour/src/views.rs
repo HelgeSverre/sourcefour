@@ -9,6 +9,7 @@
 //! - [`history_pane`] — the virtualized commit list and graph canvas
 //! - [`details`] — the commit message and changed-files pane
 //! - [`diff`] — the full-window diff overlay, text and image
+//! - [`preview`] — the overlay's rendered-Markdown pane and its toggle
 //! - [`branch_dialog`] — the create-branch dialog
 //! - [`github`] — the GitHub connection and its cached read surfaces
 //!
@@ -43,10 +44,11 @@ mod details;
 mod diff;
 mod github;
 mod history_pane;
+mod preview;
 mod sidebar;
 
 use branch_dialog::BranchDialog;
-use diff::{DiffMode, DiffView};
+use diff::{DiffMode, DiffOrigin, DiffView};
 use github::{Cached, GithubChecks};
 use sidebar::{SidebarSections, head_label};
 
@@ -1035,11 +1037,21 @@ impl SourcefourWindow {
             demo::Scene::Split => DiffMode::Split,
             _ => DiffMode::Unified,
         };
+        let preview = scene == demo::Scene::Preview;
         let mut view = DiffView {
             title: scene.file().to_owned(),
             status: ChangeKind::Modified,
+            // The scenes have no repository behind them; the origin exists so
+            // the header can tell a document from a source file.
+            origin: DiffOrigin::WorkingTree {
+                path: sourcefour_model::RepoPath(scene.file().as_bytes().to_vec()),
+                staged: false,
+            },
             content: Some(scene.content()),
             mode,
+            show_preview: preview,
+            // Seeded rather than loaded: a capture cannot wait on an async read.
+            preview: preview.then(preview::demo_state),
             split: None,
             before_image: None,
             after_image: None,
@@ -1336,7 +1348,7 @@ impl Render for SourcefourWindow {
                     ),
             )
             .child(self.status())
-            .children(self.diff_overlay(cx))
+            .children(self.diff_overlay(window, cx))
             .children(self.branch_overlay(cx))
             .children(self.settings_overlay(cx))
             .children(self.actions_overlay(cx));

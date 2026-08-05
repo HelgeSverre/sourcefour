@@ -352,12 +352,14 @@ pub(crate) enum Scene {
     Actions,
     /// The working-tree row selected, staged and unstaged files listed.
     Commit,
+    /// The diff overlay on a Markdown file, rendered rather than diffed.
+    Preview,
 }
 
 impl Scene {
     /// Every scene name `--scene` accepts, for the usage line.
     pub(crate) const NAMES: &'static str =
-        "overview, diff, split, image, settings, actions, commit";
+        "overview, diff, split, image, settings, actions, commit, preview";
 
     pub(crate) fn from_name(name: &str) -> Option<Self> {
         match name {
@@ -368,16 +370,19 @@ impl Scene {
             "settings" => Some(Self::Settings),
             "actions" => Some(Self::Actions),
             "commit" => Some(Self::Commit),
+            "preview" => Some(Self::Preview),
             _ => None,
         }
     }
 
     /// The changed file the scene's overlay is opened over. The text scenes
     /// name the modified entry of [`files`], so the overlay and the list
-    /// behind it describe the same change.
+    /// behind it describe the same change; the preview scene names a document
+    /// instead, since the toggle only appears for one.
     pub(crate) fn file(self) -> &'static str {
         match self {
             Self::Image => "assets/icon.png",
+            Self::Preview => "README.md",
             _ => "apps/sourcefour/src/views.rs",
         }
     }
@@ -385,20 +390,70 @@ impl Scene {
     /// The overlay's content, formatted by the shipping diff code so a capture
     /// can never show lines the product would not produce.
     pub(crate) fn content(self) -> DiffContent {
-        match self {
-            Self::Image => DiffContent::Image {
-                before: Some(include_bytes!("../assets/demo/icon-before.png").to_vec()),
-                after: Some(include_bytes!("../assets/demo/icon-after.png").to_vec()),
-                format: String::from("png"),
-            },
-            _ => sourcefour_git::unified(
-                SIDEBAR_BEFORE.as_bytes(),
-                SIDEBAR_AFTER.as_bytes(),
-                sourcefour_git::DiffLimits::default(),
-            ),
-        }
+        let (before, after) = match self {
+            Self::Image => {
+                return DiffContent::Image {
+                    before: Some(include_bytes!("../assets/demo/icon-before.png").to_vec()),
+                    after: Some(include_bytes!("../assets/demo/icon-after.png").to_vec()),
+                    format: String::from("png"),
+                };
+            }
+            // The document arriving nearly whole, so Source has real lines to
+            // show when the capture's Preview is toggled off.
+            Self::Preview => ("# Sourcefour\n", PREVIEW_MARKDOWN),
+            _ => (SIDEBAR_BEFORE, SIDEBAR_AFTER),
+        };
+        sourcefour_git::unified(
+            before.as_bytes(),
+            after.as_bytes(),
+            sourcefour_git::DiffLimits::default(),
+        )
     }
 }
+
+/// The image [`PREVIEW_MARKDOWN`] resolves, reusing the image scene's bytes.
+pub(crate) const PREVIEW_IMAGE: &[u8] = include_bytes!("../assets/demo/icon-after.png");
+/// The reference [`PREVIEW_IMAGE`] answers.
+pub(crate) const PREVIEW_IMAGE_PATH: &str = "assets/demo/icon-after.png";
+/// A reference nothing answers, so the capture covers the not-found frame.
+pub(crate) const PREVIEW_MISSING_IMAGE_PATH: &str = "assets/demo/retired-logo.png";
+/// An http reference, which the preview reports and never fetches.
+pub(crate) const PREVIEW_REMOTE_IMAGE_URL: &str =
+    "https://img.shields.io/badge/build-passing-green.svg";
+
+/// The document `--scene preview` renders: one of every block the pane draws,
+/// and one of every way an image reference can resolve.
+pub(crate) const PREVIEW_MARKDOWN: &str = r"# Sourcefour
+
+A fast, native Git history browser you launch from your terminal. Run
+`sourcefour` in any repository — it opens on the **current worktree**, reads
+through [gix](https://github.com/GitoxideLabs/gitoxide), and never blocks the
+window on a *walk*. ~~Electron~~ not included.
+
+![The application window](assets/demo/icon-after.png)
+
+## Getting started
+
+```rust
+fn main() {
+    sourcefour::launch(std::env::current_dir()?)?;
+}
+```
+
+1. Install with `cargo install sourcefour`.
+2. Open a repository:
+   - `sourcefour` uses the working directory
+   - `sourcefour ~/code/project` takes a path
+3. Press `?` for the key map.
+
+> History loads in batches, so the first rows paint before the walk finishes.
+
+---
+
+![build status](https://img.shields.io/badge/build-passing-green.svg)
+
+![The retired logo](assets/demo/retired-logo.png)
+";
 
 /// The two sides of [`Scene::file`], diffed live to build the overlay's lines.
 const SIDEBAR_BEFORE: &str = r#"    /// One worktree row: its name, the branch it has checked out, its path.

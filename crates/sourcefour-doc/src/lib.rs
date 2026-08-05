@@ -360,9 +360,11 @@ impl<'s> Builder<'s> {
                     .trim_end()
                     .to_owned();
                 skip_to(events, TagEnd::Table);
+                // The language marks the degradation, so a renderer can say
+                // "this was a table" instead of passing it off as code.
                 self.push_block(DocBlock {
                     kind: DocBlockKind::Code {
-                        language: None,
+                        language: Some(String::from("table")),
                         text,
                     },
                     source_range: range,
@@ -737,7 +739,11 @@ mod tests {
             panic!("one code block, got {blocks:?}");
         };
 
-        assert_eq!(*language, None);
+        assert_eq!(
+            language.as_deref(),
+            Some("table"),
+            "the degradation is marked, not passed off as plain code"
+        );
         assert_eq!(text, source.trim_end());
     }
 

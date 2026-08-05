@@ -5393,6 +5393,7 @@ dependencies = [
  "serde",
  "serde_json",
  "smallvec",
+ "sourcefour-doc",
  "sourcefour-git",
  "sourcefour-github",
  "sourcefour-graph",
