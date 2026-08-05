@@ -1263,7 +1263,13 @@ impl SourcefourWindow {
     fn root_drag_handlers(root: Div, cx: &mut gpui::Context<Self>) -> Div {
         root.on_mouse_move(
             cx.listener(|this, event: &gpui::MouseMoveEvent, window, cx| {
-                this.drag_move(event.position.x.0, event.position.y.0, window, cx);
+                this.drag_move(
+                    event.position.x.0,
+                    event.position.y.0,
+                    event.pressed_button,
+                    window,
+                    cx,
+                );
             }),
         )
         .on_mouse_up(
@@ -1279,9 +1285,17 @@ impl SourcefourWindow {
         &mut self,
         x: f32,
         y: f32,
+        pressed: Option<gpui::MouseButton>,
         window: &Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        // A release the window never routed — outside its bounds, during a
+        // focus switch — must not leave the drag armed and sticky: the move
+        // event itself says whether the button is still held.
+        if self.drag.is_some() && drag_lost_its_button(pressed) {
+            self.end_drag(cx);
+            return;
+        }
         match self.drag {
             None => {}
             Some(Drag::Splitter(splitter)) => {
@@ -1394,6 +1408,11 @@ impl sourcefour_git::OperationSink for DiscardSink {
     fn report(&self, _: sourcefour_model::OperationProgress) {}
 }
 
+/// Whether a move event proves the dragging button is no longer held.
+fn drag_lost_its_button(pressed: Option<gpui::MouseButton>) -> bool {
+    pressed != Some(gpui::MouseButton::Left)
+}
+
 /// True when a click stayed put — a slider or scrollbar drag released
 /// over a backdrop is the end of a drag, not a request to close.
 pub(crate) fn is_true_click(event: &gpui::ClickEvent) -> bool {
@@ -1477,7 +1496,19 @@ mod tests {
         Generation, RepoEnvelope, RepoFailure, RepoFailureKind, RepoSessionId, RequestId,
     };
 
-    use super::{ColumnVisibility, ErrorWindow, belongs_to, counted};
+    use super::{ColumnVisibility, ErrorWindow, belongs_to, counted, drag_lost_its_button};
+
+    #[test]
+    fn a_drag_survives_only_a_held_left_button() {
+        use gpui::MouseButton;
+
+        assert!(!drag_lost_its_button(Some(MouseButton::Left)));
+        assert!(
+            drag_lost_its_button(None),
+            "a release the window never saw must still end the drag"
+        );
+        assert!(drag_lost_its_button(Some(MouseButton::Right)));
+    }
 
     #[test]
     fn change_letters_follow_git_conventions() {

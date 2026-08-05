@@ -312,7 +312,13 @@ impl SourcefourWindow {
                 // route here.
                 .on_mouse_move(
                     cx.listener(|this, event: &gpui::MouseMoveEvent, window, cx| {
-                        this.drag_move(event.position.x.0, event.position.y.0, window, cx);
+                        this.drag_move(
+                            event.position.x.0,
+                            event.position.y.0,
+                            event.pressed_button,
+                            window,
+                            cx,
+                        );
                     }),
                 )
                 .on_mouse_up(
