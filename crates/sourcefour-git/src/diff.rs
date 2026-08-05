@@ -6,6 +6,7 @@
 use gix_imara_diff::{Algorithm, BasicLineDiffPrinter, Diff, InternedInput, UnifiedDiffConfig};
 use sourcefour_model::{
     DiffContent, DiffLine, DiffLineKind, FileDiff, FileDiffRequest, RepoFailure, RepoLocation,
+    RepoPath,
 };
 
 use crate::{
@@ -71,15 +72,62 @@ pub fn file_diff_with_limits(
     let old_bytes = blob_at(old_tree.as_ref(), &request.path.0);
     let new_bytes = blob_at(Some(&new_tree), &request.path.0);
 
-    let content = match (old_bytes, new_bytes) {
+    Ok(FileDiff {
+        request: request.clone(),
+        content: content_for(&request.path, old_bytes, new_bytes, limits),
+    })
+}
+
+/// One working-tree file's diff: the index against HEAD when `staged`, the
+/// filesystem against the index otherwise — the two boundaries staging moves.
+///
+/// # Errors
+///
+/// Returns a typed failure when the repository or its index cannot be read.
+/// A path missing from both sides is `DiffContent::Unavailable`, not an error.
+pub fn worktree_file_diff(
+    location: &RepoLocation,
+    path: &RepoPath,
+    staged: bool,
+) -> Result<DiffContent, RepoFailure> {
+    let repository =
+        gix::open(&location.git_dir).map_err(|error| open_failure(&location.git_dir, &error))?;
+    let index = repository
+        .index_or_empty()
+        .map_err(|error| open_failure(&location.git_dir, &error))?;
+    let index_bytes = index
+        .entry_by_path(path.0.as_slice().into())
+        .and_then(|entry| repository.find_object(entry.id).ok())
+        .map(|object| object.data.clone());
+    let (old, new) = if staged {
+        // An unborn HEAD has no tree, so everything staged reads as added.
+        let head_tree = repository
+            .head_commit()
+            .ok()
+            .and_then(|commit| commit.tree().ok());
+        (blob_at(head_tree.as_ref(), &path.0), index_bytes)
+    } else {
+        (index_bytes, worktree_bytes(location, &path.0))
+    };
+    Ok(content_for(path, old, new, DiffLimits::default()))
+}
+
+/// The blob-pair tail every diff shares: image, binary, text, or absent.
+fn content_for(
+    path: &RepoPath,
+    old: Option<Vec<u8>>,
+    new: Option<Vec<u8>>,
+    limits: DiffLimits,
+) -> DiffContent {
+    match (old, new) {
         (None, None) => DiffContent::Unavailable {
             message: format!(
                 "{} is not present in this comparison.",
-                request.path.display_lossy()
+                path.display_lossy()
             ),
         },
         (old, new) => {
-            if let Some(format) = image_format(&request.path.0) {
+            if let Some(format) = image_format(&path.0) {
                 DiffContent::Image {
                     before: old,
                     after: new,
@@ -90,19 +138,33 @@ pub fn file_diff_with_limits(
                 let new = new.unwrap_or_default();
                 if is_binary(&old) || is_binary(&new) {
                     DiffContent::Binary {
-                        message: format!("{} is binary.", request.path.display_lossy()),
+                        message: format!("{} is binary.", path.display_lossy()),
                     }
                 } else {
                     unified(&old, &new, limits)
                 }
             }
         }
-    };
+    }
+}
 
-    Ok(FileDiff {
-        request: request.clone(),
-        content,
-    })
+/// Reads a worktree file, `None` when it is gone or the repository is bare.
+fn worktree_bytes(location: &RepoLocation, path: &[u8]) -> Option<Vec<u8>> {
+    let root = location.active_worktree_path.as_deref()?;
+    std::fs::read(root.join(bytes_as_path(path))).ok()
+}
+
+/// A repository-relative byte path as a filesystem component.
+fn bytes_as_path(path: &[u8]) -> std::path::PathBuf {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        std::path::PathBuf::from(std::ffi::OsStr::from_bytes(path))
+    }
+    #[cfg(not(unix))]
+    {
+        std::path::PathBuf::from(String::from_utf8_lossy(path).into_owned())
+    }
 }
 
 /// The lowercased image extension of `path` when the viewer can render it
@@ -222,7 +284,7 @@ mod tests {
     use sourcefour_model::{DiffContent, DiffLineKind, DiffParent, FileDiffRequest, Oid, RepoPath};
     use sourcefour_test_support::TempRepo;
 
-    use super::{DiffLimits, file_diff, file_diff_with_limits};
+    use super::{DiffLimits, file_diff, file_diff_with_limits, worktree_file_diff};
     use crate::discover;
 
     fn head(repository: &TempRepo) -> Result<Oid, Box<dyn std::error::Error>> {
@@ -425,6 +487,81 @@ mod tests {
             panic!("no diff is too large to render by default");
         };
         assert!(lines.len() > 25_000, "every line is present");
+        Ok(())
+    }
+
+    #[test]
+    fn worktree_diffs_track_both_boundaries() -> Result<(), Box<dyn std::error::Error>> {
+        let repository = TempRepo::init();
+        std::fs::write(repository.path().join("a.txt"), "one\ntwo\n")?;
+        repository.git(&["add", "."]);
+        repository.commit("base");
+        // Staged: two -> TWO. Unstaged on top: a third line.
+        std::fs::write(repository.path().join("a.txt"), "one\nTWO\n")?;
+        repository.git(&["add", "."]);
+        std::fs::write(repository.path().join("a.txt"), "one\nTWO\nthree\n")?;
+
+        let location = discover(repository.path())?;
+        let path = RepoPath(b"a.txt".to_vec());
+
+        let DiffContent::Text { lines } = worktree_file_diff(&location, &path, true)? else {
+            panic!("the staged comparison renders as text");
+        };
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.kind == DiffLineKind::Addition && line.text == "TWO"),
+            "staged compares HEAD to the index"
+        );
+        assert!(
+            !lines.iter().any(|line| line.text == "three"),
+            "the unstaged edit is invisible to the staged side"
+        );
+
+        let DiffContent::Text { lines } = worktree_file_diff(&location, &path, false)? else {
+            panic!("the unstaged comparison renders as text");
+        };
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.kind == DiffLineKind::Addition && line.text == "three"),
+            "unstaged compares the index to the filesystem"
+        );
+        assert!(
+            !lines
+                .iter()
+                .any(|line| line.kind == DiffLineKind::Deletion && line.text == "two"),
+            "the staged edit is already in the unstaged baseline"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn an_untracked_file_is_all_additions_unstaged() -> Result<(), Box<dyn std::error::Error>> {
+        let repository = TempRepo::init();
+        repository.commit("empty");
+        std::fs::write(repository.path().join("fresh.txt"), "brand\nnew\n")?;
+
+        let location = discover(repository.path())?;
+        let path = RepoPath(b"fresh.txt".to_vec());
+
+        let DiffContent::Text { lines } = worktree_file_diff(&location, &path, false)? else {
+            panic!("an untracked text file renders as text");
+        };
+        assert_eq!(
+            lines
+                .iter()
+                .filter(|line| line.kind == DiffLineKind::Addition)
+                .count(),
+            2
+        );
+        assert!(
+            matches!(
+                worktree_file_diff(&location, &path, true)?,
+                DiffContent::Unavailable { .. }
+            ),
+            "an untracked path has no staged comparison"
+        );
         Ok(())
     }
 

@@ -165,27 +165,80 @@ impl SourcefourWindow {
                 .spawn(async move { sourcefour_git::file_diff(&location, &request) })
                 .await;
             this.update(cx, |this, cx| {
-                if this.diff_request != token {
-                    return;
-                }
-                if let Some(view) = &mut this.diff_view {
-                    view.content = Some(match diff {
-                        Ok(diff) => diff.content,
-                        Err(failure) => DiffContent::Unavailable {
-                            message: failure.user.message,
-                        },
-                    });
-                    view.split = None;
-                    view.ensure_split();
-                    view.before_image = None;
-                    view.after_image = None;
-                    view.ensure_images();
-                }
-                cx.notify();
+                this.set_diff_content(token, diff.map(|diff| diff.content), cx);
             })
             .ok();
         })
         .detach();
+        cx.notify();
+    }
+
+    /// Opens the diff overlay for one working-tree file: the index against
+    /// HEAD for a staged entry, the filesystem against the index otherwise.
+    pub(super) fn open_worktree_diff(
+        &mut self,
+        file: &ChangedFile,
+        staged: bool,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let Some(location) = self.location.clone() else {
+            return;
+        };
+        let path = file
+            .new_path
+            .as_ref()
+            .or(file.old_path.as_ref())
+            .cloned()
+            .unwrap_or_else(|| sourcefour_model::RepoPath(Vec::new()));
+        self.diff_view = Some(DiffView {
+            title: path.display_lossy(),
+            status: file.status,
+            content: None,
+            mode: self.preferred_diff_mode,
+            split: None,
+            before_image: None,
+            after_image: None,
+            slider: 0.5,
+        });
+        self.diff_request += 1;
+        let token = self.diff_request;
+        self.diff_scroll = UniformListScrollHandle::new();
+        self.diff_focus.focus(window);
+        cx.spawn(async move |this, cx| {
+            let content = cx
+                .background_executor()
+                .spawn(async move { sourcefour_git::worktree_file_diff(&location, &path, staged) })
+                .await;
+            this.update(cx, |this, cx| {
+                this.set_diff_content(token, content, cx);
+            })
+            .ok();
+        })
+        .detach();
+        cx.notify();
+    }
+
+    /// Applies a loaded diff to the open view, unless the request went stale.
+    fn set_diff_content(
+        &mut self,
+        token: u64,
+        content: Result<DiffContent, sourcefour_model::RepoFailure>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.diff_request != token {
+            return;
+        }
+        if let Some(view) = &mut self.diff_view {
+            view.content = Some(content.unwrap_or_else(|failure| DiffContent::Unavailable {
+                message: failure.user.message,
+            }));
+            view.split = None;
+            view.ensure_split();
+            view.before_image = None;
+            view.after_image = None;
+            view.ensure_images();
+        }
         cx.notify();
     }
 

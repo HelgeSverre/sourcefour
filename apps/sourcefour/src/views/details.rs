@@ -323,7 +323,7 @@ impl SourcefourWindow {
                             .iter()
                             .flat_map(|files| files.files.clone())
                             .enumerate()
-                            .map(|(index, file)| self.file_row(index, &file, cx)),
+                            .map(|(index, file)| self.file_row(index, &file, None, cx)),
                     ),
             )
     }
@@ -387,9 +387,17 @@ impl SourcefourWindow {
                             .min_h(px(0.0))
                             .overflow_y_scroll()
                             .pb(px(6.0))
-                            .children(self.working_tree_section("STAGED", summary.staged, &status.staged, 0, cx))
+                            .children(self.working_tree_section(
+                                "STAGED",
+                                true,
+                                summary.staged,
+                                &status.staged,
+                                0,
+                                cx,
+                            ))
                             .children(self.working_tree_section(
                                 "UNSTAGED",
+                                false,
                                 summary.unstaged,
                                 &status.unstaged,
                                 status.staged.len(),
@@ -404,6 +412,7 @@ impl SourcefourWindow {
     fn working_tree_section(
         &self,
         label: &'static str,
+        staged: bool,
         count: usize,
         files: &[ChangedFile],
         id_offset: usize,
@@ -420,7 +429,7 @@ impl SourcefourWindow {
                 .into_any_element(),
         ];
         rows.extend(files.iter().enumerate().map(|(index, file)| {
-            self.file_row(id_offset + index, file, cx)
+            self.file_row(id_offset + index, file, Some(staged), cx)
                 .into_any_element()
         }));
         rows
@@ -442,6 +451,7 @@ impl SourcefourWindow {
         &self,
         index: usize,
         file: &ChangedFile,
+        staged: Option<bool>,
         cx: &mut gpui::Context<Self>,
     ) -> gpui::Stateful<Div> {
         let color = change_color(&self.theme, file.status);
@@ -461,8 +471,9 @@ impl SourcefourWindow {
             .text_size(px(11.0))
             .cursor_pointer()
             .hover(|style| style.bg(self.theme.bg_hover))
-            .on_click(cx.listener(move |this, _, window, cx| {
-                this.open_diff(&clicked, window, cx);
+            .on_click(cx.listener(move |this, _, window, cx| match staged {
+                Some(staged) => this.open_worktree_diff(&clicked, staged, window, cx),
+                None => this.open_diff(&clicked, window, cx),
             }))
             .child(
                 div()
