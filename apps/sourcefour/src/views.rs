@@ -1128,17 +1128,31 @@ impl SourcefourWindow {
         }
     }
 
-    /// Applies one settings mutation and writes the file immediately, the
-    /// same contract as Zed's settings controls.
+    /// Applies one settings mutation, persists it, and lets exactly the
+    /// sections that changed react. Sections derive `PartialEq`, so "what
+    /// changed" needs no bookkeeping beyond the comparison.
     pub(crate) fn update_settings(
         &mut self,
         cx: &mut gpui::Context<Self>,
         apply: impl FnOnce(&mut crate::settings::AppSettings),
     ) {
+        let before = self.settings.clone();
         apply(&mut self.settings);
-        self.settings.save();
-        // A changed toggle or auth method takes effect without a restart.
-        self.refresh_github(cx);
+        if self.settings == before {
+            return; // Re-selecting the active choice is not a change.
+        }
+        // Demo interactions must never overwrite this user's real settings.
+        if !self.demo {
+            let settings = self.settings.clone();
+            cx.background_executor()
+                .spawn(async move { settings.save() })
+                .detach();
+        }
+        // A changed toggle or auth method takes effect without a restart — and
+        // a changed line height does not go asking GitHub anything.
+        if self.settings.github != before.github {
+            self.refresh_github(cx);
+        }
         cx.notify();
     }
 
