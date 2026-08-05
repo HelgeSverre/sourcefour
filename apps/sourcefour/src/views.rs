@@ -1160,12 +1160,14 @@ impl SourcefourWindow {
     fn settings_overlay(&self, cx: &mut gpui::Context<Self>) -> Option<impl IntoElement + use<>> {
         let section = self.settings_view?;
         Some(crate::settings_ui::overlay(
-            &self.settings,
-            section,
-            &self.github_connection,
-            &self.token_input,
-            &self.theme,
-            &self.settings_focus,
+            &crate::settings_ui::SettingsView {
+                settings: &self.settings,
+                section,
+                connection: &self.github_connection,
+                token_input: &self.token_input,
+                theme: &self.theme,
+                focus: &self.settings_focus,
+            },
             cx,
         ))
     }

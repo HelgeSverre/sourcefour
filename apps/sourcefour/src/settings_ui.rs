@@ -9,7 +9,23 @@ use gpui::{Div, FocusableWrapper, FontWeight, div, prelude::*, px, svg};
 
 use crate::{settings::AppSettings, settings::AuthMethod, theme::Theme, views::SourcefourWindow};
 
+/// Everything one frame of the overlay reads, borrowed from the window.
+///
+/// The window owns all of it and none of it is the overlay's to keep, so
+/// this is a parameter list with names rather than a state object.
+pub(crate) struct SettingsView<'a> {
+    pub(crate) settings: &'a AppSettings,
+    pub(crate) section: SettingsSection,
+    pub(crate) connection: &'a GithubConnection,
+    pub(crate) token_input: &'a gpui::Entity<crate::text_input::TextInput>,
+    pub(crate) theme: &'a Theme,
+    pub(crate) focus: &'a gpui::FocusHandle,
+}
+
 /// One page of the settings overlay.
+///
+/// A new section is a variant, a `title` arm and a `cards` arm — the three
+/// are adjacent so none of them can be the one that gets forgotten.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) enum SettingsSection {
     #[default]
@@ -19,13 +35,21 @@ pub(crate) enum SettingsSection {
 }
 
 impl SettingsSection {
-    const ALL: [Self; 3] = [Self::GitHub, Self::Diffs, Self::About];
+    const ALL: &'static [Self] = &[Self::GitHub, Self::Diffs, Self::About];
 
-    fn title(self) -> &'static str {
+    const fn title(self) -> &'static str {
         match self {
             Self::GitHub => "GitHub",
             Self::Diffs => "Diffs",
             Self::About => "About",
+        }
+    }
+
+    fn cards(self, view: &SettingsView<'_>, cx: &mut gpui::Context<SourcefourWindow>) -> Vec<Div> {
+        match self {
+            Self::GitHub => github_cards(view, cx),
+            Self::Diffs => diffs_cards(view, cx),
+            Self::About => about_cards(view.theme, cx),
         }
     }
 }
@@ -46,17 +70,13 @@ pub(crate) enum GithubConnection {
 
 /// The full-window settings overlay: backdrop, nav, and the active section.
 pub(crate) fn overlay(
-    settings: &AppSettings,
-    section: SettingsSection,
-    connection: &GithubConnection,
-    token_input: &gpui::Entity<crate::text_input::TextInput>,
-    theme: &Theme,
-    focus: &gpui::FocusHandle,
+    view: &SettingsView<'_>,
     cx: &mut gpui::Context<SourcefourWindow>,
 ) -> FocusableWrapper<gpui::Stateful<Div>> {
+    let theme = view.theme;
     crate::views::modal_backdrop("settings-overlay", theme)
         .key_context("Settings")
-        .track_focus(focus)
+        .track_focus(view.focus)
         .items_center()
         .justify_center()
         .on_click(cx.listener(|this, _, window, cx| {
@@ -75,15 +95,8 @@ pub(crate) fn overlay(
                 .shadow_lg()
                 .overflow_hidden()
                 .on_click(|_, _, cx| cx.stop_propagation())
-                .child(nav(section, theme, cx))
-                .child(content(
-                    settings,
-                    section,
-                    connection,
-                    token_input,
-                    theme,
-                    cx,
-                )),
+                .child(nav(view.section, theme, cx))
+                .child(content(view, cx)),
         )
 }
 
@@ -108,7 +121,7 @@ fn nav(active: SettingsSection, theme: &Theme, cx: &mut gpui::Context<Sourcefour
                 .text_color(theme.text_faint)
                 .child("SETTINGS"),
         )
-        .children(SettingsSection::ALL.into_iter().map(|section| {
+        .children(SettingsSection::ALL.iter().copied().map(|section| {
             let selected = section == active;
             div()
                 .id(section.title())
@@ -140,14 +153,8 @@ fn nav(active: SettingsSection, theme: &Theme, cx: &mut gpui::Context<Sourcefour
 }
 
 /// The right column: section header with close, then that section's cards.
-fn content(
-    settings: &AppSettings,
-    section: SettingsSection,
-    connection: &GithubConnection,
-    token_input: &gpui::Entity<crate::text_input::TextInput>,
-    theme: &Theme,
-    cx: &mut gpui::Context<SourcefourWindow>,
-) -> Div {
+fn content(view: &SettingsView<'_>, cx: &mut gpui::Context<SourcefourWindow>) -> Div {
+    let (section, theme) = (view.section, view.theme);
     div()
         .flex_1()
         .min_w(px(1.0))
@@ -208,56 +215,37 @@ fn content(
                 .flex()
                 .flex_col()
                 .gap(px(14.0))
-                .children(match section {
-                    SettingsSection::GitHub => {
-                        github_cards(settings, connection, token_input, theme, cx)
-                    }
-                    SettingsSection::Diffs => diffs_cards(settings, theme, cx),
-                    SettingsSection::About => about_cards(theme, cx),
-                }),
+                .children(section.cards(view, cx)),
         )
 }
 
-fn github_cards(
-    settings: &AppSettings,
-    connection: &GithubConnection,
-    token_input: &gpui::Entity<crate::text_input::TextInput>,
-    theme: &Theme,
-    cx: &mut gpui::Context<SourcefourWindow>,
-) -> Vec<Div> {
-    let enabled = settings.github.enabled;
-    let method = settings.github.auth_method;
+fn github_cards(view: &SettingsView<'_>, cx: &mut gpui::Context<SourcefourWindow>) -> Vec<Div> {
+    let theme = view.theme;
+    let enabled = view.settings.github.enabled;
+    let method = view.settings.github.auth_method;
     let mut rows = vec![
-        row(
-            theme,
-            "Enable GitHub integration",
-            "Show pull requests and checks for github.com remotes.",
-            segmented(
-                theme,
-                "github-enabled",
-                &[("Off", false), ("On", true)],
-                enabled,
-                cx,
-                |settings, on| settings.github.enabled = on,
-            ),
-        ),
-        row(
-            theme,
-            "Authentication",
-            "How API requests identify you.",
-            segmented(
-                theme,
-                "github-auth",
-                &[
-                    ("Off", AuthMethod::Off),
-                    ("Access token", AuthMethod::Token),
-                    ("gh CLI", AuthMethod::GhCli),
-                ],
-                method,
-                cx,
-                |settings, method| settings.github.auth_method = method,
-            ),
-        ),
+        Choice {
+            id: "github-enabled",
+            name: "Enable GitHub integration",
+            description: "Show pull requests and checks for github.com remotes.",
+            choices: &[("Off", false), ("On", true)],
+            active: enabled,
+            apply: |settings, on| settings.github.enabled = on,
+        }
+        .row(theme, cx),
+        Choice {
+            id: "github-auth",
+            name: "Authentication",
+            description: "How API requests identify you.",
+            choices: &[
+                ("Off", AuthMethod::Off),
+                ("Access token", AuthMethod::Token),
+                ("gh CLI", AuthMethod::GhCli),
+            ],
+            active: method,
+            apply: |settings, method| settings.github.auth_method = method,
+        }
+        .row(theme, cx),
     ];
     if enabled && method == AuthMethod::Token {
         rows.push(row(
@@ -281,7 +269,7 @@ fn github_cards(
                         .border_color(theme.border_strong)
                         .bg(theme.bg_page)
                         .text_size(px(11.0))
-                        .child(token_input.clone()),
+                        .child(view.token_input.clone()),
                 )
                 .child(button(
                     theme,
@@ -304,7 +292,7 @@ fn github_cards(
             }),
         ));
     }
-    if enabled && let Some(status) = status_row(connection, theme, cx) {
+    if enabled && let Some(status) = status_row(view.connection, theme, cx) {
         rows.push(status);
     }
     vec![card(theme, rows)]
@@ -372,29 +360,24 @@ fn button(
 /// Diff overlay typography: line height as a unitless multiplier, offered as
 /// two presets. The settings file itself accepts any number; only this
 /// control is preset-based.
-fn diffs_cards(
-    settings: &AppSettings,
-    theme: &Theme,
-    cx: &mut gpui::Context<SourcefourWindow>,
-) -> Vec<Div> {
+fn diffs_cards(view: &SettingsView<'_>, cx: &mut gpui::Context<SourcefourWindow>) -> Vec<Div> {
+    let theme = view.theme;
     vec![
         card(
             theme,
-            vec![row(
-                theme,
-                "Line height",
-                "Spacing between diff lines, as a multiple of the mono font size.",
-                segmented(
-                    theme,
-                    "diff-line-height",
-                    &[("Standard", 1.55), ("Comfortable", 1.8)],
-                    settings.diff.line_height,
-                    cx,
-                    |settings, height| settings.diff.line_height = height,
-                ),
-            )],
+            vec![
+                Choice {
+                    id: "diff-line-height",
+                    name: "Line height",
+                    description: "Spacing between diff lines, as a multiple of the mono font size.",
+                    choices: &[("Standard", 1.55), ("Comfortable", 1.8)],
+                    active: view.settings.diff.line_height,
+                    apply: |settings, height| settings.diff.line_height = height,
+                }
+                .row(theme, cx),
+            ],
         ),
-        card(theme, vec![video_row(settings, theme)]),
+        card(theme, vec![video_row(view.settings, theme)]),
     ]
 }
 
@@ -504,46 +487,61 @@ fn row(
         .child(control)
 }
 
-/// A segmented chip control: one segment per choice, the active one lit.
-/// Selecting a segment applies its value through `update_settings`.
-fn segmented<T: Copy + PartialEq + 'static>(
-    theme: &Theme,
+/// A row whose control is a fixed set of choices: the shape almost every
+/// setting has, and the reason most of this section is data rather than
+/// layout. `apply` is a plain fn pointer, so a choice carries no captures
+/// and the whole row is a literal.
+struct Choice<T: Copy + PartialEq + 'static> {
     id: &'static str,
+    name: &'static str,
+    description: &'static str,
     choices: &'static [(&'static str, T)],
     active: T,
-    cx: &mut gpui::Context<SourcefourWindow>,
     apply: fn(&mut AppSettings, T),
-) -> Div {
-    div()
-        .flex_none()
-        .flex()
-        .rounded(px(5.0))
-        .border_1()
-        .border_color(theme.border_strong)
-        .overflow_hidden()
-        .children(choices.iter().enumerate().map(|(index, &(label, value))| {
-            let selected = value == active;
-            div()
-                .id((id, index))
-                .px(px(9.0))
-                .py(px(2.0))
-                .cursor_pointer()
-                .text_size(px(10.5))
-                .bg(if selected {
-                    theme.bg_selected
-                } else {
-                    theme.bg_list
-                })
-                .text_color(if selected {
-                    theme.text_primary
-                } else {
-                    theme.text_faint
-                })
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.update_settings(cx, move |settings| apply(settings, value));
-                }))
-                .child(label)
-        }))
+}
+
+impl<T: Copy + PartialEq + 'static> Choice<T> {
+    /// The row, its control a segmented chip strip with the active one lit.
+    /// Selecting a segment applies its value through `update_settings`.
+    fn row(self, theme: &Theme, cx: &mut gpui::Context<SourcefourWindow>) -> Div {
+        let (id, active, apply) = (self.id, self.active, self.apply);
+        let control = div()
+            .flex_none()
+            .flex()
+            .rounded(px(5.0))
+            .border_1()
+            .border_color(theme.border_strong)
+            .overflow_hidden()
+            .children(
+                self.choices
+                    .iter()
+                    .enumerate()
+                    .map(|(index, &(label, value))| {
+                        let selected = value == active;
+                        div()
+                            .id((id, index))
+                            .px(px(9.0))
+                            .py(px(2.0))
+                            .cursor_pointer()
+                            .text_size(px(10.5))
+                            .bg(if selected {
+                                theme.bg_selected
+                            } else {
+                                theme.bg_list
+                            })
+                            .text_color(if selected {
+                                theme.text_primary
+                            } else {
+                                theme.text_faint
+                            })
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.update_settings(cx, move |settings| apply(settings, value));
+                            }))
+                            .child(label)
+                    }),
+            );
+        row(theme, self.name, self.description, control)
+    }
 }
 
 /// A plain read-only value on the control side.
