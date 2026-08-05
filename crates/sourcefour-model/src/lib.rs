@@ -690,8 +690,23 @@ pub enum DiffContent {
         before: Option<Vec<u8>>,
         /// New-side encoded bytes; absent when the file was deleted.
         after: Option<Vec<u8>>,
-        /// Lowercased extension that identified the format ("png", "jpg", …).
+        /// Normalized format name that identified it ("png", "jpeg", …).
         format: String,
+    },
+    /// The compared path is a video: a poster frame and what the container says.
+    ///
+    /// The blobs themselves are not carried. A video is only ever looked at,
+    /// never diffed, so each side keeps a poster small enough to draw and a
+    /// handful of numbers instead of however many megabytes it weighed.
+    Video {
+        /// Old-side poster as PNG bytes; absent when added, or when unreadable.
+        before: Option<Vec<u8>>,
+        /// New-side poster as PNG bytes; absent when deleted, or when unreadable.
+        after: Option<Vec<u8>>,
+        /// What the old side reported; absent when the file was added.
+        before_info: Option<VideoInfo>,
+        /// What the new side reported; absent when the file was deleted.
+        after_info: Option<VideoInfo>,
     },
     /// The formatted result exceeded configured safety limits.
     TooLarge {
@@ -706,6 +721,21 @@ pub enum DiffContent {
     },
     /// The requested content could not be read without failing the whole window.
     Unavailable { message: String },
+}
+
+/// What one side of a video comparison reports about itself.
+///
+/// Everything but the byte count is optional: whether a probe ran at all
+/// depends on what the machine has installed, so the view has to read as a
+/// card that fills in rather than one that either arrives whole or not at all.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct VideoInfo {
+    /// Blob size in bytes; always known.
+    pub bytes: u64,
+    /// Duration in milliseconds, when a probe read it.
+    pub duration_ms: Option<u64>,
+    /// Pixel dimensions of the video track, when a probe read them.
+    pub dimensions: Option<(u32, u32)>,
 }
 
 /// Classified display line in a unified diff.

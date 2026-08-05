@@ -10,9 +10,11 @@ authors.workspace = true
 [dependencies]
 gix.workspace = true
 gix-imara-diff.workspace = true
+serde_json.workspace = true
 smallvec.workspace = true
 sourcefour-graph = { path = "../sourcefour-graph" }
 sourcefour-model = { path = "../sourcefour-model" }
+tempfile.workspace = true
 
 [dev-dependencies]
 sourcefour-test-support = { path = "../sourcefour-test-support" }

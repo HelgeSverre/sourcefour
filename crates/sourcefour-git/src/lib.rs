@@ -14,6 +14,7 @@ mod doc;
 mod fetch;
 mod files;
 mod history;
+mod media;
 mod operation;
 mod pull;
 mod push;

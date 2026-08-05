@@ -346,6 +346,8 @@ pub(crate) enum Scene {
     Split,
     /// The image diff overlay, juxtapose slider centred.
     Image,
+    /// The video diff overlay: poster frames and what each side measures.
+    Video,
     /// The settings overlay on its first section.
     Settings,
     /// The Actions run detail overlay on a failed run.
@@ -359,7 +361,7 @@ pub(crate) enum Scene {
 impl Scene {
     /// Every scene name `--scene` accepts, for the usage line.
     pub(crate) const NAMES: &'static str =
-        "overview, diff, split, image, settings, actions, commit, preview";
+        "overview, diff, split, image, video, settings, actions, commit, preview";
 
     pub(crate) fn from_name(name: &str) -> Option<Self> {
         match name {
@@ -367,6 +369,7 @@ impl Scene {
             "diff" => Some(Self::Diff),
             "split" => Some(Self::Split),
             "image" => Some(Self::Image),
+            "video" => Some(Self::Video),
             "settings" => Some(Self::Settings),
             "actions" => Some(Self::Actions),
             "commit" => Some(Self::Commit),
@@ -382,6 +385,7 @@ impl Scene {
     pub(crate) fn file(self) -> &'static str {
         match self {
             Self::Image => "assets/icon.png",
+            Self::Video => "assets/demo/intro.mp4",
             Self::Preview => "README.md",
             _ => "apps/sourcefour/src/views.rs",
         }
@@ -396,6 +400,31 @@ impl Scene {
                     before: Some(include_bytes!("../assets/demo/icon-before.png").to_vec()),
                     after: Some(include_bytes!("../assets/demo/icon-after.png").to_vec()),
                     format: String::from("png"),
+                };
+            }
+            // The posters are baked rather than decoded: a capture has to look
+            // the same on a machine with no ffmpeg as on one with it, and the
+            // numbers differ on every field so the chips all have something to
+            // say. The real path is covered by the probe's own tests.
+            //
+            // They are real frames pulled from real clips through the same
+            // scale the poster path applies, not the icon the image scene
+            // uses — a scene that draws a logo teaches the wrong thing about
+            // what this view is for.
+            Self::Video => {
+                return DiffContent::Video {
+                    before: Some(include_bytes!("../assets/demo/video-before.png").to_vec()),
+                    after: Some(include_bytes!("../assets/demo/video-after.png").to_vec()),
+                    before_info: Some(sourcefour_model::VideoInfo {
+                        bytes: 4_404_019,
+                        duration_ms: Some(12_400),
+                        dimensions: Some((1920, 1080)),
+                    }),
+                    after_info: Some(sourcefour_model::VideoInfo {
+                        bytes: 2_202_009,
+                        duration_ms: Some(8_100),
+                        dimensions: Some((1280, 720)),
+                    }),
                 };
             }
             // The same two documents the rendered sides show, so Source and

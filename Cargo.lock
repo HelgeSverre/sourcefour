@@ -5418,10 +5418,12 @@ version = "0.1.0"
 dependencies = [
  "gix",
  "gix-imara-diff",
+ "serde_json",
  "smallvec",
  "sourcefour-graph",
  "sourcefour-model",
  "sourcefour-test-support",
+ "tempfile",
 ]
 
 [[package]]

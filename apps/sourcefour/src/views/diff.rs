@@ -1,5 +1,10 @@
 //! The full-window diff overlay (§6.11): text unified/split layouts and the
 //! image before/after views with the juxtapose slider.
+//!
+//! A video comparison reuses those same two views. Its poster frames arrive as
+//! PNG, so once they are wrapped there is nothing left to tell apart — only the
+//! chips along the bottom, and the card that stands in when no frame was
+//! decoded, know a video from an image.
 
 use std::sync::Arc;
 
@@ -9,6 +14,7 @@ use gpui::{
 };
 use sourcefour_model::{
     ChangeKind, ChangedFile, DiffContent, DiffLine, DiffLineKind, FileDiffRequest, RepoPath,
+    VideoInfo,
 };
 
 use crate::theme::MONO_FONT;
@@ -104,23 +110,123 @@ impl DiffView {
 
     /// Wraps image bytes for gpui once per loaded content; wrapping per frame
     /// would defeat the renderer's id-keyed image cache.
+    ///
+    /// A video's poster frames arrive here too, already PNG, which is what
+    /// lets both comparison views draw one without knowing the difference.
     pub(super) fn ensure_images(&mut self) {
         if self.before_image.is_some() || self.after_image.is_some() {
             return;
         }
-        if let Some(DiffContent::Image {
-            before,
-            after,
-            format,
-        }) = &self.content
-        {
-            self.before_image = render_image(before.as_deref(), format);
-            self.after_image = render_image(after.as_deref(), format);
+        match &self.content {
+            Some(DiffContent::Image {
+                before,
+                after,
+                format,
+            }) => {
+                self.before_image = render_image(before.as_deref(), format);
+                self.after_image = render_image(after.as_deref(), format);
+            }
+            Some(DiffContent::Video { before, after, .. }) => {
+                self.before_image = render_image(before.as_deref(), "png");
+                self.after_image = render_image(after.as_deref(), "png");
+            }
+            _ => {}
         }
     }
 
     fn is_image(&self) -> bool {
         matches!(self.content, Some(DiffContent::Image { .. }))
+    }
+
+    fn is_video(&self) -> bool {
+        matches!(self.content, Some(DiffContent::Video { .. }))
+    }
+
+    /// Whether the two layouts show frames rather than lines, which is what
+    /// the layout control names itself after.
+    fn compares_frames(&self) -> bool {
+        self.is_image() || (self.is_video() && self.has_poster())
+    }
+
+    /// Whether the layout control has two distinct layouts to offer at all.
+    fn offers_layouts(&self) -> bool {
+        !self.is_video() || self.has_poster()
+    }
+
+    /// Whether a video comparison has a frame to show on either side.
+    ///
+    /// Without one there is nothing for the two layouts to lay out
+    /// differently, so the card stands in and the layout control goes away.
+    fn has_poster(&self) -> bool {
+        self.before_image.is_some() || self.after_image.is_some()
+    }
+
+    /// What each side of a video comparison reports; empty for anything else.
+    fn video_facts(&self) -> (Option<VideoInfo>, Option<VideoInfo>) {
+        match &self.content {
+            Some(DiffContent::Video {
+                before_info,
+                after_info,
+                ..
+            }) => (*before_info, *after_info),
+            _ => (None, None),
+        }
+    }
+}
+
+/// One side's numbers, in the order they change least. Used bare by the card,
+/// which draws its own marker, and marked by [`video_summary`].
+fn video_line(info: VideoInfo) -> String {
+    let mut parts = Vec::new();
+    if let Some(duration_ms) = info.duration_ms {
+        parts.push(video_duration(duration_ms));
+    }
+    if let Some((width, height)) = info.dimensions {
+        parts.push(format!("{width} × {height}"));
+    }
+    parts.push(video_size(info.bytes));
+    parts.join(" · ")
+}
+
+/// The same line as a chip, led by a marker.
+///
+/// The marker is the only thing separating this view from an image diff: same
+/// panes, same slider, same poster drawn the same way. Without it a video reads
+/// as a still, which is the one thing the view must not say.
+fn video_summary(info: VideoInfo) -> gpui::SharedString {
+    format!("▶ {}", video_line(info)).into()
+}
+
+/// A duration as `m:ss`, growing an hours field only when there is one.
+fn video_duration(milliseconds: u64) -> String {
+    let seconds = milliseconds / 1000;
+    let (hours, minutes, seconds) = (seconds / 3600, (seconds % 3600) / 60, seconds % 60);
+    if hours > 0 {
+        format!("{hours}:{minutes:02}:{seconds:02}")
+    } else {
+        format!("{minutes}:{seconds:02}")
+    }
+}
+
+/// A byte count in the largest unit that leaves a number worth reading.
+fn video_size(bytes: u64) -> String {
+    const STEP: f64 = 1024.0;
+    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "a file large enough to lose precision here is larger than any disk"
+    )]
+    let mut size = bytes as f64;
+    let mut unit = 0;
+    while size >= STEP && unit + 1 < UNITS.len() {
+        size /= STEP;
+        unit += 1;
+    }
+    // Whole bytes have no fraction worth showing, and every larger unit does.
+    if unit == 0 {
+        format!("{bytes} B")
+    } else {
+        format!("{size:.1} {}", UNITS[unit])
     }
 }
 
@@ -422,10 +528,21 @@ impl SourcefourWindow {
                 self.diff_notice("No textual changes.").into_any_element()
             }
             Some(DiffContent::Text { .. }) => self.diff_text_list(view, line_count, cx),
-            Some(DiffContent::Image { .. }) if view.mode == DiffMode::Split => {
+            // A video no decoder opened has nothing to lay out two ways, so
+            // the card carries the numbers instead.
+            Some(DiffContent::Video { .. }) if !view.has_poster() => {
+                self.video_card_view(view).into_any_element()
+            }
+            // With a poster it is an image comparison that also has a caption,
+            // and both layouts treat it as exactly that.
+            Some(DiffContent::Image { .. } | DiffContent::Video { .. })
+                if view.mode == DiffMode::Split =>
+            {
                 self.image_split_view(view).into_any_element()
             }
-            Some(DiffContent::Image { .. }) => self.image_slider_view(view, cx).into_any_element(),
+            Some(DiffContent::Image { .. } | DiffContent::Video { .. }) => {
+                self.image_slider_view(view, cx).into_any_element()
+            }
             Some(DiffContent::Binary { message } | DiffContent::Unavailable { message }) => {
                 self.diff_notice(message.clone()).into_any_element()
             }
@@ -529,8 +646,9 @@ impl SourcefourWindow {
             )
             .children(preview::applies(view).then(|| self.preview_toggle(view.show_preview, cx)))
             // The layout control chooses how source lines lay out; while both
-            // rendered documents show, it has nothing to say.
-            .children((!preview::showing(view)).then(|| {
+            // rendered documents show, it has nothing to say. Nor does it for a
+            // video with no frame to lay out, where both choices draw the card.
+            .children((!preview::showing(view) && view.offers_layouts()).then(|| {
                 div()
                     .flex_none()
                     .flex()
@@ -539,13 +657,17 @@ impl SourcefourWindow {
                     .border_color(self.theme.border_strong)
                     .overflow_hidden()
                     .child(self.diff_mode_button(
-                        if view.is_image() { "Slider" } else { "Unified" },
+                        if view.compares_frames() {
+                            "Slider"
+                        } else {
+                            "Unified"
+                        },
                         DiffMode::Unified,
                         view.mode,
                         cx,
                     ))
                     .child(self.diff_mode_button(
-                        if view.is_image() {
+                        if view.compares_frames() {
                             "Side by side"
                         } else {
                             "Split"
@@ -635,12 +757,78 @@ impl SourcefourWindow {
 
     /// Side-by-side before/after panes for an image comparison (§6.11).
     pub(super) fn image_split_view(&self, view: &DiffView) -> Div {
+        let (before, after) = view.video_facts();
         div()
             .size_full()
             .flex()
-            .child(self.image_pane("Before", view.before_image.clone(), "Added — no before"))
+            .child(self.image_pane(
+                "Before",
+                view.before_image.clone(),
+                "Added — no before",
+                before,
+            ))
             .child(div().w(px(1.0)).flex_none().h_full().bg(self.theme.border))
-            .child(self.image_pane("After", view.after_image.clone(), "Deleted — no after"))
+            .child(self.image_pane(
+                "After",
+                view.after_image.clone(),
+                "Deleted — no after",
+                after,
+            ))
+    }
+
+    /// Side-by-side cards for a video no decoder could open a frame of.
+    pub(super) fn video_card_view(&self, view: &DiffView) -> Div {
+        let (before, after) = view.video_facts();
+        div()
+            .size_full()
+            .flex()
+            .child(self.video_card("Before", before, "Added — no before"))
+            .child(div().w(px(1.0)).flex_none().h_full().bg(self.theme.border))
+            .child(self.video_card("After", after, "Deleted — no after"))
+    }
+
+    /// One labeled half of the card view: what the container said, and no more.
+    fn video_card(
+        &self,
+        label: &'static str,
+        info: Option<VideoInfo>,
+        missing: &'static str,
+    ) -> Div {
+        div()
+            .flex_1()
+            .min_w(px(1.0))
+            .h_full()
+            .relative()
+            .flex()
+            .items_center()
+            .justify_center()
+            .p(px(28.0))
+            .child(match info {
+                Some(info) => div()
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .gap(px(10.0))
+                    .child(
+                        div()
+                            .text_size(px(26.0))
+                            .text_color(self.theme.text_faint)
+                            .child("▶"),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(12.0))
+                            .text_color(self.theme.text_secondary)
+                            .child(video_line(info)),
+                    )
+                    .into_any_element(),
+                None => div()
+                    .text_size(px(12.0))
+                    .text_color(self.theme.text_faint)
+                    .child(missing)
+                    .into_any_element(),
+            })
+            .child(self.image_side_chips(&[label]))
     }
 
     /// One labeled half of the side-by-side image view.
@@ -649,6 +837,7 @@ impl SourcefourWindow {
         label: &'static str,
         image: Option<Arc<gpui::Image>>,
         missing: &'static str,
+        facts: Option<VideoInfo>,
     ) -> Div {
         div()
             .flex_1()
@@ -671,10 +860,11 @@ impl SourcefourWindow {
                     .into_any_element(),
             })
             .child(self.image_side_chips(&[label]))
+            .children(facts.map(|facts| self.media_footer_chips(&[video_summary(facts)])))
     }
 
     /// A small chip naming an image side.
-    pub(super) fn image_side_chip(&self, label: &'static str) -> Div {
+    pub(super) fn image_side_chip(&self, label: impl Into<gpui::SharedString>) -> Div {
         div()
             .px(px(6.0))
             .py(px(1.0))
@@ -683,7 +873,7 @@ impl SourcefourWindow {
             .text_size(px(9.5))
             .font_weight(FontWeight::SEMIBOLD)
             .text_color(self.theme.text_faint)
-            .child(label)
+            .child(label.into())
     }
 
     /// The chip layer over an image view.
@@ -700,7 +890,25 @@ impl SourcefourWindow {
             .right(px(8.0))
             .flex()
             .justify_between()
-            .children(labels.iter().map(|label| self.image_side_chip(label)))
+            .children(labels.iter().map(|label| self.image_side_chip(*label)))
+    }
+
+    /// The same row along the bottom, for what a side measures rather than
+    /// which side it is. One label sits left, two split to the edges — the
+    /// same placement as the naming chips directly above them.
+    fn media_footer_chips(&self, labels: &[gpui::SharedString]) -> Div {
+        div()
+            .absolute()
+            .bottom(px(8.0))
+            .left(px(8.0))
+            .right(px(8.0))
+            .flex()
+            .justify_between()
+            .children(
+                labels
+                    .iter()
+                    .map(|label| self.image_side_chip(label.clone())),
+            )
     }
 
     /// The juxtapose view: after fills the area, before overlays it clipped to
@@ -798,6 +1006,16 @@ impl SourcefourWindow {
                     .child("↔"),
             )
             .child(self.image_side_chips(&["Before", "After"]))
+            .children(view.is_video().then(|| {
+                let (before, after) = view.video_facts();
+                // Both edges always get a chip so the pair keeps the alignment
+                // the naming chips above them set; a side that is not there
+                // says so rather than letting the other slide across.
+                self.media_footer_chips(&[
+                    before.map_or_else(|| "—".into(), video_summary),
+                    after.map_or_else(|| "—".into(), video_summary),
+                ])
+            }))
     }
 
     /// An absolutely positioned layer holding one centered, contained image.
@@ -1061,5 +1279,55 @@ impl SourcefourWindow {
                     .text_color(text_color)
                     .child(line.text.clone()),
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_duration_grows_an_hours_field_only_when_it_has_one() {
+        assert_eq!(video_duration(0), "0:00");
+        assert_eq!(video_duration(8_100), "0:08");
+        assert_eq!(video_duration(65_000), "1:05");
+        assert_eq!(video_duration(600_000), "10:00");
+        assert_eq!(video_duration(3_725_000), "1:02:05");
+    }
+
+    #[test]
+    fn a_size_climbs_to_the_unit_that_reads() {
+        assert_eq!(video_size(0), "0 B");
+        assert_eq!(video_size(999), "999 B");
+        // The step is 1024, so a kilobyte's worth of bytes is where it turns.
+        assert_eq!(video_size(1_023), "1023 B");
+        assert_eq!(video_size(1_024), "1.0 KB");
+        assert_eq!(video_size(4_404_019), "4.2 MB");
+        // The table stops at terabytes and saturates rather than wrapping.
+        // Nothing that opens in this viewer gets near it; the check is only
+        // that the loop terminates instead of indexing off the end.
+        assert_eq!(video_size(u64::MAX), "16777216.0 TB");
+    }
+
+    #[test]
+    fn a_summary_names_only_what_the_container_answered() {
+        let full = VideoInfo {
+            bytes: 4_404_019,
+            duration_ms: Some(12_400),
+            dimensions: Some((1920, 1080)),
+        };
+        assert_eq!(video_line(full), "0:12 · 1920 × 1080 · 4.2 MB");
+        // The chip is what tells a poster apart from an image diff, so the
+        // marker is not decoration and the card's own line is the bare one.
+        assert_eq!(video_summary(full), "▶ 0:12 · 1920 × 1080 · 4.2 MB");
+
+        // With no decoder installed only the byte count survives, and the chip
+        // has to stay a chip rather than becoming an empty pill.
+        let bare = VideoInfo {
+            bytes: 2_202_009,
+            ..VideoInfo::default()
+        };
+        assert_eq!(video_line(bare), "2.1 MB");
+        assert_eq!(video_summary(bare), "▶ 2.1 MB");
     }
 }

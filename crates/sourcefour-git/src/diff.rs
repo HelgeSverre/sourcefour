@@ -6,7 +6,7 @@
 use gix_imara_diff::{Algorithm, BasicLineDiffPrinter, Diff, InternedInput, UnifiedDiffConfig};
 use sourcefour_model::{
     DiffContent, DiffLine, DiffLineKind, FileDiff, FileDiffRequest, RepoFailure, RepoLocation,
-    RepoPath,
+    RepoPath, VideoInfo,
 };
 
 use crate::{
@@ -106,7 +106,7 @@ pub fn worktree_file_diff(
     Ok(content_for(path, old, new, DiffLimits::default()))
 }
 
-/// The blob-pair tail every diff shares: image, binary, text, or absent.
+/// The blob-pair tail every diff shares: image, video, binary, text, or absent.
 fn content_for(
     path: &RepoPath,
     old: Option<Vec<u8>>,
@@ -127,6 +127,19 @@ fn content_for(
                     after: new,
                     format,
                 }
+            } else if let Some(format) = crate::media::video_format(&path.0) {
+                // ponytail: probing here keeps the overlay on "Computing diff…"
+                // until both sides are read, which is tens of milliseconds for
+                // a local clip. Split it into a second async phase, the way the
+                // Markdown preview loads, if that ever reads as a stall.
+                let (before, before_info) = probe_side(old.as_deref(), &format);
+                let (after, after_info) = probe_side(new.as_deref(), &format);
+                DiffContent::Video {
+                    before,
+                    after,
+                    before_info,
+                    after_info,
+                }
             } else {
                 let old = old.unwrap_or_default();
                 let new = new.unwrap_or_default();
@@ -139,6 +152,17 @@ fn content_for(
                 }
             }
         }
+    }
+}
+
+/// One side of a video comparison, absent on the side where the file is not.
+fn probe_side(bytes: Option<&[u8]>, format: &str) -> (Option<Vec<u8>>, Option<VideoInfo>) {
+    match bytes {
+        Some(bytes) => {
+            let (poster, info) = crate::media::probe(bytes, format);
+            (poster, Some(info))
+        }
+        None => (None, None),
     }
 }
 
@@ -417,6 +441,112 @@ mod tests {
         assert_eq!(before.as_deref(), Some(b"\x89PNG-old".as_slice()));
         assert_eq!(after.as_deref(), Some(b"\x89PNG-new".as_slice()));
         assert_eq!(format, "png");
+        Ok(())
+    }
+
+    #[test]
+    fn a_modified_video_reports_both_sides() -> Result<(), Box<dyn std::error::Error>> {
+        // The bytes are not a video, which is the point: the routing must not
+        // depend on a decoder being installed, and the sizes have to survive
+        // even when nothing else about the blob can be read.
+        let repository = TempRepo::init();
+        std::fs::write(repository.path().join("clip.mp4"), b"not-a-clip")?;
+        repository.git(&["add", "."]);
+        repository.commit("add clip");
+        std::fs::write(repository.path().join("clip.mp4"), b"still-not-a-clip")?;
+        repository.git(&["add", "."]);
+        repository.commit("update clip");
+
+        let diff = file_diff(
+            &discover(repository.path())?,
+            &request(head(&repository)?, "clip.mp4"),
+        )?;
+
+        let DiffContent::Video {
+            before_info,
+            after_info,
+            ..
+        } = diff.content
+        else {
+            panic!("a .mp4 comparison is a video, not a binary notice");
+        };
+        assert_eq!(before_info.map(|info| info.bytes), Some(10));
+        assert_eq!(after_info.map(|info| info.bytes), Some(16));
+        Ok(())
+    }
+
+    #[test]
+    fn a_committed_clip_comes_back_with_a_poster() -> Result<(), Box<dyn std::error::Error>> {
+        // The join the two halves leave untested: a blob that only exists in
+        // the object database, spilled to disk and decoded. Skipped where
+        // there is no decoder, which is also what the viewer does there.
+        if !crate::media::probe_available() {
+            return Ok(());
+        }
+        let repository = TempRepo::init();
+        let path = repository.path().join("clip.mp4");
+        let made = std::process::Command::new("ffmpeg")
+            .args(["-v", "error", "-nostdin", "-y"])
+            .args([
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc=size=160x120:rate=10:duration=1",
+            ])
+            .args(["-pix_fmt", "yuv420p"])
+            .arg(&path)
+            .status()?;
+        assert!(made.success(), "ffmpeg could not generate the fixture");
+        repository.git(&["add", "."]);
+        repository.commit("add clip");
+
+        let diff = file_diff(
+            &discover(repository.path())?,
+            &request(head(&repository)?, "clip.mp4"),
+        )?;
+
+        let DiffContent::Video {
+            after, after_info, ..
+        } = diff.content
+        else {
+            panic!("a .mp4 comparison is a video, not a binary notice");
+        };
+        let poster = after.expect("a poster frame decoded from the committed blob");
+        assert_eq!(&poster[..4], b"\x89PNG", "the poster is not a PNG");
+        assert_eq!(
+            after_info.and_then(|info| info.dimensions),
+            Some((160, 120))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_deleted_video_has_no_after_side() -> Result<(), Box<dyn std::error::Error>> {
+        let repository = TempRepo::init();
+        std::fs::write(repository.path().join("clip.mp4"), b"not-a-clip")?;
+        repository.git(&["add", "."]);
+        repository.commit("add clip");
+        std::fs::remove_file(repository.path().join("clip.mp4"))?;
+        repository.git(&["add", "-A"]);
+        repository.commit("remove clip");
+
+        let diff = file_diff(
+            &discover(repository.path())?,
+            &request(head(&repository)?, "clip.mp4"),
+        )?;
+
+        let DiffContent::Video {
+            before_info,
+            after,
+            after_info,
+            ..
+        } = diff.content
+        else {
+            panic!("a .mp4 comparison is a video, not a binary notice");
+        };
+        assert!(before_info.is_some());
+        assert_eq!(after_info, None);
+        assert_eq!(after, None);
         Ok(())
     }
 
