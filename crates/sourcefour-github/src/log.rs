@@ -54,12 +54,22 @@ pub fn step_slice(
 
 /// The first line that reads as an error: an Actions `##[error]` marker or
 /// a compiler-style line starting with `error`.
+///
+/// A colored diagnostic wears its escapes ahead of the word, so a line
+/// carrying any is matched stripped; a plain one never allocates.
 #[must_use]
 pub fn first_error(lines: &[String]) -> Option<usize> {
     lines.iter().position(|line| {
         let (_, text) = split_timestamp(line);
-        text.starts_with("error") || text.contains("##[error]")
+        if text.contains('\u{1b}') {
+            return reads_as_error(&crate::ansi::strip_ansi(text));
+        }
+        reads_as_error(text)
     })
+}
+
+fn reads_as_error(text: &str) -> bool {
+    text.starts_with("error") || text.contains("##[error]")
 }
 
 #[cfg(test)]
@@ -114,6 +124,13 @@ mod tests {
             first_error(&[String::from("2026-08-04T14:32:01Z ##[error]exit 101")]),
             Some(0),
             "the Actions marker counts when no compiler line precedes it"
+        );
+        assert_eq!(
+            first_error(&[String::from(
+                "2026-08-04T14:31:41Z \x1b[0m\x1b[1m\x1b[38;5;9merror[E0308]\x1b[0m: mismatched types"
+            )]),
+            Some(0),
+            "color codes ahead of the word do not hide it"
         );
         assert_eq!(first_error(&[String::from("all fine")]), None);
     }

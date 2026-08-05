@@ -5,6 +5,7 @@
 //! the network (§12); the shipping transport is `ureq` on a background
 //! executor, matching how git subprocesses run.
 
+mod ansi;
 mod api;
 mod credentials;
 mod log;
@@ -12,6 +13,7 @@ mod remote;
 mod time;
 mod transport;
 
+pub use ansi::{AnsiColor, AnsiRun, parse_ansi_line, strip_ansi};
 pub use api::{
     actions_run_id_in_url, check_runs, commit_states, job_log, open_pulls, run_jobs, whoami,
     workflow_run, workflow_runs,
