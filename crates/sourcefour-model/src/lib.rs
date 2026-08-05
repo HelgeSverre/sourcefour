@@ -621,6 +621,42 @@ pub enum ChangeKind {
     Unknown,
 }
 
+/// The uncommitted state of the working tree, split the way Git splits it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct WorkingTreeStatus {
+    /// Changes in the index, ready to commit.
+    pub staged: Vec<ChangedFile>,
+    /// Worktree changes not yet staged. Untracked files fold in as
+    /// additions; conflicted paths as [`ChangeKind::Unknown`].
+    pub unstaged: Vec<ChangedFile>,
+}
+
+impl WorkingTreeStatus {
+    /// The counts the working-tree row label shows.
+    #[must_use]
+    pub fn summary(&self) -> WorkingTreeSummary {
+        WorkingTreeSummary {
+            staged: self.staged.len(),
+            unstaged: self.unstaged.len(),
+        }
+    }
+
+    /// Whether there is nothing to commit and nothing to stage.
+    #[must_use]
+    pub fn is_clean(&self) -> bool {
+        self.staged.is_empty() && self.unstaged.is_empty()
+    }
+}
+
+/// Counts for the working-tree row label.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct WorkingTreeSummary {
+    /// Files with staged changes.
+    pub staged: usize,
+    /// Files with unstaged changes, including untracked.
+    pub unstaged: usize,
+}
+
 /// Request to lazily load a one-file diff.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FileDiffRequest {

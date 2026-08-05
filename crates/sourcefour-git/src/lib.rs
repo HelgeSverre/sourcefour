@@ -17,6 +17,7 @@ mod pull;
 mod push;
 mod refs;
 mod session;
+mod status;
 mod watch;
 mod worktrees;
 
@@ -35,6 +36,7 @@ pub use crate::{
     push::push,
     refs::{References, references},
     session::snapshot,
+    status::working_tree_status,
     watch::{MetadataChange, MetadataWatcher},
     worktrees::worktrees,
 };
