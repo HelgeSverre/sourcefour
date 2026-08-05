@@ -2,6 +2,7 @@
 members = [
     "apps/sourcefour",
     "crates/sourcefour-model",
+    "crates/sourcefour-doc",
     "crates/sourcefour-git",
     "crates/sourcefour-github",
     "crates/sourcefour-graph",
@@ -22,6 +23,7 @@ authors = ["Sourcefour contributors"]
 [workspace.dependencies]
 gix = "0.85.0"
 gix-imara-diff = { version = "0.2.4", features = ["unified_diff"] }
+pulldown-cmark = { version = "0.13.4", default-features = false }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 smallvec = "1.15.1"
