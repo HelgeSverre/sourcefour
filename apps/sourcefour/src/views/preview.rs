@@ -6,6 +6,10 @@
 //! through `sourcefour_doc`, and resolves every image reference against the
 //! repository, so a README renders with the pictures the commit shipped.
 //!
+//! Each pane is a list of top-level blocks rather than one tall column, so a
+//! frame costs the blocks on screen and a long README scrolls like a short
+//! one.
+//!
 //! Nothing here persists: the toggle is per-open-file, and closing the
 //! overlay forgets it.
 
@@ -40,8 +44,20 @@ const CONTENT_WIDTH: f32 = 720.0;
 /// Padding inside the column, on every side.
 const CONTENT_PADDING: f32 = 30.0;
 
+/// Padding above the document's first block and below its last.
+const COLUMN_PADDING_Y: f32 = 22.0;
+
 /// Tallest an inline image draws before it is scaled down to fit.
 const IMAGE_HEIGHT: f32 = 420.0;
+
+/// How far past the visible pane the list measures blocks, so scrolling
+/// reaches already-measured content instead of popping.
+const OVERDRAW: f32 = 400.0;
+
+/// Ordinals a block may have at one nesting level before its ids alias its
+/// parent's. Documents the pane draws stay far under it; a list of a thousand
+/// items would have to nest inside a single top-level block to collide.
+const NESTED_STRIDE: usize = 1000;
 
 /// One parsed document with every image reference already resolved.
 pub(super) struct PreviewState {
@@ -51,12 +67,113 @@ pub(super) struct PreviewState {
     pub(super) new: PreviewDoc,
 }
 
-/// One side's document: its blocks and the images they resolved to.
+/// Which document a pane draws.
+///
+/// Also names the pane, because both panes are on screen at once and the
+/// element ids under them must not collide.
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub(super) enum PreviewSide {
+    Old,
+    New,
+}
+
+impl PreviewSide {
+    /// The pane's element id, and the root every id below it extends.
+    fn pane_id(self) -> &'static str {
+        match self {
+            Self::Old => "preview-old",
+            Self::New => "preview-new",
+        }
+    }
+}
+
+/// One block's address inside one pane: the list item that draws it, and
+/// where it sits under that item.
+///
+/// The walk is deterministic, so the same block keeps the same address across
+/// frames — which is what an element id and, later, a selection need. Nested
+/// ordinals fold into one number by [`NESTED_STRIDE`], and the item's own
+/// element id scopes the result, so an address is unique in its pane.
+#[derive(Clone, Copy)]
+pub(super) struct BlockId {
+    /// The top-level block this one sits under — the list item's index.
+    item: usize,
+    /// Where under that item the block sits; `0` is the item's own block.
+    nested: usize,
+}
+
+impl BlockId {
+    /// The address of one top-level block: the list item itself.
+    fn top(item: usize) -> Self {
+        Self { item, nested: 0 }
+    }
+
+    /// The address of the `ordinal`th block directly inside this one.
+    fn child(self, ordinal: usize) -> Self {
+        Self {
+            nested: self.nested * NESTED_STRIDE + ordinal + 1,
+            ..self
+        }
+    }
+
+    /// The list item's element id, which scopes every id under it.
+    fn item_id(self) -> gpui::ElementId {
+        ("preview-item", self.item).into()
+    }
+}
+
+/// One side's document as the background load hands it over.
+///
+/// Separate from [`PreviewDoc`] because a `ListState` is `Rc`-backed and
+/// cannot cross threads: the parse travels, the list is built where it will
+/// be drawn.
+pub(super) struct PreviewParse {
+    /// The document's blocks, in source order.
+    blocks: Vec<DocBlock>,
+    /// One entry per distinct image reference in `blocks`.
+    images: HashMap<String, PreviewImage>,
+}
+
+/// One side's document: its blocks, the images they resolved to, and the
+/// list that draws them.
 pub(super) struct PreviewDoc {
     /// The document's blocks, in source order.
     pub(super) blocks: Vec<DocBlock>,
     /// One entry per distinct image reference in `blocks`.
     pub(super) images: HashMap<String, PreviewImage>,
+    /// One list item per top-level block, so a frame builds the blocks on
+    /// screen instead of the document. Holds the scroll position, so it is
+    /// built once per loaded document and never per frame.
+    list: gpui::ListState,
+}
+
+impl PreviewDoc {
+    /// Virtualizes one parsed side for the pane that will draw it.
+    ///
+    /// The list renders through the window entity rather than a copy of the
+    /// document, so a reloaded preview draws the blocks it just loaded.
+    fn new(
+        parse: PreviewParse,
+        side: PreviewSide,
+        cx: &mut gpui::Context<SourcefourWindow>,
+    ) -> Self {
+        let view = cx.entity().downgrade();
+        Self {
+            list: gpui::ListState::new(
+                parse.blocks.len(),
+                gpui::ListAlignment::Top,
+                px(OVERDRAW),
+                move |index, window, cx| {
+                    view.upgrade().map_or_else(
+                        || div().into_any_element(),
+                        |view| view.read(cx).preview_item(side, index, window),
+                    )
+                },
+            ),
+            blocks: parse.blocks,
+            images: parse.images,
+        }
+    }
 }
 
 /// What one image reference resolved to.
@@ -139,26 +256,27 @@ fn document_blocks(bytes: Option<&[u8]>) -> Vec<DocBlock> {
     sourcefour_doc::parse_markdown(&String::from_utf8_lossy(bytes))
 }
 
-/// Reads, parses, and resolves both sides. Runs off the main thread.
+/// Reads, parses, and resolves both sides, old first. Runs off the main
+/// thread, which is why it stops at the parse.
 fn load(
     location: &RepoLocation,
     origin: &DiffOrigin,
     head: Option<sourcefour_model::Oid>,
-) -> PreviewState {
+) -> (PreviewParse, PreviewParse) {
     let path = origin.path().clone();
-    PreviewState {
-        old: load_side(
+    (
+        load_side(
             location,
             old_doc_source(location, origin, head).as_ref(),
             &path,
         ),
-        new: load_side(location, Some(&doc_source(origin)), &path),
-    }
+        load_side(location, Some(&doc_source(origin)), &path),
+    )
 }
 
 /// One side's document, parsed and with every image reference resolved
 /// against that side's own tree.
-fn load_side(location: &RepoLocation, source: Option<&DocSource>, path: &RepoPath) -> PreviewDoc {
+fn load_side(location: &RepoLocation, source: Option<&DocSource>, path: &RepoPath) -> PreviewParse {
     let bytes = source.and_then(|source| sourcefour_git::document_bytes(location, source));
     let blocks = document_blocks(bytes.as_deref());
     let mut images = HashMap::new();
@@ -174,14 +292,58 @@ fn load_side(location: &RepoLocation, source: Option<&DocSource>, path: &RepoPat
             });
         }
     }
-    PreviewDoc { blocks, images }
+    PreviewParse { blocks, images }
 }
 
-/// The pre-resolved preview `--scene preview` seeds (§12.4).
+/// §12.5 preview probe; prints only under `SOURCEFOUR_FRAME_LOG`.
+///
+/// `started` must be taken where the panes' elements begin building, so the
+/// line covers the work one frame does for the rendered document and nothing
+/// else around it.
+pub(super) fn build_probe(started: std::time::Instant, blocks: usize) {
+    if std::env::var_os("SOURCEFOUR_FRAME_LOG").is_some() {
+        eprintln!(
+            "preview-build-ms {:.3} blocks {blocks}",
+            started.elapsed().as_secs_f64() * 1000.0
+        );
+    }
+}
+
+/// The demo preview's new side, the fixture repeated as many times as
+/// `SOURCEFOUR_PREVIEW_STRESS` asks for.
+///
+/// A deterministic stress body for the ledger (§12.5): the same document over
+/// and over means the block count is exactly N times the fixture's, so two
+/// runs at the same N measure the same document.
+fn stress_body() -> String {
+    let repeats = stress_repeats(std::env::var("SOURCEFOUR_PREVIEW_STRESS").ok().as_deref());
+    vec![crate::demo::PREVIEW_MARKDOWN; repeats].join("\n\n")
+}
+
+/// How many times [`stress_body`] repeats the fixture. Absent, unreadable,
+/// and below one all mean the document as written.
+fn stress_repeats(value: Option<&str>) -> usize {
+    value
+        .and_then(|value| value.parse().ok())
+        .filter(|&repeats| repeats >= 1)
+        .unwrap_or(1)
+}
+
+/// The pre-resolved preview `--scene preview` seeds (§12.4), virtualized for
+/// the panes that will draw it.
+pub(super) fn demo_state(cx: &mut gpui::Context<SourcefourWindow>) -> PreviewState {
+    let (old, new) = demo_parse();
+    PreviewState {
+        old: PreviewDoc::new(old, PreviewSide::Old, cx),
+        new: PreviewDoc::new(new, PreviewSide::New, cx),
+    }
+}
+
+/// Both sides of the capture fixture, old first.
 ///
 /// Parsing is the shipping parser; only the image resolution is faked, since
 /// a capture has no repository to resolve against.
-pub(super) fn demo_state() -> PreviewState {
+fn demo_parse() -> (PreviewParse, PreviewParse) {
     let mut images = HashMap::new();
     images.insert(
         String::from(crate::demo::PREVIEW_IMAGE_PATH),
@@ -196,16 +358,27 @@ pub(super) fn demo_state() -> PreviewState {
         String::from(crate::demo::PREVIEW_REMOTE_IMAGE_URL),
         PreviewImage::Remote,
     );
-    PreviewState {
-        old: PreviewDoc {
+    (
+        PreviewParse {
             blocks: sourcefour_doc::parse_markdown(crate::demo::PREVIEW_MARKDOWN_OLD),
             images: images.clone(),
         },
-        new: PreviewDoc {
-            blocks: sourcefour_doc::parse_markdown(crate::demo::PREVIEW_MARKDOWN),
+        PreviewParse {
+            blocks: sourcefour_doc::parse_markdown(&stress_body()),
             images,
         },
-    }
+    )
+}
+
+/// The rendered document: one list item per top-level block, so a frame
+/// costs what is on screen rather than what the document holds.
+///
+/// The pane's own id scopes every element id the blocks under it build.
+pub(super) fn pane(preview: &PreviewDoc, side: PreviewSide) -> gpui::Stateful<Div> {
+    div()
+        .id(side.pane_id())
+        .size_full()
+        .child(gpui::list(preview.list.clone()).size_full())
 }
 
 impl SourcefourWindow {
@@ -224,15 +397,13 @@ impl SourcefourWindow {
         let Some(location) = self.location.clone() else {
             // No repository to read from — the demo seeds its own preview, so
             // this only happens before discovery finishes.
+            let absent = || PreviewParse {
+                blocks: document_blocks(None),
+                images: HashMap::new(),
+            };
             view.preview = Some(PreviewState {
-                old: PreviewDoc {
-                    blocks: document_blocks(None),
-                    images: HashMap::new(),
-                },
-                new: PreviewDoc {
-                    blocks: document_blocks(None),
-                    images: HashMap::new(),
-                },
+                old: PreviewDoc::new(absent(), PreviewSide::Old, cx),
+                new: PreviewDoc::new(absent(), PreviewSide::New, cx),
             });
             cx.notify();
             return;
@@ -248,12 +419,12 @@ impl SourcefourWindow {
         // opened for, and opening another retires it.
         let token = self.diff_request;
         cx.spawn(async move |this, cx| {
-            let state = cx
+            let parse = cx
                 .background_executor()
                 .spawn(async move { load(&location, &origin, head) })
                 .await;
             this.update(cx, |this, cx| {
-                this.set_preview(token, state, cx);
+                this.set_preview(token, parse, cx);
             })
             .ok();
         })
@@ -261,11 +432,23 @@ impl SourcefourWindow {
         cx.notify();
     }
 
-    /// Applies a loaded preview, unless the overlay moved on to another file.
-    fn set_preview(&mut self, token: u64, state: PreviewState, cx: &mut gpui::Context<Self>) {
+    /// Virtualizes a loaded preview and applies it, unless the overlay moved
+    /// on to another file. The lists are built here, on the main thread, and
+    /// a preview loaded again starts at the top with fresh ones.
+    fn set_preview(
+        &mut self,
+        token: u64,
+        parse: (PreviewParse, PreviewParse),
+        cx: &mut gpui::Context<Self>,
+    ) {
         if self.diff_request != token {
             return;
         }
+        let (old, new) = parse;
+        let state = PreviewState {
+            old: PreviewDoc::new(old, PreviewSide::Old, cx),
+            new: PreviewDoc::new(new, PreviewSide::New, cx),
+        };
         if let Some(view) = &mut self.diff_view {
             view.preview = Some(state);
         }
@@ -299,19 +482,23 @@ impl SourcefourWindow {
             }))
     }
 
-    /// The rendered document, scrolling on its own in a centred column.
-    pub(super) fn preview_pane(
-        &self,
-        preview: &PreviewDoc,
-        id: &'static str,
-        window: &Window,
-    ) -> gpui::Stateful<Div> {
+    /// One list item: a top-level block in the centred column.
+    ///
+    /// The column lives here rather than around the list, since the list is
+    /// what fills the pane and scrolls.
+    fn preview_item(&self, side: PreviewSide, index: usize, window: &Window) -> gpui::AnyElement {
+        let Some(preview) = self.preview_doc(side) else {
+            return div().into_any_element();
+        };
+        let Some(block) = preview.blocks.get(index) else {
+            return div().into_any_element();
+        };
         // The ambient family, so only the runs that mean to change it do.
         let font = window.text_style().font();
+        let id = BlockId::top(index);
         div()
-            .id(id)
-            .size_full()
-            .overflow_y_scroll()
+            // Scopes every element id the block below builds.
+            .id(id.item_id())
             .flex()
             .flex_col()
             .items_center()
@@ -322,20 +509,35 @@ impl SourcefourWindow {
                     .w_full()
                     .max_w(px(CONTENT_WIDTH))
                     .px(px(CONTENT_PADDING))
-                    .py(px(22.0))
+                    // The document's own top and bottom, not every block's.
+                    .when(index == 0, |column| column.pt(px(COLUMN_PADDING_Y)))
+                    .when(index + 1 == preview.blocks.len(), |column| {
+                        column.pb(px(COLUMN_PADDING_Y))
+                    })
                     .flex()
                     .flex_col()
-                    .children(
-                        preview
-                            .blocks
-                            .iter()
-                            .map(|block| self.preview_block(block, preview, &font)),
-                    ),
+                    .child(self.preview_block(block, preview, &font, id)),
             )
+            .into_any_element()
+    }
+
+    /// The document one pane draws, while a preview is open.
+    fn preview_doc(&self, side: PreviewSide) -> Option<&PreviewDoc> {
+        let preview = self.diff_view.as_ref()?.preview.as_ref()?;
+        Some(match side {
+            PreviewSide::Old => &preview.old,
+            PreviewSide::New => &preview.new,
+        })
     }
 
     /// One rendered block, recursing into the blocks quotes and items hold.
-    fn preview_block(&self, block: &DocBlock, preview: &PreviewDoc, font: &Font) -> Div {
+    fn preview_block(
+        &self,
+        block: &DocBlock,
+        preview: &PreviewDoc,
+        font: &Font,
+        id: BlockId,
+    ) -> Div {
         match &block.kind {
             DocBlockKind::Heading { level, spans } => self.preview_heading(*level, spans, font),
             DocBlockKind::Paragraph { spans } => div()
@@ -350,13 +552,11 @@ impl SourcefourWindow {
                 .border_color(self.theme.border_strong)
                 .flex()
                 .flex_col()
-                .children(
-                    blocks
-                        .iter()
-                        .map(|block| self.preview_block(block, preview, font)),
-                ),
+                .children(blocks.iter().enumerate().map(|(ordinal, block)| {
+                    self.preview_block(block, preview, font, id.child(ordinal))
+                })),
             DocBlockKind::List { ordered, items } => {
-                self.preview_list(*ordered, items, preview, font)
+                self.preview_list(*ordered, items, preview, font, id)
             }
             DocBlockKind::Rule => div()
                 .mt(px(16.0))
@@ -548,6 +748,7 @@ impl SourcefourWindow {
         items: &[Vec<DocBlock>],
         preview: &PreviewDoc,
         font: &Font,
+        id: BlockId,
     ) -> Div {
         div()
             .mt(px(6.0))
@@ -574,13 +775,11 @@ impl SourcefourWindow {
                             .text_color(self.theme.text_faint)
                             .child(marker),
                     )
-                    .child(
-                        div().flex_1().min_w(px(1.0)).flex().flex_col().children(
-                            blocks
-                                .iter()
-                                .map(|block| self.preview_block(block, preview, font)),
-                        ),
-                    )
+                    .child(div().flex_1().min_w(px(1.0)).flex().flex_col().children(
+                        blocks.iter().enumerate().map(|(ordinal, block)| {
+                            self.preview_block(block, preview, font, id.child(index).child(ordinal))
+                        }),
+                    ))
             }))
     }
 
@@ -638,7 +837,9 @@ mod tests {
     use sourcefour_doc::{DocBlockKind, DocSpan};
     use sourcefour_model::{DiffParent, FileDiffRequest, Oid, RepoPath};
 
-    use super::{ABSENT_NOTICE, DiffOrigin, DocSource, doc_source, document_blocks};
+    use super::{
+        ABSENT_NOTICE, DiffOrigin, DocSource, doc_source, document_blocks, stress_repeats,
+    };
 
     fn path(text: &str) -> RepoPath {
         RepoPath(text.as_bytes().to_vec())
@@ -708,8 +909,18 @@ mod tests {
     }
 
     #[test]
+    fn only_a_readable_count_of_at_least_one_stresses_the_demo_document() {
+        assert_eq!(stress_repeats(Some("50")), 50);
+        assert_eq!(stress_repeats(None), 1);
+        assert_eq!(stress_repeats(Some("")), 1);
+        assert_eq!(stress_repeats(Some("0")), 1);
+        assert_eq!(stress_repeats(Some("-3")), 1);
+        assert_eq!(stress_repeats(Some("many")), 1);
+    }
+
+    #[test]
     fn the_demo_fixture_exercises_every_block_the_pane_draws() {
-        let blocks = super::demo_state().new.blocks;
+        let blocks = super::demo_parse().1.blocks;
         let kinds: Vec<&DocBlockKind> = blocks.iter().map(|block| &block.kind).collect();
         let has = |matcher: fn(&DocBlockKind) -> bool| kinds.iter().any(|kind| matcher(kind));
 

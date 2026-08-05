@@ -15,7 +15,7 @@ use crate::theme::MONO_FONT;
 
 use super::{
     Drag, SourcefourWindow, change_color, change_letter, counted,
-    preview::{self, PreviewState},
+    preview::{self, PreviewSide, PreviewState},
     row_count_as_f32,
 };
 
@@ -295,7 +295,6 @@ impl SourcefourWindow {
     /// outside the panel.
     pub(super) fn diff_overlay(
         &self,
-        window: &Window,
         cx: &mut gpui::Context<Self>,
     ) -> Option<impl IntoElement + use<>> {
         let view = self.diff_view.as_ref()?;
@@ -303,7 +302,7 @@ impl SourcefourWindow {
             Some(DiffContent::Text { lines }) => lines.len(),
             _ => 0,
         };
-        let body = self.diff_body(view, line_count, window, cx);
+        let body = self.diff_body(view, line_count, cx);
         Some(
             super::modal_backdrop("diff-overlay", &self.theme)
                 .key_context("Diff")
@@ -359,7 +358,6 @@ impl SourcefourWindow {
         &self,
         view: &DiffView,
         line_count: usize,
-        window: &Window,
         cx: &mut gpui::Context<Self>,
     ) -> gpui::AnyElement {
         match &view.content {
@@ -367,21 +365,31 @@ impl SourcefourWindow {
             // Preview renders both versions of the document, the old side
             // left and the new side right — the raw text stays under Source.
             Some(DiffContent::Text { .. }) if preview::showing(view) => match &view.preview {
-                Some(preview) => div()
-                    .size_full()
-                    .flex()
-                    .child(div().flex_1().min_w(px(1.0)).child(self.preview_pane(
-                        &preview.old,
-                        "preview-old",
-                        window,
-                    )))
-                    .child(div().w(px(1.0)).flex_none().bg(self.theme.border))
-                    .child(div().flex_1().min_w(px(1.0)).child(self.preview_pane(
-                        &preview.new,
-                        "preview-new",
-                        window,
-                    )))
-                    .into_any_element(),
+                Some(preview) => {
+                    let started = std::time::Instant::now();
+                    let panes = div()
+                        .size_full()
+                        .flex()
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w(px(1.0))
+                                .child(preview::pane(&preview.old, PreviewSide::Old)),
+                        )
+                        .child(div().w(px(1.0)).flex_none().bg(self.theme.border))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w(px(1.0))
+                                .child(preview::pane(&preview.new, PreviewSide::New)),
+                        )
+                        .into_any_element();
+                    preview::build_probe(
+                        started,
+                        preview.old.blocks.len() + preview.new.blocks.len(),
+                    );
+                    panes
+                }
                 None => self.diff_notice("Rendering preview…").into_any_element(),
             },
             Some(DiffContent::Text { lines }) if lines.is_empty() => {

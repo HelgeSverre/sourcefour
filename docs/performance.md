@@ -82,6 +82,46 @@ without upstream gpui work. The owner accepts p50 < 150 ms (2026-08-05); the
 2026-08-04 record (p50 133 ms) is within that, while the original < 100 ms
 budget line remains recorded as missed.
 
+## Run record — 2026-08-05 preview scroll cost
+
+The diff overlay's Preview built every block of both documents every frame.
+This record is the before/after of virtualizing it (`gpui::list`, one item per
+top-level block). Same machine, toolchain, and warm-cache conditions as the
+2026-08-04 record: MacBook Pro (Mac14,6), Apple M2 Max, 32 GB, macOS 15.6,
+release build, interactive session (not a quiet machine). Raw:
+`fixtures/stress/2026-08-05-preview-scroll.txt`.
+
+Exact command, per sample — `SOURCEFOUR_PREVIEW_STRESS=N` repeats the demo
+document N times on the new side, and the app quits itself in the first
+frame's callback, so one run is one process:
+
+```
+SOURCEFOUR_STARTUP_LOG=1 SOURCEFOUR_FRAME_LOG=1 SOURCEFOUR_PREVIEW_STRESS=N \
+  ./target/release/sourcefour --demo --scene preview --width 1280 --height 800
+```
+
+Three runs per stress level, before and after; the table gives the range.
+
+| Stress | Blocks (both panes) | `preview-build-ms` before | after | `first-frame-ms` before | after |
+| --- | --- | --- | --- | --- | --- |
+| ×50 | 556 | 0.96 – 1.40 | 0.002 – 0.003 | 198 / 207 / 306 | 164 / 164 / 181 |
+| ×200 | 2,206 | 3.94 – 5.68 | 0.002 – 0.003 | 222 / 253 / 266 | 159 / 166 / 174 |
+
+The `preview-build-ms` collapse overstates the win on its own: the probe times
+the render pass, and virtualization moves the per-block work out of it into the
+list's layout, which builds only the blocks on screen plus 400 px of overdraw.
+`first-frame-ms` is the honest number, and it is the finding — before, it grew
+with the document (×50 ≈ 200 ms, ×200 ≈ 250 ms); after, it does not (both ≈ 165
+ms, against ≈ 172 ms for the 17-block fixture). A 2,206-block document now costs
+what a 17-block one does.
+
+Scroll-frame cost tracks build cost here, since nothing can script a scroll:
+the frames a scroll produces run the same path a first frame does, minus window
+creation, so a per-frame document cost that no longer scales with length is the
+measurement available. The probe stays in the tree
+(`preview::build_probe`, printed under `SOURCEFOUR_FRAME_LOG=1`) so the next
+regression is one run away.
+
 ## Run record — 2026-08-04 startup
 
 Same machine and toolchain as above, release build, warm caches;
@@ -127,6 +167,7 @@ The final command set is owned by the package and performance work; record the e
 | Initial history and subsequent batch | not yet measured | not yet measured |
 | Filter and selection responsiveness | not yet measured | not yet measured |
 | Details/file list/diff | not yet measured | not yet measured |
+| Preview document build per frame | `SOURCEFOUR_STARTUP_LOG=1 SOURCEFOUR_FRAME_LOG=1 SOURCEFOUR_PREVIEW_STRESS=200 ./target/release/sourcefour --demo --scene preview --width 1280 --height 800` | `fixtures/stress/2026-08-05-preview-scroll.txt` |
 | Graph benchmark | not yet measured | not yet measured |
 | Profile trace (`SOURCEFOUR_PROFILE=1`, if implemented) | not yet measured | not yet measured |
 

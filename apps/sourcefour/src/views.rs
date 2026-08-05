@@ -429,7 +429,7 @@ impl SourcefourWindow {
         })
         .detach();
         if launch.demo {
-            window.seed_demo(launch.scene);
+            window.seed_demo(launch.scene, cx);
         } else if let Some(location) = launch.location {
             window.repo = LoadState::Loading {
                 started_at: std::time::Instant::now(),
@@ -444,7 +444,7 @@ impl SourcefourWindow {
     /// Seeds the deterministic capture fixture as if a traversal had
     /// already completed, so every capture goes through the real rendering
     /// path (§12.4).
-    fn seed_demo(&mut self, scene: demo::Scene) {
+    fn seed_demo(&mut self, scene: demo::Scene, cx: &mut gpui::Context<Self>) {
         self.repo = LoadState::Ready(demo::snapshot());
         self.history.reset(HistoryScope::AllRefs);
         let (rows, layout) = demo::history();
@@ -452,7 +452,7 @@ impl SourcefourWindow {
         self.detail = Some(demo::detail());
         self.files = Some(demo::files());
         self.files_for = self.history.selected_commit();
-        self.seed_scene(scene);
+        self.seed_scene(scene, cx);
     }
 
     /// Refreshes the working tree when the window becomes active again.
@@ -1014,7 +1014,7 @@ impl SourcefourWindow {
     /// Opens the overlay a capture scene asks for, with its content already
     /// loaded (§12.4). Demo mode has no repository to read a diff from, so the
     /// content comes from the fixture — through the shipping formatter.
-    fn seed_scene(&mut self, scene: demo::Scene) {
+    fn seed_scene(&mut self, scene: demo::Scene, cx: &mut gpui::Context<Self>) {
         let mode = match scene {
             demo::Scene::Overview => return,
             demo::Scene::Commit => {
@@ -1051,7 +1051,7 @@ impl SourcefourWindow {
             mode,
             show_preview: preview,
             // Seeded rather than loaded: a capture cannot wait on an async read.
-            preview: preview.then(preview::demo_state),
+            preview: preview.then(|| preview::demo_state(cx)),
             split: None,
             before_image: None,
             after_image: None,
@@ -1348,7 +1348,7 @@ impl Render for SourcefourWindow {
                     ),
             )
             .child(self.status())
-            .children(self.diff_overlay(window, cx))
+            .children(self.diff_overlay(cx))
             .children(self.branch_overlay(cx))
             .children(self.settings_overlay(cx))
             .children(self.actions_overlay(cx));

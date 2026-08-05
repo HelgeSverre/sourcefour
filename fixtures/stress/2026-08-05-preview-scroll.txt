@@ -1,0 +1,149 @@
+Preview scroll cost — diff overlay's rendered document
+======================================================
+
+Machine: MacBook Pro (Mac14,6), Apple M2 Max, 32 GB, macOS 15.6, warm caches,
+interactive session (not a quiet machine). Release build, --locked.
+
+Command, per run (the app quits itself in the first frame's callback under
+SOURCEFOUR_STARTUP_LOG, so each run is one process):
+
+  SOURCEFOUR_STARTUP_LOG=1 SOURCEFOUR_FRAME_LOG=1 SOURCEFOUR_PREVIEW_STRESS=N \
+    ./target/release/sourcefour --demo --scene preview --width 1280 --height 800
+
+SOURCEFOUR_PREVIEW_STRESS=N repeats the demo document N times on the new side.
+preview-build-ms is element construction for both panes in one frame.
+
+==============================================================================
+BEFORE — plain overflow_y_scroll pane, every block built every frame (4043e6c)
+==============================================================================
+
+--- before, SOURCEFOUR_PREVIEW_STRESS=50, run 1 ---
+phase resolved 5
+phase gpui-run 85
+phase pre-window 98
+phase window-opened 157
+preview-build-ms 1.378 blocks 556
+first-frame-ms 306
+preview-build-ms 1.094 blocks 556
+
+--- before, SOURCEFOUR_PREVIEW_STRESS=50, run 2 ---
+phase resolved 0
+phase gpui-run 49
+phase pre-window 60
+phase window-opened 86
+preview-build-ms 1.296 blocks 556
+first-frame-ms 198
+preview-build-ms 1.159 blocks 556
+
+--- before, SOURCEFOUR_PREVIEW_STRESS=50, run 3 ---
+phase resolved 0
+phase gpui-run 51
+phase pre-window 61
+phase window-opened 89
+preview-build-ms 1.256 blocks 556
+first-frame-ms 207
+preview-build-ms 0.964 blocks 556
+
+--- before, SOURCEFOUR_PREVIEW_STRESS=200, run 1 ---
+phase resolved 0
+phase gpui-run 47
+phase pre-window 57
+phase window-opened 88
+preview-build-ms 5.433 blocks 2206
+first-frame-ms 253
+preview-build-ms 4.521 blocks 2206
+
+--- before, SOURCEFOUR_PREVIEW_STRESS=200, run 2 ---
+phase resolved 0
+phase gpui-run 56
+phase pre-window 67
+phase window-opened 94
+preview-build-ms 5.234 blocks 2206
+first-frame-ms 266
+preview-build-ms 4.090 blocks 2206
+
+--- before, SOURCEFOUR_PREVIEW_STRESS=200, run 3 ---
+phase resolved 0
+phase gpui-run 53
+phase pre-window 63
+phase window-opened 91
+preview-build-ms 5.152 blocks 2206
+first-frame-ms 222
+preview-build-ms 3.944 blocks 2206
+
+==============================================================================
+AFTER — gpui::list, one item per top-level block (this commit)
+==============================================================================
+
+--- after, SOURCEFOUR_PREVIEW_STRESS=50, run 1 ---
+phase resolved 0
+phase gpui-run 53
+phase pre-window 65
+phase window-opened 98
+preview-build-ms 0.003 blocks 556
+first-frame-ms 181
+preview-build-ms 0.002 blocks 556
+
+--- after, SOURCEFOUR_PREVIEW_STRESS=50, run 2 ---
+phase resolved 0
+phase gpui-run 55
+phase pre-window 65
+phase window-opened 95
+preview-build-ms 0.003 blocks 556
+first-frame-ms 164
+preview-build-ms 0.003 blocks 556
+
+--- after, SOURCEFOUR_PREVIEW_STRESS=50, run 3 ---
+phase resolved 0
+phase gpui-run 56
+phase pre-window 66
+phase window-opened 93
+preview-build-ms 0.002 blocks 556
+first-frame-ms 164
+preview-build-ms 0.002 blocks 556
+
+--- after, SOURCEFOUR_PREVIEW_STRESS=200, run 1 ---
+phase resolved 0
+phase gpui-run 52
+phase pre-window 62
+phase window-opened 92
+preview-build-ms 0.003 blocks 2206
+first-frame-ms 174
+preview-build-ms 0.002 blocks 2206
+
+--- after, SOURCEFOUR_PREVIEW_STRESS=200, run 2 ---
+phase resolved 0
+phase gpui-run 58
+phase pre-window 68
+phase window-opened 95
+preview-build-ms 0.003 blocks 2206
+preview-build-ms 0.003 blocks 2206
+first-frame-ms 166
+preview-build-ms 0.002 blocks 2206
+
+--- after, SOURCEFOUR_PREVIEW_STRESS=200, run 3 ---
+phase resolved 0
+phase gpui-run 54
+phase pre-window 63
+phase window-opened 91
+preview-build-ms 0.003 blocks 2206
+first-frame-ms 159
+preview-build-ms 0.003 blocks 2206
+
+--- after, no stress (the shipped fixture, 17 blocks) ---
+phase resolved 0
+phase gpui-run 50
+phase pre-window 59
+phase window-opened 85
+preview-build-ms 0.003 blocks 17
+first-frame-ms 172
+preview-build-ms 0.006 blocks 17
+
+Reading these numbers
+---------------------
+preview-build-ms is what the render pass spends building the panes. After
+virtualization the per-block work moved out of the render pass and into the
+list's layout, where only the blocks on screen (plus 400px of overdraw) are
+built — so 0.003 ms is the panes going from 2,206 elements to two, not the
+document becoming free. first-frame-ms is the honest end-to-end number: it
+covers layout and paint, and it stops tracking document length.
