@@ -44,6 +44,7 @@ impl DiffMode {
 
 /// Where an open diff came from, so a preview can read the same file back
 /// out of the repository without re-deriving it from the display title.
+#[derive(Clone)]
 pub(super) enum DiffOrigin {
     /// One file of a commit, against the selected parent.
     Commit(FileDiffRequest),
@@ -363,28 +364,26 @@ impl SourcefourWindow {
     ) -> gpui::AnyElement {
         match &view.content {
             None => self.diff_notice("Computing diff…").into_any_element(),
-            // Preview rides beside the source, raw text left and the rendered
-            // document right; the source half keeps the scrub machinery.
-            Some(DiffContent::Text { .. }) if preview::showing(view) => {
-                let rendered: gpui::AnyElement = match &view.preview {
-                    Some(preview) => self.preview_pane(preview, window).into_any_element(),
-                    None => self.diff_notice("Rendering preview…").into_any_element(),
-                };
-                div()
+            // Preview renders both versions of the document, the old side
+            // left and the new side right — the raw text stays under Source.
+            Some(DiffContent::Text { .. }) if preview::showing(view) => match &view.preview {
+                Some(preview) => div()
                     .size_full()
                     .flex()
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w(px(1.0))
-                            .relative()
-                            .child(self.diff_text_list(view, line_count, cx))
-                            .children(self.diff_scrollbar(cx)),
-                    )
+                    .child(div().flex_1().min_w(px(1.0)).child(self.preview_pane(
+                        &preview.old,
+                        "preview-old",
+                        window,
+                    )))
                     .child(div().w(px(1.0)).flex_none().bg(self.theme.border))
-                    .child(div().flex_1().min_w(px(1.0)).child(rendered))
-                    .into_any_element()
-            }
+                    .child(div().flex_1().min_w(px(1.0)).child(self.preview_pane(
+                        &preview.new,
+                        "preview-new",
+                        window,
+                    )))
+                    .into_any_element(),
+                None => self.diff_notice("Rendering preview…").into_any_element(),
+            },
             Some(DiffContent::Text { lines }) if lines.is_empty() => {
                 self.diff_notice("No textual changes.").into_any_element()
             }
@@ -495,7 +494,9 @@ impl SourcefourWindow {
                     .child(view.title.clone()),
             )
             .children(preview::applies(view).then(|| self.preview_toggle(view.show_preview, cx)))
-            .child(
+            // The layout control chooses how source lines lay out; while both
+            // rendered documents show, it has nothing to say.
+            .children((!preview::showing(view)).then(|| {
                 div()
                     .flex_none()
                     .flex()
@@ -518,8 +519,8 @@ impl SourcefourWindow {
                         DiffMode::Split,
                         view.mode,
                         cx,
-                    )),
-            )
+                    ))
+            }))
             .children((line_count > 0).then(|| {
                 div()
                     .flex_none()

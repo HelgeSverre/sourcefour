@@ -45,6 +45,14 @@ const IMAGE_HEIGHT: f32 = 420.0;
 
 /// One parsed document with every image reference already resolved.
 pub(super) struct PreviewState {
+    /// The diff's old side, rendered.
+    pub(super) old: PreviewDoc,
+    /// The diff's new side, rendered.
+    pub(super) new: PreviewDoc,
+}
+
+/// One side's document: its blocks and the images they resolved to.
+pub(super) struct PreviewDoc {
     /// The document's blocks, in source order.
     pub(super) blocks: Vec<DocBlock>,
     /// One entry per distinct image reference in `blocks`.
@@ -52,6 +60,7 @@ pub(super) struct PreviewState {
 }
 
 /// What one image reference resolved to.
+#[derive(Clone)]
 pub(super) enum PreviewImage {
     /// Bytes the renderer can draw.
     Loaded(Arc<gpui::Image>),
@@ -73,10 +82,8 @@ pub(super) fn showing(view: &DiffView) -> bool {
     view.show_preview && applies(view)
 }
 
-/// The side of the repository a preview of `origin` reads.
-///
-/// Always the side the diff itself shows: the commit's own blob, the staged
-/// blob for a staged working-tree entry, the file on disk otherwise.
+/// The new side of `origin`: the commit's own blob, the staged blob for a
+/// staged working-tree entry, the file on disk otherwise.
 fn doc_source(origin: &DiffOrigin) -> DocSource {
     match origin {
         DiffOrigin::Commit(request) => DocSource::Commit {
@@ -88,12 +95,35 @@ fn doc_source(origin: &DiffOrigin) -> DocSource {
     }
 }
 
+/// The old side of `origin`: the parent commit's blob, HEAD's blob for a
+/// staged entry, the index blob for an unstaged one. `None` when there is no
+/// old side — a root commit, or a staged file on an unborn HEAD.
+fn old_doc_source(
+    location: &RepoLocation,
+    origin: &DiffOrigin,
+    head: Option<sourcefour_model::Oid>,
+) -> Option<DocSource> {
+    match origin {
+        DiffOrigin::Commit(request) => {
+            sourcefour_git::parent_commit_oid(location, request.oid, request.parent).map(|oid| {
+                DocSource::Commit {
+                    oid,
+                    path: request.path.clone(),
+                }
+            })
+        }
+        DiffOrigin::WorkingTree { path, staged: true } => head.map(|oid| DocSource::Commit {
+            oid,
+            path: path.clone(),
+        }),
+        DiffOrigin::WorkingTree { path, .. } => Some(DocSource::Index { path: path.clone() }),
+    }
+}
+
 /// The blocks a preview renders for the bytes that side yielded.
 ///
-/// A side without the document — the new side of a deletion — renders one
-/// notice rather than an empty pane. Previewing the *old* side instead would
-/// need an address for it that a commit diff does not hand out, so v1 says so
-/// plainly and leaves that to whoever needs it.
+/// A side without the document — the new side of a deletion, the old side of
+/// an addition — renders one notice rather than an empty pane.
 fn document_blocks(bytes: Option<&[u8]>) -> Vec<DocBlock> {
     let Some(bytes) = bytes else {
         return vec![DocBlock {
@@ -109,21 +139,42 @@ fn document_blocks(bytes: Option<&[u8]>) -> Vec<DocBlock> {
     sourcefour_doc::parse_markdown(&String::from_utf8_lossy(bytes))
 }
 
-/// Reads, parses, and resolves one document. Runs off the main thread.
-fn load(location: &RepoLocation, source: &DocSource, path: &RepoPath) -> PreviewState {
-    let blocks = document_blocks(sourcefour_git::document_bytes(location, source).as_deref());
-    let mut images = HashMap::new();
-    for reference in sourcefour_doc::image_sources(&blocks) {
-        images.entry(reference.to_owned()).or_insert_with(
-            || match sourcefour_git::resolve_doc_image(location, source, path, reference) {
-                ImageResolution::Found { bytes, format } => render_image(Some(&bytes), &format)
-                    .map_or(PreviewImage::Missing, PreviewImage::Loaded),
-                ImageResolution::Remote => PreviewImage::Remote,
-                ImageResolution::Missing => PreviewImage::Missing,
-            },
-        );
+/// Reads, parses, and resolves both sides. Runs off the main thread.
+fn load(
+    location: &RepoLocation,
+    origin: &DiffOrigin,
+    head: Option<sourcefour_model::Oid>,
+) -> PreviewState {
+    let path = origin.path().clone();
+    PreviewState {
+        old: load_side(
+            location,
+            old_doc_source(location, origin, head).as_ref(),
+            &path,
+        ),
+        new: load_side(location, Some(&doc_source(origin)), &path),
     }
-    PreviewState { blocks, images }
+}
+
+/// One side's document, parsed and with every image reference resolved
+/// against that side's own tree.
+fn load_side(location: &RepoLocation, source: Option<&DocSource>, path: &RepoPath) -> PreviewDoc {
+    let bytes = source.and_then(|source| sourcefour_git::document_bytes(location, source));
+    let blocks = document_blocks(bytes.as_deref());
+    let mut images = HashMap::new();
+    if let Some(source) = source {
+        for reference in sourcefour_doc::image_sources(&blocks) {
+            images.entry(reference.to_owned()).or_insert_with(|| {
+                match sourcefour_git::resolve_doc_image(location, source, path, reference) {
+                    ImageResolution::Found { bytes, format } => render_image(Some(&bytes), &format)
+                        .map_or(PreviewImage::Missing, PreviewImage::Loaded),
+                    ImageResolution::Remote => PreviewImage::Remote,
+                    ImageResolution::Missing => PreviewImage::Missing,
+                }
+            });
+        }
+    }
+    PreviewDoc { blocks, images }
 }
 
 /// The pre-resolved preview `--scene preview` seeds (§12.4).
@@ -146,8 +197,14 @@ pub(super) fn demo_state() -> PreviewState {
         PreviewImage::Remote,
     );
     PreviewState {
-        blocks: sourcefour_doc::parse_markdown(crate::demo::PREVIEW_MARKDOWN),
-        images,
+        old: PreviewDoc {
+            blocks: sourcefour_doc::parse_markdown(crate::demo::PREVIEW_MARKDOWN_OLD),
+            images: images.clone(),
+        },
+        new: PreviewDoc {
+            blocks: sourcefour_doc::parse_markdown(crate::demo::PREVIEW_MARKDOWN),
+            images,
+        },
     }
 }
 
@@ -163,25 +220,37 @@ impl SourcefourWindow {
             cx.notify();
             return;
         }
-        let source = doc_source(&view.origin);
-        let path = view.origin.path().clone();
+        let origin = view.origin.clone();
         let Some(location) = self.location.clone() else {
             // No repository to read from — the demo seeds its own preview, so
             // this only happens before discovery finishes.
             view.preview = Some(PreviewState {
-                blocks: document_blocks(None),
-                images: HashMap::new(),
+                old: PreviewDoc {
+                    blocks: document_blocks(None),
+                    images: HashMap::new(),
+                },
+                new: PreviewDoc {
+                    blocks: document_blocks(None),
+                    images: HashMap::new(),
+                },
             });
             cx.notify();
             return;
         };
+        // The old side of a staged entry is HEAD, which only the snapshot
+        // knows; resolve it here so the background load needs no ref reads.
+        let head = self.snapshot().and_then(|snapshot| match &snapshot.head {
+            sourcefour_model::HeadSnapshot::Branch { oid, .. }
+            | sourcefour_model::HeadSnapshot::Detached { oid } => Some(*oid),
+            _ => None,
+        });
         // The diff's own token: a preview belongs to the file the overlay was
         // opened for, and opening another retires it.
         let token = self.diff_request;
         cx.spawn(async move |this, cx| {
             let state = cx
                 .background_executor()
-                .spawn(async move { load(&location, &source, &path) })
+                .spawn(async move { load(&location, &origin, head) })
                 .await;
             this.update(cx, |this, cx| {
                 this.set_preview(token, state, cx);
@@ -233,13 +302,14 @@ impl SourcefourWindow {
     /// The rendered document, scrolling on its own in a centred column.
     pub(super) fn preview_pane(
         &self,
-        preview: &PreviewState,
+        preview: &PreviewDoc,
+        id: &'static str,
         window: &Window,
     ) -> gpui::Stateful<Div> {
         // The ambient family, so only the runs that mean to change it do.
         let font = window.text_style().font();
         div()
-            .id("preview-scroll")
+            .id(id)
             .size_full()
             .overflow_y_scroll()
             .flex()
@@ -265,7 +335,7 @@ impl SourcefourWindow {
     }
 
     /// One rendered block, recursing into the blocks quotes and items hold.
-    fn preview_block(&self, block: &DocBlock, preview: &PreviewState, font: &Font) -> Div {
+    fn preview_block(&self, block: &DocBlock, preview: &PreviewDoc, font: &Font) -> Div {
         match &block.kind {
             DocBlockKind::Heading { level, spans } => self.preview_heading(*level, spans, font),
             DocBlockKind::Paragraph { spans } => div()
@@ -412,7 +482,7 @@ impl SourcefourWindow {
         &self,
         ordered: bool,
         items: &[Vec<DocBlock>],
-        preview: &PreviewState,
+        preview: &PreviewDoc,
         font: &Font,
     ) -> Div {
         div()
@@ -452,7 +522,7 @@ impl SourcefourWindow {
 
     /// One image block: the picture when it resolved, a framed note when it
     /// did not, and its alt text beneath either.
-    fn preview_image(&self, src: &str, alt: &str, preview: &PreviewState) -> Div {
+    fn preview_image(&self, src: &str, alt: &str, preview: &PreviewDoc) -> Div {
         let body = match preview.images.get(src) {
             // Both bounds are absolute for the same reason the column is: a
             // relative maximum leaves the image with no width to fit into.
@@ -575,7 +645,7 @@ mod tests {
 
     #[test]
     fn the_demo_fixture_exercises_every_block_the_pane_draws() {
-        let blocks = super::demo_state().blocks;
+        let blocks = super::demo_state().new.blocks;
         let kinds: Vec<&DocBlockKind> = blocks.iter().map(|block| &block.kind).collect();
         let has = |matcher: fn(&DocBlockKind) -> bool| kinds.iter().any(|kind| matcher(kind));
 

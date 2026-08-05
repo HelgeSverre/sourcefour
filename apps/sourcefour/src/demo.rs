@@ -398,9 +398,9 @@ impl Scene {
                     format: String::from("png"),
                 };
             }
-            // The document arriving nearly whole, so Source has real lines to
-            // show when the capture's Preview is toggled off.
-            Self::Preview => ("# Sourcefour\n", PREVIEW_MARKDOWN),
+            // The same two documents the rendered sides show, so Source and
+            // Preview agree about what changed.
+            Self::Preview => (PREVIEW_MARKDOWN_OLD, PREVIEW_MARKDOWN),
             _ => (SIDEBAR_BEFORE, SIDEBAR_AFTER),
         };
         sourcefour_git::unified(
@@ -453,6 +453,26 @@ fn main() {
 ![build status](https://img.shields.io/badge/build-passing-green.svg)
 
 ![The retired logo](assets/demo/retired-logo.png)
+";
+
+/// The document's old side: what [`PREVIEW_MARKDOWN`] grew out of, so the
+/// rendered before/after visibly differ — no code section yet, a plainer
+/// paragraph, and no badge row.
+pub(crate) const PREVIEW_MARKDOWN_OLD: &str = r"# Sourcefour
+
+A Git history browser you launch from your terminal. Run `sourcefour` in any
+repository — it opens on the **current worktree** and reads through
+[gix](https://github.com/GitoxideLabs/gitoxide).
+
+![The application window](assets/demo/icon-after.png)
+
+## Getting started
+
+1. Install with `cargo install sourcefour`.
+2. Open a repository.
+3. Press `?` for the key map.
+
+> History loads in batches, so the first rows paint before the walk finishes.
 ";
 
 /// The two sides of [`Scene::file`], diffed live to build the overlay's lines.

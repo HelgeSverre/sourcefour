@@ -1,7 +1,7 @@
 //! One document's bytes, from whichever of a diff's three sides shows it, and
 //! the images that document references.
 
-use sourcefour_model::{Oid, RepoLocation, RepoPath};
+use sourcefour_model::{DiffParent, Oid, RepoLocation, RepoPath};
 
 use crate::diff::{blob_at, image_format, index_blob, worktree_bytes};
 
@@ -25,6 +25,23 @@ pub enum DocSource {
         /// The document's repository-relative path.
         path: RepoPath,
     },
+}
+
+/// The commit a diff's old side reads from, `None` when the old side is
+/// the empty tree — a root commit has no old document to render.
+pub fn parent_commit_oid(location: &RepoLocation, oid: Oid, parent: DiffParent) -> Option<Oid> {
+    match parent {
+        DiffParent::Parent(parent) => Some(parent),
+        DiffParent::EmptyTree => None,
+        DiffParent::FirstParent => {
+            let repository = gix::open(&location.git_dir).ok()?;
+            let commit = repository
+                .find_commit(gix::ObjectId::from_bytes_or_panic(oid.as_bytes()))
+                .ok()?;
+            let parent = commit.parent_ids().next()?;
+            crate::history::convert_oid(parent.as_ref())
+        }
+    }
 }
 
 /// What resolving one image reference produced.
@@ -167,6 +184,38 @@ mod tests {
             std::fs::create_dir_all(parent)?;
         }
         std::fs::write(target, bytes)
+    }
+
+    #[test]
+    fn the_old_side_resolves_to_the_parent_commit() -> Result<(), Box<dyn std::error::Error>> {
+        use sourcefour_model::DiffParent;
+
+        let repository = TempRepo::init();
+        repository.commit("second");
+        let second = head(&repository)?;
+        let parent = Oid::from_hex(&repository.git(&["rev-parse", "HEAD^"]))?;
+        let root = Oid::from_hex(&repository.git(&["rev-list", "--max-parents=0", "HEAD"]))?;
+        let location = discover(repository.path())?;
+
+        assert_eq!(
+            super::parent_commit_oid(&location, second, DiffParent::FirstParent),
+            Some(parent)
+        );
+        assert_eq!(
+            super::parent_commit_oid(&location, root, DiffParent::FirstParent),
+            None,
+            "a root commit has no old side"
+        );
+        assert_eq!(
+            super::parent_commit_oid(&location, second, DiffParent::Parent(parent)),
+            Some(parent),
+            "an explicit parent is taken at its word"
+        );
+        assert_eq!(
+            super::parent_commit_oid(&location, second, DiffParent::EmptyTree),
+            None
+        );
+        Ok(())
     }
 
     #[test]
