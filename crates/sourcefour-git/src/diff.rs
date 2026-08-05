@@ -92,13 +92,7 @@ pub fn worktree_file_diff(
 ) -> Result<DiffContent, RepoFailure> {
     let repository =
         gix::open(&location.git_dir).map_err(|error| open_failure(&location.git_dir, &error))?;
-    let index = repository
-        .index_or_empty()
-        .map_err(|error| open_failure(&location.git_dir, &error))?;
-    let index_bytes = index
-        .entry_by_path(path.0.as_slice().into())
-        .and_then(|entry| repository.find_object(entry.id).ok())
-        .map(|object| object.data.clone());
+    let index_bytes = index_blob(&repository, &path.0)?;
     let (old, new) = if staged {
         // An unborn HEAD has no tree, so everything staged reads as added.
         let head_tree = repository
@@ -148,8 +142,26 @@ fn content_for(
     }
 }
 
+/// The staged blob bytes at `path`, `None` when the index has no such entry.
+///
+/// # Errors
+///
+/// Returns a typed failure when the index cannot be read.
+pub(crate) fn index_blob(
+    repository: &gix::Repository,
+    path: &[u8],
+) -> Result<Option<Vec<u8>>, RepoFailure> {
+    let index = repository
+        .index_or_empty()
+        .map_err(|error| open_failure(repository.git_dir(), &error))?;
+    Ok(index
+        .entry_by_path(path.into())
+        .and_then(|entry| repository.find_object(entry.id).ok())
+        .map(|object| object.data.clone()))
+}
+
 /// Reads a worktree file, `None` when it is gone or the repository is bare.
-fn worktree_bytes(location: &RepoLocation, path: &[u8]) -> Option<Vec<u8>> {
+pub(crate) fn worktree_bytes(location: &RepoLocation, path: &[u8]) -> Option<Vec<u8>> {
     let root = location.active_worktree_path.as_deref()?;
     std::fs::read(root.join(bytes_as_path(path))).ok()
 }
@@ -169,7 +181,7 @@ fn bytes_as_path(path: &[u8]) -> std::path::PathBuf {
 
 /// The lowercased image extension of `path` when the viewer can render it
 /// (the formats gpui's image element decodes), normalized to one spelling.
-fn image_format(path: &[u8]) -> Option<String> {
+pub(crate) fn image_format(path: &[u8]) -> Option<String> {
     let dot = path.iter().rposition(|&byte| byte == b'.')?;
     let extension = std::str::from_utf8(&path[dot + 1..]).ok()?.to_lowercase();
     match extension.as_str() {
@@ -185,7 +197,7 @@ fn image_format(path: &[u8]) -> Option<String> {
 /// Walks the path as raw components rather than going through `Path`: Git
 /// stores paths as bytes and separates them with `/` on every platform, and
 /// only Unix can borrow arbitrary bytes as an `OsStr`.
-fn blob_at(tree: Option<&gix::Tree<'_>>, path: &[u8]) -> Option<Vec<u8>> {
+pub(crate) fn blob_at(tree: Option<&gix::Tree<'_>>, path: &[u8]) -> Option<Vec<u8>> {
     let components = path.split(|byte| *byte == b'/');
     let entry = tree?.lookup_entry(components).ok()??;
     let object = entry.object().ok()?;

@@ -10,6 +10,7 @@ mod commit;
 mod detail;
 mod diff;
 mod discover;
+mod doc;
 mod fetch;
 mod files;
 mod history;
@@ -32,6 +33,7 @@ pub use crate::{
     detail::commit_detail,
     diff::{DiffLimits, file_diff, file_diff_with_limits, unified, worktree_file_diff},
     discover::{discover, display_name},
+    doc::{DocSource, ImageResolution, document_bytes, resolve_doc_image},
     fetch::fetch,
     files::commit_files,
     history::{FIRST_BATCH_ROWS, GixHistoryCursor, NEXT_BATCH_ROWS},
