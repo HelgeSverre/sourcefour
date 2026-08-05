@@ -32,7 +32,7 @@ pub(super) type GithubChecks = Result<Vec<sourcefour_model::CheckRun>, String>;
 
 /// The 0600 token file, next to the other per-user files.
 pub(super) fn credentials_path() -> Option<std::path::PathBuf> {
-    crate::ui_state::support_file("credentials.json")
+    crate::persist::support_file("credentials.json")
 }
 
 /// The glyph and color a check status renders as.

@@ -227,7 +227,7 @@ pub(crate) fn display_path(path: &Path) -> String {
         .to_str()
         .and_then(|text| text.strip_prefix(r"\\?\"))
         .map_or(path, Path::new);
-    let home = crate::ui_state::home_directory();
+    let home = crate::persist::home_directory();
     match home
         .as_deref()
         .and_then(|home| path.strip_prefix(home).ok())
@@ -409,8 +409,7 @@ mod tests {
 
     #[test]
     fn display_path_shortens_the_home_directory() {
-        let home =
-            crate::ui_state::home_directory().expect("every platform names a home directory");
+        let home = crate::persist::home_directory().expect("every platform names a home directory");
 
         assert_eq!(
             display_path(&home.join("code").join("sourcefour")),

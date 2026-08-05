@@ -1,8 +1,9 @@
 //! User settings: deliberate configuration, kept apart from window state.
 //!
-//! Same tolerance contract as [`crate::ui_state`]: unknown fields are
-//! ignored and missing fields fall back to defaults, so older and newer
-//! builds can share the file. Secrets never live here.
+//! Same tolerance contract as [`crate::ui_state`], both halves of it in
+//! [`crate::persist`]: unknown fields are ignored on read and kept on write,
+//! and missing fields fall back to defaults, so older and newer builds can
+//! share the file — and so can a hand-edit. Secrets never live here.
 
 use std::path::Path;
 
@@ -83,7 +84,7 @@ impl AppSettings {
     /// Reads settings, falling back to defaults on any failure: a missing or
     /// corrupt file must never block the window.
     pub(crate) fn load_from(path: &Path) -> Self {
-        crate::ui_state::load_json_or_default(path)
+        crate::persist::load_json_or_default(path)
     }
 
     /// Writes the settings, creating the directory on first save.
@@ -93,18 +94,18 @@ impl AppSettings {
     /// Returns the underlying error when the file cannot be written; callers
     /// log it, because a failed save must never interrupt the user.
     pub(crate) fn save_to(&self, path: &Path) -> std::io::Result<()> {
-        crate::ui_state::save_json_pretty(path, self)
+        crate::persist::save_json_pretty(path, self)
     }
 
     /// Loads from the default per-user location.
     pub(crate) fn load() -> Self {
-        crate::ui_state::support_file("settings.json")
+        crate::persist::support_file("settings.json")
             .map_or_else(Self::default, |path| Self::load_from(&path))
     }
 
     /// Saves to the default per-user location, logging failures.
     pub(crate) fn save(&self) {
-        let Some(path) = crate::ui_state::support_file("settings.json") else {
+        let Some(path) = crate::persist::support_file("settings.json") else {
             return;
         };
         if let Err(error) = self.save_to(&path) {
@@ -237,6 +238,39 @@ mod tests {
                 ffmpeg_dir: Some(std::path::PathBuf::from("/opt/ffmpeg/bin")),
             },
             "a future key inside the section is ignored, not fatal"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_save_keeps_the_keys_this_build_has_no_field_for() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let directory = tempfile::TempDir::new()?;
+        let path = directory.path().join("settings.json");
+        std::fs::write(
+            &path,
+            r#"{"holograms": {"on": true}, "diff": {"line_height": 1.7, "wrap": true}}"#,
+        )?;
+
+        let mut loaded = AppSettings::load_from(&path);
+        loaded.diff.line_height = 1.8;
+        loaded.save_to(&path)?;
+
+        let written: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path)?)?;
+        assert_eq!(
+            written["holograms"]["on"],
+            serde_json::json!(true),
+            "a whole section this build never heard of survives the save"
+        );
+        assert_eq!(
+            written["diff"]["wrap"],
+            serde_json::json!(true),
+            "so does a foreign key inside a section this build does write"
+        );
+        assert_eq!(
+            written["diff"]["line_height"],
+            serde_json::json!(f64::from(1.8_f32)),
+            "the field this build owns is the one that changed"
         );
         Ok(())
     }

@@ -6,6 +6,7 @@ mod diff_split;
 mod graph_paint;
 mod history;
 mod panels;
+mod persist;
 mod settings;
 mod settings_ui;
 mod text_input;

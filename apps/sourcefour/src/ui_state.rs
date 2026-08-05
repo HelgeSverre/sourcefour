@@ -1,7 +1,8 @@
 //! Persisted interface state: panel sizes, section order, collapse state.
 //!
 //! One tolerant JSON file per user. Unknown fields are ignored and missing
-//! fields fall back to defaults, so older and newer builds can share it.
+//! fields fall back to defaults, so older and newer builds can share it; see
+//! [`crate::persist`] for both halves of that.
 
 use std::path::{Path, PathBuf};
 
@@ -22,42 +23,20 @@ pub(crate) struct UiState {
     pub(crate) details_collapsed: bool,
 }
 
-/// Reads a tolerant JSON file: a missing or corrupt file must never block
-/// the window, so any failure yields the default.
-pub(crate) fn load_json_or_default<T: serde::de::DeserializeOwned + Default>(path: &Path) -> T {
-    std::fs::read_to_string(path)
-        .ok()
-        .and_then(|contents| serde_json::from_str(&contents).ok())
-        .unwrap_or_default()
-}
-
-/// Writes pretty JSON, creating the directory on first save.
-///
-/// # Errors
-///
-/// Returns the underlying error when the file cannot be written; callers log
-/// it, because a failed save must never interrupt the user.
-pub(crate) fn save_json_pretty<T: serde::Serialize>(path: &Path, value: &T) -> std::io::Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let json = serde_json::to_string_pretty(value).map_err(std::io::Error::other)?;
-    std::fs::write(path, json)
-}
-
 impl UiState {
-    /// Reads persisted state; see [`load_json_or_default`] for the contract.
+    /// Reads persisted state; see [`crate::persist::load_json_or_default`]
+    /// for the contract.
     pub(crate) fn load_from(path: &Path) -> Self {
-        load_json_or_default(path)
+        crate::persist::load_json_or_default(path)
     }
 
-    /// Writes the state; see [`save_json_pretty`].
+    /// Writes the state; see [`crate::persist::save_json_pretty`].
     ///
     /// # Errors
     ///
-    /// See [`save_json_pretty`].
+    /// See [`crate::persist::save_json_pretty`].
     pub(crate) fn save_to(&self, path: &Path) -> std::io::Result<()> {
-        save_json_pretty(path, self)
+        crate::persist::save_json_pretty(path, self)
     }
 
     /// Loads from the default per-user location.
@@ -78,27 +57,7 @@ impl UiState {
 
 /// `~/Library/Application Support/Sourcefour/state.json` on macOS.
 fn default_path() -> Option<PathBuf> {
-    support_file("state.json")
-}
-
-/// The user's home directory. Windows sets `USERPROFILE` where Unix sets
-/// `HOME`.
-pub(crate) fn home_directory() -> Option<PathBuf> {
-    std::env::var_os("HOME")
-        .or_else(|| std::env::var_os("USERPROFILE"))
-        .map(PathBuf::from)
-}
-
-/// A file in the app's per-user support directory,
-/// `~/Library/Application Support/Sourcefour/` on macOS.
-pub(crate) fn support_file(name: &str) -> Option<PathBuf> {
-    Some(
-        home_directory()?
-            .join("Library")
-            .join("Application Support")
-            .join("Sourcefour")
-            .join(name),
-    )
+    crate::persist::support_file("state.json")
 }
 
 #[cfg(test)]
