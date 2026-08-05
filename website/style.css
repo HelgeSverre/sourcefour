@@ -159,6 +159,120 @@ section {
   padding: 12px 22px;
 }
 
+/* ── split download button ───────────────────────────────────── */
+
+.split {
+  display: inline-flex;
+  /* The seam is one hairline, not two borders meeting. */
+  gap: 1px;
+}
+.split > .btn:first-child {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+.split-more {
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  padding-inline: 12px;
+}
+.split-more svg {
+  width: 10px;
+  height: 6px;
+  transition: transform 0.15s var(--ease);
+}
+.split-more[aria-expanded="true"] svg {
+  transform: rotate(180deg);
+}
+
+.dl-menu {
+  /* A popover starts centred in the top layer; anchoring below tethers it to
+     the trigger where the browser can do that, and this is the fallback. */
+  padding: 6px;
+  min-width: 232px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-lg);
+  background: var(--panel);
+  box-shadow: var(--shadow);
+  text-align: left;
+}
+.dl-menu:not(:popover-open) {
+  display: none;
+}
+/* The icons are defined once and referenced from both the menu and the
+   download buttons; Tux alone is five kilobytes of path data. */
+.sprite {
+  display: none;
+}
+
+.dl-menu a {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 7px 10px;
+  border-radius: var(--r-md);
+  color: var(--ink);
+  text-decoration: none;
+  /* The page sets 1.65 for prose; a two-line row wants the lines to read as
+     one item, not as two paragraphs. */
+  line-height: 1.3;
+}
+.dl-icon {
+  width: 22px;
+  height: 22px;
+  flex: none;
+  /* Full strength, as in the download cards: Tux is a detailed silhouette and
+     a dimmed fill turns it to mush at this size where the flat marks survive. */
+  fill: var(--ink);
+}
+/* All three marks are the full 24 tall, so height needs no correction and
+   scaling one down shrinks the cue that matters most. Only Windows needs a
+   touch: it is the sole one that also fills the box edge to edge (24 wide
+   against ~19.7), four solid squares of ink where the others taper. */
+.dl-icon.is-windows {
+  transform: scale(0.88);
+}
+.dl-menu a[aria-current="true"] .dl-icon {
+  fill: var(--accent);
+}
+.dl-menu a:hover,
+.dl-menu a:focus-visible {
+  background: var(--hover);
+}
+.dl-menu a[aria-current="true"] {
+  background: var(--accent-fade);
+}
+.dl-os {
+  display: block;
+  font-size: var(--text-sm);
+  font-weight: 550;
+}
+.dl-meta {
+  display: block;
+  font-size: var(--text-xs);
+  color: var(--ink-3);
+}
+.dl-menu .dl-alt {
+  margin-top: 4px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+  border-radius: 0;
+  font-size: var(--text-xs);
+  color: var(--ink-2);
+}
+
+@supports (anchor-name: --a) {
+  .split-more {
+    anchor-name: --dl-anchor;
+  }
+  .dl-menu {
+    position-anchor: --dl-anchor;
+    position-area: block-end span-inline-start;
+    position-try-fallbacks: flip-block;
+    inset: auto;
+    margin: 6px 0 0;
+  }
+}
+
 /* ── hero ────────────────────────────────────────────────────── */
 
 .hero {
