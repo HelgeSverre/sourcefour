@@ -509,6 +509,10 @@ impl SourcefourWindow {
         div()
             // Scopes every element id the block below builds.
             .id(id.item_id())
+            // The list measures items with the pane's width available, but an
+            // auto-width flex container still sizes to its content — only
+            // long paragraphs coincidentally reached the cap.
+            .w_full()
             .flex()
             .flex_col()
             .items_center()
@@ -720,6 +724,9 @@ impl SourcefourWindow {
         strong.weight = FontWeight::SEMIBOLD;
         div()
             .mt(px(10.0))
+            // The well spans the column even when its rows are narrow;
+            // shrink-to-fit reads as a layout bug beside full-width blocks.
+            .w_full()
             .border_1()
             .border_color(self.theme.border)
             .rounded(px(5.0))
