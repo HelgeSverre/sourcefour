@@ -181,6 +181,9 @@ fn history_keymap() -> Vec<gpui::KeyBinding> {
         // read as a navigation command instead of typed into the query.
         gpui::KeyBinding::new("j", gpui::NoAction, Some("FilterInput")),
         gpui::KeyBinding::new("k", gpui::NoAction, Some("FilterInput")),
+        // Space has the same flaw below: without this, a multi-word filter
+        // query toggles the details pane instead of typing the space.
+        gpui::KeyBinding::new("space", gpui::NoAction, Some("FilterInput")),
         gpui::KeyBinding::new("escape", CloseDiff, Some("Diff")),
         gpui::KeyBinding::new("cmd-c", CopyPreviewSelection, Some("Diff")),
         gpui::KeyBinding::new("space", ToggleDetails, Some("History")),
