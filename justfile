@@ -68,6 +68,19 @@ package:
 pkg:
     .github/scripts/package-macos-pkg.sh --unsigned --output-dir dist
 
+# Install the packaged app into /Applications.
+[group('dist')]
+install: package
+    rm -rf /Applications/Sourcefour.app
+    cp -R dist/Sourcefour.app /Applications/
+    @echo "Installed /Applications/Sourcefour.app"
+
+# Remove the installed app. Settings in ~/Library/Application Support stay.
+[group('dist')]
+uninstall:
+    rm -rf /Applications/Sourcefour.app
+    @echo "Removed /Applications/Sourcefour.app"
+
 # Regenerate the app icon in every packaging format.
 [group('dist')]
 icon:
