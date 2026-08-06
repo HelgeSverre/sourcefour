@@ -4,7 +4,17 @@
 //! development builds change identity every rebuild; Keychain storage waits
 //! for Developer ID signing. Tokens never appear in settings.json or logs.
 
-use std::{collections::BTreeMap, path::Path};
+use std::{
+    collections::BTreeMap,
+    io::Read as _,
+    path::Path,
+    process::{Command, Output, Stdio},
+    sync::{
+        Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::{Duration, Instant},
+};
 
 /// The file's whole shape: one token per host.
 type Store = BTreeMap<String, HostCredentials>;
@@ -61,6 +71,16 @@ pub fn delete_token(path: &Path, host: &str) -> std::io::Result<()> {
     )
 }
 
+/// How long `gh` may run before it is killed.
+///
+/// A `gh` that is not signed in, or whose keyring prompt has nowhere to go,
+/// can decide to wait on a terminal that is not there instead of failing
+/// outright — with a null stdin (below) that should surface as an instant
+/// EOF, but the timeout is the backstop for the build of `gh` that waits
+/// anyway, so a settings screen never hangs its loader for the life of the
+/// process.
+const GH_TIMEOUT: Duration = Duration::from_secs(4);
+
 /// The token of an installed, signed-in `gh` CLI, fetched at use time so a
 /// rotated token is never stale. Arguments are discrete, never a shell line.
 ///
@@ -68,9 +88,7 @@ pub fn delete_token(path: &Path, host: &str) -> std::io::Result<()> {
 ///
 /// Returns the words to show when gh is missing, not signed in, or fails.
 pub fn gh_cli_token() -> Result<String, String> {
-    let output = std::process::Command::new("gh")
-        .args(["auth", "token"])
-        .output()
+    let output = run_bounded(Command::new("gh").args(["auth", "token"]))
         .map_err(|error| format!("The gh CLI could not be run: {error}"))?;
     let token = String::from_utf8_lossy(&output.stdout).trim().to_string();
     if !output.status.success() {
@@ -80,6 +98,66 @@ pub fn gh_cli_token() -> Result<String, String> {
     } else {
         Ok(token)
     }
+}
+
+/// Runs `command` with a null stdin, killing it if it outlives [`GH_TIMEOUT`].
+///
+/// The same shape as the watchdog in `sourcefour_git::media::run_bounded`
+/// (spawn, poll a deadline on a scope thread, kill on expiry), copied rather
+/// than shared: the two crates do not depend on each other, and one call
+/// site does not earn a shared crate. It differs in draining both stdout and
+/// stderr, since a caller here wants `gh`'s error text and not just its
+/// output; that needs its own reader thread; two full pipes and one thread
+/// would deadlock if `gh` blocked on a full stderr while this blocked
+/// reading a full stdout.
+fn run_bounded(command: &mut Command) -> std::io::Result<Output> {
+    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    let stdout_pipe = child.stdout.take();
+    let stderr_pipe = child.stderr.take();
+    let child = Mutex::new(child);
+    let finished = AtomicBool::new(false);
+    let (stdout, stderr) = std::thread::scope(|scope| {
+        scope.spawn(|| {
+            let deadline = Instant::now() + GH_TIMEOUT;
+            while !finished.load(Ordering::Acquire) {
+                if Instant::now() >= deadline {
+                    if let Ok(mut child) = child.lock() {
+                        child.kill().ok();
+                    }
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(25));
+            }
+        });
+        let stdout_reader = scope.spawn(|| {
+            let mut buffer = Vec::new();
+            if let Some(mut pipe) = stdout_pipe {
+                pipe.read_to_end(&mut buffer).ok();
+            }
+            buffer
+        });
+        let mut stderr_buffer = Vec::new();
+        if let Some(mut pipe) = stderr_pipe {
+            pipe.read_to_end(&mut stderr_buffer).ok();
+        }
+        // Both pipes have closed, so the child is done one way or the other.
+        let stdout_buffer = stdout_reader.join().unwrap_or_default();
+        finished.store(true, Ordering::Release);
+        (stdout_buffer, stderr_buffer)
+    });
+    let status = child
+        .into_inner()
+        .map_err(|_| std::io::Error::other("the watchdog thread poisoned the child lock"))?
+        .wait()?;
+    Ok(Output {
+        status,
+        stdout,
+        stderr,
+    })
 }
 
 /// Writes with owner-only permissions, creating parents as needed.
@@ -106,7 +184,7 @@ fn write_private(path: &Path, contents: &str) -> std::io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{delete_token, load_token, store_token};
+    use super::{delete_token, load_token, run_bounded, store_token};
 
     #[test]
     fn tokens_round_trip_per_host() -> Result<(), Box<dyn std::error::Error>> {
@@ -163,5 +241,27 @@ mod tests {
             Some("ghp_second")
         );
         Ok(())
+    }
+
+    /// Unix-only: `sleep` and a killable process group are a POSIX given, and
+    /// the repo already spawns real executables (git, ffmpeg) in tests
+    /// rather than faking a process boundary.
+    #[cfg(unix)]
+    #[test]
+    fn a_process_that_never_exits_is_killed_at_the_deadline() {
+        let started = std::time::Instant::now();
+
+        let output = run_bounded(std::process::Command::new("sleep").arg("10"))
+            .expect("spawning sleep should succeed");
+
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed < std::time::Duration::from_secs(8),
+            "the watchdog should kill well before sleep's own 10s, took {elapsed:?}"
+        );
+        assert!(
+            !output.status.success(),
+            "a killed process does not exit successfully"
+        );
     }
 }

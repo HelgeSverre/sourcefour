@@ -161,6 +161,10 @@ fn history_keymap() -> Vec<gpui::KeyBinding> {
     vec![
         gpui::KeyBinding::new("down", SelectNextCommit, Some("History")),
         gpui::KeyBinding::new("up", SelectPreviousCommit, Some("History")),
+        // Same pair the Actions run overlay already binds to jobs, so the
+        // hand doesn't have to relearn which pane takes vi motion.
+        gpui::KeyBinding::new("j", SelectNextCommit, Some("History")),
+        gpui::KeyBinding::new("k", SelectPreviousCommit, Some("History")),
         gpui::KeyBinding::new("pagedown", PageDown, Some("History")),
         gpui::KeyBinding::new("pageup", PageUp, Some("History")),
         gpui::KeyBinding::new("home", SelectFirstCommit, Some("History")),
@@ -169,6 +173,14 @@ fn history_keymap() -> Vec<gpui::KeyBinding> {
         gpui::KeyBinding::new("cmd-f", FocusFilter, None),
         gpui::KeyBinding::new("escape", FilterEscape, Some("FilterInput")),
         gpui::KeyBinding::new("enter", FilterEnter, Some("FilterInput")),
+        // A "History"-context binding fires from any focused descendant,
+        // filter input included, unless something more specific to
+        // "FilterInput" claims the same key first — escape and enter do that
+        // above by overriding to a filter action; j/k have no filter action
+        // to give them, so `NoAction` is what stops the letter from being
+        // read as a navigation command instead of typed into the query.
+        gpui::KeyBinding::new("j", gpui::NoAction, Some("FilterInput")),
+        gpui::KeyBinding::new("k", gpui::NoAction, Some("FilterInput")),
         gpui::KeyBinding::new("escape", CloseDiff, Some("Diff")),
         gpui::KeyBinding::new("cmd-c", CopyPreviewSelection, Some("Diff")),
         gpui::KeyBinding::new("space", ToggleDetails, Some("History")),

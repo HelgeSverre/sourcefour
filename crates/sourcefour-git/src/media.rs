@@ -26,8 +26,11 @@ use sourcefour_model::VideoInfo;
 /// How long either tool may run before it is killed.
 ///
 /// A wedged decoder holds a background-executor thread, and a malformed blob
-/// is exactly the input that wedges one.
-const TOOL_TIMEOUT: Duration = Duration::from_secs(5);
+/// is exactly the input that wedges one. Five seconds cut off large files on
+/// slow disks before they finished decoding, degrading the poster for a clip
+/// that was only ever going to be slow, not stuck; eight still bounds a
+/// wedged decoder without punishing a working one.
+const TOOL_TIMEOUT: Duration = Duration::from_secs(8);
 
 /// Largest blob worth writing to disk to look at a single frame of.
 ///
