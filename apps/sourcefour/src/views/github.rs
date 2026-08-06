@@ -122,7 +122,7 @@ impl SourcefourWindow {
             )
             .on_click(cx.listener(move |this, _, window, cx| {
                 cx.stop_propagation();
-                this.open_actions_run(clicked.clone(), window, cx);
+                this.open_actions_run(clicked.clone(), None, window, cx);
             }))
             .child(
                 div()

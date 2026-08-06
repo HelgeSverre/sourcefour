@@ -28,6 +28,9 @@ pub(super) struct ActionsView {
     pub(super) run: WorkflowRun,
     /// `None` while the first jobs read is in flight.
     pub(super) jobs: Option<Result<Vec<WorkflowJob>, String>>,
+    /// The job name a click on a specific check asked to open, consumed by
+    /// [`SourcefourWindow::apply_actions_jobs`] the moment jobs first land.
+    pub(super) focus_job: Option<String>,
     pub(super) selected_job: usize,
     /// The step whose log slice shows; `None` means the failing step.
     pub(super) selected_step: Option<usize>,
@@ -84,6 +87,14 @@ fn default_job(jobs: &[WorkflowJob]) -> usize {
             .map(|(index, _)| index)
     };
     failed.or_else(running).or_else(longest).unwrap_or(0)
+}
+
+/// The job an overlay opens on: the clicked check's job, matched by name,
+/// when it names one in the list — otherwise [`default_job`]'s pick.
+fn initial_job(jobs: &[WorkflowJob], wanted: Option<&str>) -> usize {
+    wanted
+        .and_then(|name| jobs.iter().position(|job| job.name == name))
+        .unwrap_or_else(|| default_job(jobs))
 }
 
 /// The step a job opens on: first failed, else the longest.
@@ -225,6 +236,7 @@ pub(super) fn demo_view() -> ActionsView {
     ActionsView {
         run: demo_run(),
         jobs: Some(Ok(demo_jobs())),
+        focus_job: None,
         selected_job: 1,
         selected_step: None,
         collapsed: false,
@@ -379,9 +391,16 @@ fn demo_log() -> Vec<String> {
 
 impl SourcefourWindow {
     /// Opens the run's overlay and starts its jobs read and live poll.
+    ///
+    /// `focus_job` is the name of the job the overlay should select once
+    /// jobs arrive — e.g. the specific check that was clicked — or `None`
+    /// to fall back to [`default_job`]. It must arrive as a parameter
+    /// rather than being set on the view afterward: jobs can land
+    /// synchronously below, from the prefetch stash.
     pub(super) fn open_actions_run(
         &mut self,
         run: WorkflowRun,
+        focus_job: Option<String>,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
@@ -391,6 +410,7 @@ impl SourcefourWindow {
         self.actions_view = Some(ActionsView {
             run,
             jobs: None,
+            focus_job,
             selected_job: 0,
             selected_step: None,
             collapsed: false,
@@ -450,7 +470,8 @@ impl SourcefourWindow {
                 view.jobs = Some(outcome);
             }
             if first_arrival {
-                view.selected_job = default_job(view.jobs_ok());
+                let wanted = view.focus_job.take();
+                view.selected_job = initial_job(view.jobs_ok(), wanted.as_deref());
             }
             // Every completed job's log fetches in parallel right away, so
             // expanding any job is instant — and a job that just finished
@@ -490,7 +511,7 @@ impl SourcefourWindow {
             completed_at: None,
             html_url: String::new(),
         };
-        self.open_actions_run(stub, window, cx);
+        self.open_actions_run(stub, Some(name.to_owned()), window, cx);
         let Some(remote) = self.github_remote.clone() else {
             return;
         };
@@ -1601,7 +1622,7 @@ mod tests {
 
     use super::{
         LineTint, bar_fraction, default_job, default_step, demo_log, demo_view, fmt_duration,
-        line_tint,
+        initial_job, line_tint,
     };
 
     #[test]
@@ -1664,6 +1685,36 @@ mod tests {
             "all green opens the longest job"
         );
         assert_eq!(default_job(&[]), 0);
+    }
+
+    #[test]
+    fn a_wanted_job_wins_even_when_another_job_failed() {
+        let success = CheckStatus::Completed(CheckConclusion::Success);
+        let failure = CheckStatus::Completed(CheckConclusion::Failure);
+        let jobs = [job("a", failure, 0, 10), job("b", success, 0, 5)];
+
+        assert_eq!(
+            initial_job(&jobs, Some("b")),
+            1,
+            "the clicked check's job wins over default_job's own pick"
+        );
+    }
+
+    #[test]
+    fn an_unknown_wanted_name_falls_back_to_default_job() {
+        let success = CheckStatus::Completed(CheckConclusion::Success);
+        let failure = CheckStatus::Completed(CheckConclusion::Failure);
+        let jobs = [job("a", success, 0, 10), job("b", failure, 0, 5)];
+
+        assert_eq!(initial_job(&jobs, Some("missing")), default_job(&jobs));
+    }
+
+    #[test]
+    fn no_wanted_name_falls_back_to_default_job() {
+        let success = CheckStatus::Completed(CheckConclusion::Success);
+        let jobs = [job("a", success, 0, 10), job("b", success, 0, 90)];
+
+        assert_eq!(initial_job(&jobs, None), default_job(&jobs));
     }
 
     #[test]
