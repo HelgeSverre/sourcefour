@@ -547,6 +547,10 @@ fn row(
         .py(px(10.0))
         .child(
             div()
+                // The text column yields, or a long description shoves the
+                // control past the card edge where it clips invisibly.
+                .flex_1()
+                .min_w(px(1.0))
                 .flex()
                 .flex_col()
                 .gap(px(2.0))
