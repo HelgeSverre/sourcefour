@@ -35,6 +35,7 @@ use crate::{
     history::{HistoryState, refreshed_scope},
     panels::{PanelSizes, Splitter},
     theme::{TITLEBAR_HEIGHT, Theme},
+    ui_state::{UiState, WindowMode, WindowState},
 };
 
 mod actions;
@@ -62,6 +63,8 @@ pub(crate) struct SourcefourWindow {
     /// Display-friendly active worktree path.
     path: String,
     demo: bool,
+    window_state: Option<WindowState>,
+    window_save_generation: u64,
     /// Identity every background result must match to be applied.
     session: RepoSessionId,
     generation: Generation,
@@ -294,16 +297,6 @@ fn counted(count: usize, noun: &str) -> String {
 }
 
 /// The demo must render identically on every machine, so it never reads
-/// this user's interface state (§12.4).
-fn initial_ui_state(demo: bool) -> crate::ui_state::UiState {
-    if demo {
-        crate::ui_state::UiState::default()
-    } else {
-        crate::ui_state::UiState::load()
-    }
-}
-
-/// The demo must render identically on every machine, so it never reads
 /// this user's settings file (§12.4).
 fn initial_settings(demo: bool) -> crate::settings::AppSettings {
     if demo {
@@ -344,6 +337,7 @@ fn usize_from_f32(value: f32) -> usize {
 impl SourcefourWindow {
     pub(crate) fn new(
         launch: WindowLaunch,
+        ui_state: &UiState,
         gpui_window: &mut gpui::Window,
         cx: &mut gpui::Context<Self>,
     ) -> Self {
@@ -354,6 +348,8 @@ impl SourcefourWindow {
             name: launch.name,
             path: launch.path,
             demo: launch.demo,
+            window_state: ui_state.window,
+            window_save_generation: 0,
             session,
             generation,
             location: None,
@@ -416,16 +412,9 @@ impl SourcefourWindow {
             focus: cx.focus_handle(),
             filter_input: Self::plain_input("Filter commits", cx),
         };
-        // The input owns the text; the window derives the filtered view.
-        cx.observe(&window.filter_input, |this, input, cx| {
-            let text = input.read(cx).content.to_string();
-            if this.history.filter != text {
-                this.history.set_filter(&text);
-                cx.notify();
-            }
-        })
-        .detach();
-        window.apply_ui_state(&initial_ui_state(launch.demo));
+        Self::watch_filter(&window.filter_input, cx);
+        window.apply_ui_state(ui_state);
+        Self::watch_window_bounds(gpui_window, cx);
         // §4.6: relative dates refresh once a minute, never per frame.
         cx.spawn(async move |this, cx| {
             loop {
@@ -451,6 +440,21 @@ impl SourcefourWindow {
         window
     }
 
+    /// The input owns the text; the window derives the filtered view.
+    fn watch_filter(
+        filter_input: &gpui::Entity<crate::text_input::TextInput>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        cx.observe(filter_input, |this, input, cx| {
+            let text = input.read(cx).content.to_string();
+            if this.history.filter != text {
+                this.history.set_filter(&text);
+                cx.notify();
+            }
+        })
+        .detach();
+    }
+
     /// Seeds the deterministic capture fixture as if a traversal had
     /// already completed, so every capture goes through the real rendering
     /// path (§12.4).
@@ -474,6 +478,42 @@ impl SourcefourWindow {
             if gpui_window.is_window_active() && !this.demo {
                 this.load_working_tree_status(cx);
             }
+        })
+        .detach();
+    }
+
+    /// Records move and resize events after they settle, avoiding a disk write
+    /// for every intermediate frame of a drag.
+    fn watch_window_bounds(gpui_window: &mut gpui::Window, cx: &mut gpui::Context<Self>) {
+        cx.observe_window_bounds(gpui_window, |this, gpui_window, cx| {
+            if this.demo {
+                return;
+            }
+            let bounds = gpui_window.window_bounds();
+            let mode = match bounds {
+                gpui::WindowBounds::Windowed(_) => WindowMode::Windowed,
+                gpui::WindowBounds::Maximized(_) => WindowMode::Maximized,
+                gpui::WindowBounds::Fullscreen(_) => WindowMode::Fullscreen,
+            };
+            let bounds = bounds.get_bounds();
+            this.window_state = Some(WindowState {
+                width: bounds.size.width.0,
+                height: bounds.size.height.0,
+                mode,
+            });
+            this.window_save_generation = this.window_save_generation.wrapping_add(1);
+            let generation = this.window_save_generation;
+            cx.spawn(async move |this, cx| {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(250))
+                    .await;
+                let _ = this.update(cx, |this, cx| {
+                    if this.window_save_generation == generation {
+                        this.persist_ui_state(cx);
+                    }
+                });
+            })
+            .detach();
         })
         .detach();
     }
@@ -1009,6 +1049,7 @@ impl SourcefourWindow {
             return;
         }
         let state = crate::ui_state::UiState {
+            window: self.window_state,
             sidebar_width: Some(self.panels.sidebar),
             graph_width: Some(self.panels.graph),
             details_height: Some(self.panels.details),

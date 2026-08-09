@@ -8,10 +8,29 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+/// Last reported restored size and display mode of the main window.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+pub(crate) struct WindowState {
+    pub(crate) width: f32,
+    pub(crate) height: f32,
+    pub(crate) mode: WindowMode,
+}
+
+/// How the window was displayed when its state was recorded.
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum WindowMode {
+    #[default]
+    Windowed,
+    Maximized,
+    Fullscreen,
+}
+
 /// Everything the interface remembers between launches.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 #[serde(default)]
 pub(crate) struct UiState {
+    pub(crate) window: Option<WindowState>,
     pub(crate) sidebar_width: Option<f32>,
     pub(crate) graph_width: Option<f32>,
     pub(crate) details_height: Option<f32>,
@@ -62,13 +81,18 @@ fn default_path() -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use super::UiState;
+    use super::{UiState, WindowMode, WindowState};
 
     #[test]
     fn state_round_trips_through_its_file() -> Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::TempDir::new()?;
         let path = directory.path().join("nested").join("state.json");
         let state = UiState {
+            window: Some(WindowState {
+                width: 1440.0,
+                height: 900.0,
+                mode: WindowMode::Maximized,
+            }),
             sidebar_width: Some(310.0),
             graph_width: Some(140.0),
             details_height: Some(200.0),
@@ -116,6 +140,26 @@ mod tests {
         assert_eq!(loaded.sidebar_width, Some(250.0));
         assert_eq!(loaded.collapsed_sections, vec![String::from("remotes")]);
         assert_eq!(loaded.section_order, None, "missing fields default");
+        Ok(())
+    }
+
+    #[test]
+    fn positions_from_older_state_files_are_ignored() -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::TempDir::new()?;
+        let path = directory.path().join("state.json");
+        std::fs::write(
+            &path,
+            r#"{"window":{"x":2400.0,"y":120.0,"width":1280.0,"height":800.0,"mode":"windowed"}}"#,
+        )?;
+
+        assert_eq!(
+            UiState::load_from(&path).window,
+            Some(WindowState {
+                width: 1280.0,
+                height: 800.0,
+                mode: WindowMode::Windowed,
+            })
+        );
         Ok(())
     }
 }

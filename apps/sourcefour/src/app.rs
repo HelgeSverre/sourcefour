@@ -15,6 +15,7 @@ use gpui::{
 use sourcefour_git::{discover, display_name};
 use sourcefour_model::{RepoFailure, RepoLocation};
 
+use crate::ui_state::{UiState, WindowMode, WindowState};
 use crate::{
     LaunchRequest, demo,
     theme::{
@@ -95,6 +96,10 @@ fn startup_phase(name: &str) {
 pub(crate) fn run(request: &LaunchRequest) -> ExitCode {
     let size_override = request.window;
     let launch = Launch::resolve(request);
+    let ui_state = match &launch {
+        Launch::Window(window) if !window.demo && size_override.is_none() => UiState::load(),
+        _ => UiState::default(),
+    };
     startup_phase("resolved");
     let failed = matches!(launch, Launch::Failed(_));
     let opened = Arc::new(AtomicBool::new(false));
@@ -124,15 +129,21 @@ pub(crate) fn run(request: &LaunchRequest) -> ExitCode {
             let result = match launch {
                 Launch::Window(launch) => {
                     let (width, height) = size_override.unwrap_or((INITIAL_WIDTH, INITIAL_HEIGHT));
-                    let options =
-                        window_options(width, height, Some((MINIMUM_WIDTH, MINIMUM_HEIGHT)), cx);
+                    let window_state = size_override.is_none().then_some(ui_state.window).flatten();
+                    let options = window_options(
+                        width,
+                        height,
+                        Some((MINIMUM_WIDTH, MINIMUM_HEIGHT)),
+                        window_state,
+                        cx,
+                    );
                     cx.open_window(options, move |window, cx| {
-                        cx.new(|cx| SourcefourWindow::new(launch, window, cx))
+                        cx.new(|cx| SourcefourWindow::new(launch, &ui_state, window, cx))
                     })
                     .map(|_| ())
                 }
                 Launch::Failed(failure) => {
-                    let options = window_options(ERROR_WIDTH, ERROR_HEIGHT, None, cx);
+                    let options = window_options(ERROR_WIDTH, ERROR_HEIGHT, None, None, cx);
                     cx.open_window(options, move |_window, cx| {
                         cx.new(|_| ErrorWindow::new(&failure))
                     })
@@ -204,22 +215,49 @@ fn window_options(
     width: f32,
     height: f32,
     minimum: Option<(f32, f32)>,
+    state: Option<WindowState>,
     cx: &mut App,
 ) -> WindowOptions {
+    let display_size = cx.primary_display().map(|display| display.bounds().size);
+    let (width, height, mode) = state.map_or((width, height, WindowMode::Windowed), |state| {
+        (state.width, state.height, state.mode)
+    });
+    let (width, height) = clamped_window_size(
+        width,
+        height,
+        minimum,
+        display_size.map(|size| (size.width.0, size.height.0)),
+    );
+    let bounds = Bounds::centered(None, size(px(width), px(height)), cx);
+    let window_bounds = match mode {
+        WindowMode::Windowed => WindowBounds::Windowed(bounds),
+        WindowMode::Maximized => WindowBounds::Maximized(bounds),
+        WindowMode::Fullscreen => WindowBounds::Fullscreen(bounds),
+    };
     WindowOptions {
         titlebar: Some(TitlebarOptions {
             title: Some("Sourcefour".into()),
             appears_transparent: true,
             traffic_light_position: Some(gpui::point(px(10.0), px(13.0))),
         }),
-        window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
-            None,
-            size(px(width), px(height)),
-            cx,
-        ))),
+        window_bounds: Some(window_bounds),
         window_min_size: minimum.map(|(width, height)| size(px(width), px(height))),
         ..Default::default()
     }
+}
+
+fn clamped_window_size(
+    width: f32,
+    height: f32,
+    minimum: Option<(f32, f32)>,
+    maximum: Option<(f32, f32)>,
+) -> (f32, f32) {
+    let (minimum_width, minimum_height) = minimum.unwrap_or((1.0, 1.0));
+    let (maximum_width, maximum_height) = maximum.unwrap_or((f32::MAX, f32::MAX));
+    (
+        width.clamp(minimum_width, maximum_width.max(minimum_width)),
+        height.clamp(minimum_height, maximum_height.max(minimum_height)),
+    )
 }
 
 fn launch_exit_code(opened: bool, failed: bool) -> ExitCode {
@@ -324,7 +362,7 @@ mod tests {
 
     use gpui::AssetSource;
 
-    use super::{Launch, SourcefourAssets, display_path, launch_exit_code};
+    use super::{Launch, SourcefourAssets, clamped_window_size, display_path, launch_exit_code};
     use crate::LaunchRequest;
 
     fn request(path: impl Into<PathBuf>, demo: bool) -> LaunchRequest {
@@ -334,6 +372,14 @@ mod tests {
             window: None,
             scene: crate::demo::Scene::Overview,
         }
+    }
+
+    #[test]
+    fn a_restored_window_fits_the_current_display() {
+        assert_eq!(
+            clamped_window_size(2400.0, 400.0, Some((900.0, 600.0)), Some((1920.0, 1080.0)),),
+            (1920.0, 600.0)
+        );
     }
 
     #[test]
