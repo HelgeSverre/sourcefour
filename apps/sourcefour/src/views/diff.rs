@@ -170,6 +170,21 @@ impl DiffView {
             _ => (None, None),
         }
     }
+
+    /// What the bottom chips say for each present media side.
+    fn media_summaries(&self) -> (Option<gpui::SharedString>, Option<gpui::SharedString>) {
+        match &self.content {
+            Some(DiffContent::Image { before, after, .. }) => (
+                before.as_ref().map(|bytes| image_summary(bytes.len())),
+                after.as_ref().map(|bytes| image_summary(bytes.len())),
+            ),
+            Some(DiffContent::Video { .. }) => {
+                let (before, after) = self.video_facts();
+                (before.map(video_summary), after.map(video_summary))
+            }
+            _ => (None, None),
+        }
+    }
 }
 
 /// One side's numbers, in the order they change least. Used bare by the card,
@@ -182,7 +197,7 @@ fn video_line(info: VideoInfo) -> String {
     if let Some((width, height)) = info.dimensions {
         parts.push(format!("{width} × {height}"));
     }
-    parts.push(video_size(info.bytes));
+    parts.push(byte_size(info.bytes));
     parts.join(" · ")
 }
 
@@ -193,6 +208,10 @@ fn video_line(info: VideoInfo) -> String {
 /// as a still, which is the one thing the view must not say.
 fn video_summary(info: VideoInfo) -> gpui::SharedString {
     format!("▶ {}", video_line(info)).into()
+}
+
+fn image_summary(bytes: usize) -> gpui::SharedString {
+    byte_size(u64::try_from(bytes).unwrap_or(u64::MAX)).into()
 }
 
 /// What to tell the reader when the card is bare because nothing was installed
@@ -220,7 +239,7 @@ fn video_duration(milliseconds: u64) -> String {
 }
 
 /// A byte count in the largest unit that leaves a number worth reading.
-fn video_size(bytes: u64) -> String {
+fn byte_size(bytes: u64) -> String {
     const STEP: f64 = 1024.0;
     const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
     #[expect(
@@ -779,7 +798,7 @@ impl SourcefourWindow {
 
     /// Side-by-side before/after panes for an image comparison (§6.11).
     pub(super) fn image_split_view(&self, view: &DiffView) -> Div {
-        let (before, after) = view.video_facts();
+        let (before, after) = view.media_summaries();
         div()
             .size_full()
             .flex()
@@ -877,7 +896,7 @@ impl SourcefourWindow {
         label: &'static str,
         image: Option<Arc<gpui::Image>>,
         missing: &'static str,
-        facts: Option<VideoInfo>,
+        summary: Option<gpui::SharedString>,
     ) -> Div {
         div()
             .flex_1()
@@ -900,7 +919,7 @@ impl SourcefourWindow {
                     .into_any_element(),
             })
             .child(self.image_side_chips(&[label]))
-            .children(facts.map(|facts| self.media_footer_chips(&[video_summary(facts)])))
+            .children(summary.map(|summary| self.media_footer_chips(&[summary])))
     }
 
     /// A small chip naming an image side.
@@ -1046,14 +1065,14 @@ impl SourcefourWindow {
                     .child("↔"),
             )
             .child(self.image_side_chips(&["Before", "After"]))
-            .children(view.is_video().then(|| {
-                let (before, after) = view.video_facts();
+            .children(view.compares_frames().then(|| {
+                let (before, after) = view.media_summaries();
                 // Both edges always get a chip so the pair keeps the alignment
                 // the naming chips above them set; a side that is not there
                 // says so rather than letting the other slide across.
                 self.media_footer_chips(&[
-                    before.map_or_else(|| "—".into(), video_summary),
-                    after.map_or_else(|| "—".into(), video_summary),
+                    before.unwrap_or_else(|| "—".into()),
+                    after.unwrap_or_else(|| "—".into()),
                 ])
             }))
     }
@@ -1337,16 +1356,16 @@ mod tests {
 
     #[test]
     fn a_size_climbs_to_the_unit_that_reads() {
-        assert_eq!(video_size(0), "0 B");
-        assert_eq!(video_size(999), "999 B");
+        assert_eq!(byte_size(0), "0 B");
+        assert_eq!(byte_size(999), "999 B");
         // The step is 1024, so a kilobyte's worth of bytes is where it turns.
-        assert_eq!(video_size(1_023), "1023 B");
-        assert_eq!(video_size(1_024), "1.0 KB");
-        assert_eq!(video_size(4_404_019), "4.2 MB");
+        assert_eq!(byte_size(1_023), "1023 B");
+        assert_eq!(byte_size(1_024), "1.0 KB");
+        assert_eq!(byte_size(4_404_019), "4.2 MB");
         // The table stops at terabytes and saturates rather than wrapping.
         // Nothing that opens in this viewer gets near it; the check is only
         // that the loop terminates instead of indexing off the end.
-        assert_eq!(video_size(u64::MAX), "16777216.0 TB");
+        assert_eq!(byte_size(u64::MAX), "16777216.0 TB");
     }
 
     #[test]
