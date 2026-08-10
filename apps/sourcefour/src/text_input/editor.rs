@@ -135,10 +135,29 @@ impl EditorState {
     }
 
     fn replace_at(&mut self, range: Range<usize>, text: &str, kind: EditKind, at: Instant) {
+        if range.is_empty() && text.is_empty() {
+            return;
+        }
         let before = self.snapshot();
         self.replace_without_history(range.clone(), text);
         let after = self.snapshot();
         self.record(before, after, kind, at);
+    }
+
+    pub(super) fn commit_composition(
+        &mut self,
+        range: Range<usize>,
+        text: &str,
+        fallback_kind: EditKind,
+    ) {
+        let Some(before) = self.composition_before.take() else {
+            self.replace(range, text, fallback_kind);
+            return;
+        };
+
+        self.replace_without_history(range, text);
+        let after = self.snapshot();
+        self.record(before, after, EditKind::Composition, Instant::now());
     }
 
     pub(super) fn replace_marked(
@@ -331,6 +350,30 @@ mod tests {
         state.replace_marked(0..0, "a", 1..1);
         state.replace_marked(0..1, "æ", 2..2);
         state.unmark();
+        assert!(state.undo());
+        assert_eq!(state.text(), "");
+    }
+
+    #[test]
+    fn committing_composition_is_one_undo_step() {
+        let mut state = EditorState::new();
+        state.replace_marked(0..0, "ä", 2..2);
+
+        let marked = state.marked().unwrap();
+        state.commit_composition(marked, "ā", EditKind::Typing);
+
+        assert!(state.undo());
+        assert_eq!(state.text(), "");
+    }
+
+    #[test]
+    fn deleting_nothing_does_not_consume_an_undo_step() {
+        let mut state = EditorState::new();
+        state.replace(0..0, "a", EditKind::Typing);
+
+        // This is the range produced by Delete when the caret is at the end.
+        state.replace(1..1, "", EditKind::Delete);
+
         assert!(state.undo());
         assert_eq!(state.text(), "");
     }

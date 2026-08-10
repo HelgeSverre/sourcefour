@@ -867,9 +867,8 @@ impl EntityInputHandler for TextInput {
             .map(|range_utf16| self.range_from_utf16(range_utf16))
             .or(self.editor.marked())
             .unwrap_or_else(|| self.editor.selection());
-        self.editor.unmark();
         let kind = std::mem::replace(&mut self.next_edit_kind, EditKind::Typing);
-        self.editor.replace(range, new_text, kind);
+        self.editor.commit_composition(range, new_text, kind);
         cx.notify();
     }
 
