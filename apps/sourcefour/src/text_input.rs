@@ -862,13 +862,19 @@ impl EntityInputHandler for TextInput {
         _window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        let cancels_composition =
+            range_utf16.is_some() && new_text.is_empty() && self.editor.is_composing();
         let range = range_utf16
             .as_ref()
             .map(|range_utf16| self.range_from_utf16(range_utf16))
             .or(self.editor.marked())
             .unwrap_or_else(|| self.editor.selection());
         let kind = std::mem::replace(&mut self.next_edit_kind, EditKind::Typing);
-        self.editor.commit_composition(range, new_text, kind);
+        if cancels_composition {
+            self.editor.cancel_composition();
+        } else {
+            self.editor.commit_composition(range, new_text, kind);
+        }
         cx.notify();
     }
 

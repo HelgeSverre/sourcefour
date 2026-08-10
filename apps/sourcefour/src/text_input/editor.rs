@@ -84,6 +84,9 @@ impl EditorState {
     pub(super) fn marked(&self) -> Option<Range<usize>> {
         self.marked.clone()
     }
+    pub(super) fn is_composing(&self) -> bool {
+        self.composition_before.is_some()
+    }
     pub(super) fn head(&self) -> usize {
         self.head
     }
@@ -181,6 +184,14 @@ impl EditorState {
             let after = self.snapshot();
             self.record(before, after, EditKind::Composition, Instant::now());
         }
+    }
+
+    pub(super) fn cancel_composition(&mut self) -> bool {
+        let Some(before) = self.composition_before.take() else {
+            return false;
+        };
+        self.restore(&before);
+        true
     }
 
     pub(super) fn undo(&mut self) -> bool {
@@ -376,5 +387,32 @@ mod tests {
 
         assert!(state.undo());
         assert_eq!(state.text(), "");
+    }
+
+    #[test]
+    fn cancelling_composition_restores_replaced_text_and_selection() {
+        let mut state = EditorState::new();
+        state.set_text("abc");
+        state.collapse(2);
+        state.extend(1);
+        state.replace_marked(1..2, "x", 1..1);
+
+        assert!(state.cancel_composition());
+        assert_eq!(state.text(), "abc");
+        assert_eq!(state.selection(), 1..2);
+        assert!(state.is_reversed());
+        assert!(state.marked().is_none());
+        assert!(!state.undo());
+    }
+
+    #[test]
+    fn cancelling_composition_at_a_caret_adds_no_history() {
+        let mut state = EditorState::new();
+        state.replace_marked(0..0, "x", 1..1);
+
+        assert!(state.cancel_composition());
+        assert_eq!(state.text(), "");
+        assert_eq!(state.selection(), 0..0);
+        assert!(!state.undo());
     }
 }
