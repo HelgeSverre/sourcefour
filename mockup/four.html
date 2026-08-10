@@ -1,0 +1,254 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sourcefour — abstract marks</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --page: #0b0d11;
+      --panel: #12151b;
+      --line: #292f3a;
+      --ink: #f4f3ef;
+      --muted: #8992a2;
+      --accent: #5a96f7;
+      --accent-2: #70ca68;
+      --ui: Inter, ui-sans-serif, system-ui, sans-serif;
+      --mono: ui-monospace, "SFMono-Regular", "Cascadia Code", monospace;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: radial-gradient(circle at 50% -15%, rgba(90,150,247,.09), transparent 38rem), var(--page);
+      color: var(--ink);
+      font-family: var(--ui);
+      -webkit-font-smoothing: antialiased;
+    }
+    .wrap { width: min(1280px, calc(100% - 48px)); margin: 0 auto; }
+    header { padding: 68px 0 34px; border-bottom: 1px solid var(--line); }
+    .eyebrow, .number, .meta { color: var(--muted); font: 600 11px/1 var(--mono); letter-spacing: .12em; text-transform: uppercase; }
+    h1 { margin: 12px 0 14px; font-size: clamp(42px, 6vw, 76px); line-height: .95; letter-spacing: -.055em; }
+    header p { max-width: 62ch; margin: 0; color: var(--muted); font-size: 15px; line-height: 1.65; }
+    .palette-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 26px; }
+    .palette {
+      display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 11px;
+      border: 1px solid var(--line); border-radius: 8px; background: var(--panel);
+      color: var(--muted); font: 11px/1 var(--mono); cursor: pointer;
+    }
+    .palette:hover, .palette.active { color: var(--ink); border-color: #465064; background: #191d25; }
+    .swatches { display: flex; }
+    .swatch { width: 12px; height: 12px; border-radius: 50%; border: 1px solid rgba(255,255,255,.18); }
+    .swatch + .swatch { margin-left: -3px; }
+
+    main { padding: 28px 0 72px; }
+    .grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+    .card { padding: 16px; border: 1px solid var(--line); border-radius: 14px; background: rgba(18,21,27,.94); }
+    .card-head { display: flex; align-items: baseline; justify-content: space-between; gap: 18px; margin-bottom: 14px; }
+    h2 { margin: 0; font-size: 17px; letter-spacing: -.025em; }
+
+    .tile {
+      display: grid;
+      place-items: center;
+      aspect-ratio: 1;
+      color: var(--accent-2);
+      border-radius: 22%;
+      background: #050607;
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,.08), 0 18px 38px rgba(0,0,0,.28);
+    }
+    .primary { width: 100%; }
+    .primary svg { width: 68%; height: 68%; }
+
+    .tests { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 14px; }
+    .sizes { display: flex; align-items: center; gap: 9px; }
+    .small { display: grid; place-items: center; color: var(--accent-2); border-radius: 22%; background: #050607; box-shadow: inset 0 0 0 1px rgba(255,255,255,.08); }
+    .small svg { width: 72%; height: 72%; }
+    .s32 { width: 32px; height: 32px; }
+    .s24 { width: 24px; height: 24px; }
+    .s16 { width: 16px; height: 16px; }
+    .mono { width: 32px; height: 32px; background: var(--ink); color: #101217; }
+
+    .note { min-height: 42px; margin: 15px 0 0; color: var(--muted); font-size: 12px; line-height: 1.55; }
+    .lockups { margin-top: 28px; display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; }
+    .lockup { display: flex; align-items: center; gap: 16px; padding: 20px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); }
+    .lockup .tile { width: 58px; flex: none; }
+    .lockup svg { width: 70%; height: 70%; }
+    .wordmark { font: 700 clamp(24px, 3vw, 38px)/1 var(--mono); letter-spacing: -.06em; }
+    .wordmark span { color: var(--accent); font-weight: 500; }
+    .lockup.compact { justify-content: center; }
+    .lockup.compact .wordmark { font-size: clamp(22px, 2.5vw, 32px); }
+
+    footer { padding: 26px 0 54px; border-top: 1px solid var(--line); color: var(--muted); font: 12px/1.6 var(--mono); }
+    @media (max-width: 900px) { .grid { grid-template-columns: repeat(2, 1fr); } }
+    @media (max-width: 580px) { .grid, .lockups { grid-template-columns: 1fr; } .wrap { width: min(100% - 28px, 1280px); } }
+  </style>
+</head>
+<body>
+  <svg width="0" height="0" aria-hidden="true" style="position:absolute">
+    <defs>
+      <!-- 01: two opposing cuts. -->
+      <symbol id="mark-01" viewBox="0 0 100 100">
+        <path fill="var(--accent)" d="M18 19h22c0 14 6 21 10 24 4-3 10-10 10-24h22c0 25-13 40-32 49C31 59 18 44 18 19Z"/>
+        <path fill="currentColor" d="M18 81h22c0-14 6-21 10-24 4 3 10 10 10 24h22c0-25-13-40-32-49C31 41 18 56 18 81Z"/>
+      </symbol>
+
+      <!-- 02: one layer arriving over two retained states. -->
+      <symbol id="mark-02" viewBox="0 0 100 100">
+        <path fill="var(--accent)" d="m50 14 35 20-35 20-35-20Z"/>
+        <path fill="currentColor" d="m18 52 32 18 32-18 7 9-39 23-39-23Zm0-17 32 18 32-18 7 9-39 23-39-23-39-23Z" opacity=".96"/>
+      </symbol>
+
+      <!-- 03: a split disc joined by one inward cut. -->
+      <symbol id="mark-03" viewBox="0 0 100 100">
+        <path fill="currentColor" d="M46 15a35 35 0 1 0 0 70Z"/>
+        <path fill="var(--accent)" d="M54 15a35 35 0 1 1 0 70V61c9-3 14-10 14-21S63 22 54 19Z"/>
+      </symbol>
+
+      <!-- 04: three histories displaced by one phase. -->
+      <symbol id="mark-04" viewBox="0 0 100 100">
+        <path fill="currentColor" d="M14 25c14 0 21-9 36-9s22 9 36 9v18c-14 0-21-9-36-9s-22 9-36 9Zm0 42c14 0 21-9 36-9s22 9 36 9v18c-14 0-21-9-36-9s-22 9-36 9Z"/>
+        <path fill="var(--accent)" d="M14 46c14 0 21-9 36-9s22 9 36 9v18c-14 0-21-9-36-9s-22 9-36 9Z"/>
+      </symbol>
+
+      <!-- 05: one form opening to reveal another. -->
+      <symbol id="mark-05" viewBox="0 0 100 100">
+        <path fill="var(--accent)" d="m50 13 37 37v32L50 47 13 82V50Z"/>
+        <path fill="currentColor" d="m50 61 24 23H26Z"/>
+      </symbol>
+
+      <!-- 06: two states, one shared absence. -->
+      <symbol id="mark-06" viewBox="0 0 100 100">
+        <path fill="currentColor" fill-rule="evenodd" d="M15 50a35 35 0 0 1 55-29 35 35 0 0 0 0 58A35 35 0 0 1 15 50Zm55-29a35 35 0 1 1 0 58 35 35 0 0 0 0-58Z"/>
+        <path fill="var(--accent)" fill-rule="evenodd" d="M30 21a35 35 0 1 1 0 58 35 35 0 0 0 0-58Zm0 0a35 35 0 0 0 0 58 35 35 0 0 1 0-58Z" transform="translate(15)"/>
+      </symbol>
+
+      <!-- 07: one square displaced through another. -->
+      <symbol id="mark-07" viewBox="0 0 100 100">
+        <rect x="17" y="17" width="48" height="48" rx="8" fill="currentColor"/>
+        <path fill="var(--accent)" fill-rule="evenodd" d="M35 35h48v48H35Zm14 14v20h20V49Z"/>
+      </symbol>
+
+      <!-- 08: a solid folded loop with one interruption. -->
+      <symbol id="mark-08" viewBox="0 0 100 100">
+        <path fill="currentColor" d="m50 12 38 22v24L50 36 12 58V34Z"/>
+        <path fill="var(--accent)" d="m12 63 38-22 38 22v23L50 64 12 86Z"/>
+      </symbol>
+
+      <!-- 09: four masses held apart by one continuous void. -->
+      <symbol id="mark-09" viewBox="0 0 100 100">
+        <path fill="currentColor" d="M14 14h31v31H14Zm41 0h31v31H55ZM14 55h31v31H14Z"/>
+        <path fill="var(--accent)" d="M55 55h31v31H55Z"/>
+      </symbol>
+
+      <!-- 10: two ribbons crossing without a line or node. -->
+      <symbol id="mark-10" viewBox="0 0 100 100">
+        <path fill="currentColor" d="M12 24h24l52 52H64Z"/>
+        <path fill="var(--accent)" d="M64 24h24L36 76H12Z"/>
+      </symbol>
+
+      <!-- 11: an aperture reduced to three broad shutters. -->
+      <symbol id="mark-11" viewBox="0 0 100 100">
+        <path fill="currentColor" d="M50 10 84 30 61 43 27 23Z"/>
+        <path fill="var(--accent)" d="m88 37-1 39-23-13 1-39Z"/>
+        <path fill="currentColor" d="M79 82 44 90V64l35-8ZM36 87 12 68l22-13 24 19Z"/>
+      </symbol>
+
+      <!-- 12: a capsule divided by an offset seam. -->
+      <symbol id="mark-12" viewBox="0 0 100 100">
+        <path fill="currentColor" d="M12 50a38 38 0 0 1 38-38v30L35 58H12Z"/>
+        <path fill="var(--accent)" d="M88 50a38 38 0 0 1-38 38V58l15-16h23Z"/>
+      </symbol>
+
+      <!-- 13: two hinges sharing one diagonal edge. -->
+      <symbol id="mark-13" viewBox="0 0 100 100">
+        <path fill="currentColor" d="m12 28 31-18 18 31-31 18Z"/>
+        <path fill="var(--accent)" d="m39 59 31-18 18 31-31 18Z"/>
+      </symbol>
+
+      <!-- 14: a soft block with one decisive corner removed. -->
+      <symbol id="mark-14" viewBox="0 0 100 100">
+        <path fill="currentColor" d="M17 13h47l19 19v55H17Z"/>
+        <path fill="var(--accent)" d="M64 13v19h19Z"/>
+        <path fill="#050607" d="m17 65 22 22H17Z"/>
+      </symbol>
+    </defs>
+  </svg>
+
+  <div class="wrap">
+    <header>
+      <div class="eyebrow">Sourcefour identity / abstract study</div>
+      <h1>Fourteen simple shapes.</h1>
+      <p>No numeral, letters, branches, nodes, brackets, or terminal shorthand. Each candidate is judged as a silhouette first, then as a suggestion of comparison, history, convergence, or change.</p>
+      <div class="palette-bar" id="palettes" aria-label="Logo color palette"></div>
+    </header>
+
+    <main>
+      <div class="grid" id="grid"></div>
+      <div class="lockups">
+        <div class="lockup"><div class="tile"><svg><use href="#mark-13"/></svg></div><div class="wordmark">Source<span>four</span></div></div>
+        <div class="lockup compact"><div class="tile"><svg><use href="#mark-13"/></svg></div><div class="wordmark">source<span>four</span></div></div>
+      </div>
+    </main>
+
+    <footer>All marks are live SVG. The white square beside each reduction row is the one-color test.</footer>
+  </div>
+
+  <script>
+    const marks = [
+      ['01', 'Opposing cuts', 'Two matching forms turn away from a shared centre. Distinctive, but almost character-like.'],
+      ['02', 'Retained layers', 'A current state rests over two earlier states. Strong reduction, familiar category.'],
+      ['03', 'Split disc', 'Two states form one object around a single asymmetric cut. The strongest pure silhouette.'],
+      ['04', 'Phase lines', 'Three histories move through the same field at different phases. Softer and more editorial.'],
+      ['05', 'Opening', 'A single outer form parts to expose a smaller inner state. Directional without using an arrow.'],
+      ['06', 'Shared absence', 'Two complete forms are defined by the space they share. Calm, but intentionally familiar.'],
+      ['07', 'Offset frame', 'One state moves through another and leaves a square of shared space behind.'],
+      ['08', 'Folded loop', 'Two broad planes reverse around the same centre. Compact and almost architectural.'],
+      ['09', 'Open quadrant', 'Four equal masses make the empty cross the real mark. Extremely stable at small sizes.'],
+      ['10', 'Crossing ribbons', 'Two states exchange position in one blunt gesture. Energetic without becoming an arrow.'],
+      ['11', 'Shutter', 'Four broad planes imply rotation around an absent centre. Dense but ownable.'],
+      ['12', 'Offset seam', 'Two halves meet through an asymmetric internal cut. Calm and especially strong in mono.'],
+      ['13', 'Hinge', 'Two identical lozenges touch along one changing edge. Simple, modular, and slightly playful.'],
+      ['14', 'Cut block', 'A solid object defined by one folded corner and one missing corner. Quiet and tool-like.'],
+    ];
+
+    const palettes = [
+      ['Ember', '#ef9f45', '#f4f3ef'],
+      ['Graph', '#5a96f7', '#70ca68'],
+      ['Signal', '#9a7cf8', '#55d6d0'],
+      ['Solar', '#f3cb5b', '#ef6f61'],
+      ['Glacier', '#71c7ec', '#d8f3f8'],
+      ['Mono', '#f4f3ef', '#f4f3ef'],
+    ];
+
+    const paletteBar = document.querySelector('#palettes');
+    paletteBar.innerHTML = palettes.map(([name, accent, second]) => `
+      <button class="palette${name === 'Graph' ? ' active' : ''}" data-accent="${accent}" data-second="${second}" type="button">
+        <span class="swatches"><i class="swatch" style="background:${accent}"></i><i class="swatch" style="background:${second}"></i></span>${name}
+      </button>`).join('');
+    paletteBar.addEventListener('click', event => {
+      const button = event.target.closest('.palette');
+      if (!button) return;
+      document.documentElement.style.setProperty('--accent', button.dataset.accent);
+      document.documentElement.style.setProperty('--accent-2', button.dataset.second);
+      paletteBar.querySelectorAll('.palette').forEach(item => item.classList.toggle('active', item === button));
+    });
+
+    const use = id => `<svg><use href="#mark-${id}"/></svg>`;
+    document.querySelector('#grid').innerHTML = marks.map(([id, name, note]) => `
+      <article class="card">
+        <div class="card-head"><h2>${name}</h2><span class="number">${id}</span></div>
+        <div class="tile primary">${use(id)}</div>
+        <div class="tests">
+          <div class="sizes">
+            <div class="small s32">${use(id)}</div>
+            <div class="small s24">${use(id)}</div>
+            <div class="small s16">${use(id)}</div>
+          </div>
+          <div class="small mono">${use(id)}</div>
+        </div>
+        <p class="note">${note}</p>
+      </article>`).join('');
+  </script>
+</body>
+</html>
