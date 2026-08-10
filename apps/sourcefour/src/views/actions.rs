@@ -23,6 +23,242 @@ pub(super) struct ActionsPrefetch {
     pub(super) jobs: Option<Result<Vec<WorkflowJob>, String>>,
 }
 
+#[derive(Default)]
+pub(super) struct ActionsState {
+    prefetch: Option<ActionsPrefetch>,
+    pub(super) view: Option<ActionsView>,
+    request: u64,
+    logs_pending: std::collections::HashSet<u64>,
+    log_generation: u64,
+    poll: u64,
+}
+
+enum ActionsEvent {
+    Open(ActionsView),
+    Prefetch(u64),
+    Close,
+    JobsLoaded {
+        run_id: u64,
+        outcome: Result<Vec<WorkflowJob>, String>,
+    },
+    SelectJob(usize),
+    SelectJobDelta(isize),
+    SelectStepDelta(isize),
+    ToggleStep(usize),
+    ToggleFullLog,
+    Refresh,
+    LogLoaded {
+        generation: u64,
+        run_id: u64,
+        job_id: u64,
+        outcome: Result<Vec<String>, String>,
+    },
+    RunLoaded {
+        run_id: u64,
+        run: WorkflowRun,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ActionsEffect {
+    FetchJobs(u64),
+    LoadLogs,
+    ScrollLog,
+}
+
+impl ActionsState {
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one exhaustive reducer keeps every Actions transition in a single auditable match"
+    )]
+    fn reduce(&mut self, event: ActionsEvent) -> Vec<ActionsEffect> {
+        match event {
+            ActionsEvent::Open(view) => {
+                let run_id = view.run.id;
+                self.view = Some(view);
+                self.poll = self.poll.wrapping_add(1);
+                self.log_generation = self.log_generation.wrapping_add(1);
+                self.logs_pending.clear();
+                match self.prefetch.take_if(|warm| warm.run_id == run_id) {
+                    Some(ActionsPrefetch {
+                        jobs: Some(outcome),
+                        ..
+                    }) => self.reduce(ActionsEvent::JobsLoaded { run_id, outcome }),
+                    Some(ActionsPrefetch { jobs: None, .. }) | None => {
+                        vec![ActionsEffect::FetchJobs(run_id)]
+                    }
+                }
+            }
+            ActionsEvent::Prefetch(run_id) => {
+                if self
+                    .prefetch
+                    .as_ref()
+                    .is_some_and(|warm| warm.run_id == run_id)
+                    || self.view.as_ref().is_some_and(|view| view.run.id == run_id)
+                {
+                    return Vec::new();
+                }
+                self.prefetch = Some(ActionsPrefetch { run_id, jobs: None });
+                vec![ActionsEffect::FetchJobs(run_id)]
+            }
+            ActionsEvent::Close => {
+                self.view = None;
+                self.prefetch = None;
+                self.request = self.request.wrapping_add(1);
+                self.poll = self.poll.wrapping_add(1);
+                self.log_generation = self.log_generation.wrapping_add(1);
+                self.logs_pending.clear();
+                Vec::new()
+            }
+            ActionsEvent::JobsLoaded { run_id, outcome } => {
+                if let Some(view) = &mut self.view
+                    && view.run.id == run_id
+                {
+                    let first_arrival = view.jobs.is_none();
+                    if first_arrival || outcome.is_ok() {
+                        view.jobs = Some(outcome);
+                    }
+                    if first_arrival {
+                        let wanted = view.focus_job.take();
+                        view.selected_job = initial_job(view.jobs_ok(), wanted.as_deref());
+                    } else {
+                        view.selected_job = view
+                            .selected_job
+                            .min(view.jobs_ok().len().saturating_sub(1));
+                        if let Some(job) = view.selected() {
+                            view.selected_step = view
+                                .selected_step
+                                .map(|step| step.min(job.steps.len().saturating_sub(1)));
+                        }
+                    }
+                    vec![ActionsEffect::LoadLogs]
+                } else if let Some(warm) = &mut self.prefetch
+                    && warm.run_id == run_id
+                {
+                    warm.jobs = Some(outcome);
+                    Vec::new()
+                } else {
+                    Vec::new()
+                }
+            }
+            ActionsEvent::SelectJob(index) => {
+                let Some(view) = &mut self.view else {
+                    return Vec::new();
+                };
+                if index == view.selected_job || index >= view.jobs_ok().len() {
+                    return Vec::new();
+                }
+                view.selected_job = index;
+                view.selected_step = None;
+                view.collapsed = false;
+                view.full_log = false;
+                vec![ActionsEffect::ScrollLog]
+            }
+            ActionsEvent::SelectJobDelta(delta) => {
+                let Some(view) = &self.view else {
+                    return Vec::new();
+                };
+                let count = view.jobs_ok().len();
+                if count == 0 {
+                    return Vec::new();
+                }
+                let next = view
+                    .selected_job
+                    .saturating_add_signed(delta)
+                    .min(count - 1);
+                self.reduce(ActionsEvent::SelectJob(next))
+            }
+            ActionsEvent::SelectStepDelta(delta) => {
+                let Some(view) = &mut self.view else {
+                    return Vec::new();
+                };
+                let Some(job) = view.selected() else {
+                    return Vec::new();
+                };
+                let count = job.steps.len();
+                if count == 0 {
+                    return Vec::new();
+                }
+                if view.collapsed {
+                    view.collapsed = false;
+                } else {
+                    let current = view.focused_step().unwrap_or(0);
+                    view.selected_step = Some(current.saturating_add_signed(delta).min(count - 1));
+                }
+                view.full_log = false;
+                vec![ActionsEffect::ScrollLog]
+            }
+            ActionsEvent::ToggleStep(index) => {
+                let Some(view) = &mut self.view else {
+                    return Vec::new();
+                };
+                if index >= view.selected().map_or(0, |job| job.steps.len()) {
+                    return Vec::new();
+                }
+                let focused = view.focused_step() == Some(index);
+                if focused {
+                    view.collapsed = true;
+                } else {
+                    view.selected_step = Some(index);
+                    view.collapsed = false;
+                }
+                view.full_log = false;
+                (!focused)
+                    .then_some(ActionsEffect::ScrollLog)
+                    .into_iter()
+                    .collect()
+            }
+            ActionsEvent::ToggleFullLog => {
+                let Some(view) = &mut self.view else {
+                    return Vec::new();
+                };
+                view.full_log = !view.full_log;
+                vec![ActionsEffect::ScrollLog]
+            }
+            ActionsEvent::Refresh => {
+                let Some(view) = &mut self.view else {
+                    return Vec::new();
+                };
+                view.logs.clear();
+                self.logs_pending.clear();
+                self.log_generation = self.log_generation.wrapping_add(1);
+                vec![ActionsEffect::FetchJobs(view.run.id)]
+            }
+            ActionsEvent::LogLoaded {
+                generation,
+                run_id,
+                job_id,
+                outcome,
+            } => {
+                if generation != self.log_generation {
+                    return Vec::new();
+                }
+                self.logs_pending.remove(&job_id);
+                let Some(view) = &mut self.view else {
+                    return Vec::new();
+                };
+                if view.run.id != run_id {
+                    return Vec::new();
+                }
+                let selected = view.selected().is_some_and(|job| job.id == job_id);
+                view.logs.insert(job_id, outcome);
+                selected
+                    .then_some(ActionsEffect::ScrollLog)
+                    .into_iter()
+                    .collect()
+            }
+            ActionsEvent::RunLoaded { run_id, run } => {
+                if let Some(view) = &mut self.view
+                    && view.run.id == run_id
+                {
+                    view.run = run;
+                }
+                Vec::new()
+            }
+        }
+    }
+}
+
 /// One open run: its identity plus lazily arriving jobs and log.
 pub(super) struct ActionsView {
     pub(super) run: WorkflowRun,
@@ -390,6 +626,18 @@ fn demo_log() -> Vec<String> {
 }
 
 impl SourcefourWindow {
+    fn dispatch_actions(&mut self, event: ActionsEvent, cx: &mut gpui::Context<Self>) {
+        let effects = self.actions.reduce(event);
+        for effect in effects {
+            match effect {
+                ActionsEffect::FetchJobs(run_id) => self.fetch_actions_jobs(run_id, cx),
+                ActionsEffect::LoadLogs => self.load_actions_logs(cx),
+                ActionsEffect::ScrollLog => self.scroll_actions_log_to_slice(),
+            }
+        }
+        cx.notify();
+    }
+
     /// Opens the run's overlay and starts its jobs read and live poll.
     ///
     /// `focus_job` is the name of the job the overlay should select once
@@ -406,8 +654,7 @@ impl SourcefourWindow {
     ) {
         self.actions_focus.focus(window);
         self.actions_log_scroll = UniformListScrollHandle::new();
-        let run_id = run.id;
-        self.actions_view = Some(ActionsView {
+        let view = ActionsView {
             run,
             jobs: None,
             focus_job,
@@ -416,40 +663,17 @@ impl SourcefourWindow {
             collapsed: false,
             logs: std::collections::HashMap::new(),
             full_log: false,
-        });
-        match self.actions_prefetch.take_if(|warm| warm.run_id == run_id) {
-            // The press already finished the fetch: seed instantly.
-            Some(ActionsPrefetch {
-                jobs: Some(outcome),
-                ..
-            }) => self.apply_actions_jobs(run_id, outcome, cx),
-            // A press's fetch may be in flight — but a later press for a
-            // different run retires it through the shared request counter,
-            // so never trust it: re-request. The newest counter wins, so
-            // the cost is one redundant read in the benign race.
-            Some(ActionsPrefetch { jobs: None, .. }) | None => {
-                self.fetch_actions_jobs(run_id, cx);
-            }
-        }
+        };
+        self.dispatch_actions(ActionsEvent::Open(view), cx);
         self.poll_actions(cx);
     }
 
     /// Starts warming a run's jobs on mouse-down, ahead of the click.
     pub(super) fn prefetch_actions_jobs(&mut self, run_id: u64, cx: &mut gpui::Context<Self>) {
-        if self.github_remote.is_none()
-            || self
-                .actions_prefetch
-                .as_ref()
-                .is_some_and(|warm| warm.run_id == run_id)
-            || self
-                .actions_view
-                .as_ref()
-                .is_some_and(|view| view.run.id == run_id)
-        {
+        if self.github_remote.is_none() {
             return;
         }
-        self.actions_prefetch = Some(ActionsPrefetch { run_id, jobs: None });
-        self.fetch_actions_jobs(run_id, cx);
+        self.dispatch_actions(ActionsEvent::Prefetch(run_id), cx);
     }
 
     /// Lands one jobs outcome in the open view — or the prefetch stash when
@@ -460,29 +684,7 @@ impl SourcefourWindow {
         outcome: Result<Vec<WorkflowJob>, String>,
         cx: &mut gpui::Context<Self>,
     ) {
-        if let Some(view) = &mut self.actions_view
-            && view.run.id == run_id
-        {
-            let first_arrival = view.jobs.is_none();
-            // A poll refresh keeps the user's selection; a failed refresh
-            // keeps the last good jobs.
-            if first_arrival || outcome.is_ok() {
-                view.jobs = Some(outcome);
-            }
-            if first_arrival {
-                let wanted = view.focus_job.take();
-                view.selected_job = initial_job(view.jobs_ok(), wanted.as_deref());
-            }
-            // Every completed job's log fetches in parallel right away, so
-            // expanding any job is instant — and a job that just finished
-            // gets its log the same cycle.
-            self.load_actions_logs(cx);
-            cx.notify();
-        } else if let Some(warm) = &mut self.actions_prefetch
-            && warm.run_id == run_id
-        {
-            warm.jobs = Some(outcome);
-        }
+        self.dispatch_actions(ActionsEvent::JobsLoaded { run_id, outcome }, cx);
     }
 
     /// Opens a commit check's Actions run in the overlay instead of the
@@ -532,11 +734,8 @@ impl SourcefourWindow {
                 })
                 .await;
             this.update(cx, |this, cx| {
-                if let (Ok(run), Some(view)) = (outcome, &mut this.actions_view)
-                    && view.run.id == run_id
-                {
-                    view.run = run;
-                    cx.notify();
+                if let Ok(run) = outcome {
+                    this.dispatch_actions(ActionsEvent::RunLoaded { run_id, run }, cx);
                 }
             })
             .ok();
@@ -546,65 +745,23 @@ impl SourcefourWindow {
 
     /// Closes the overlay, returning focus to the history.
     pub(super) fn close_actions(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) {
-        self.actions_view = None;
+        self.dispatch_actions(ActionsEvent::Close, cx);
         self.focus.focus(window);
-        cx.notify();
     }
 
     /// Moves the job selection by `delta` and reloads its log.
     pub(super) fn select_actions_job(&mut self, delta: isize, cx: &mut gpui::Context<Self>) {
-        let Some(view) = &self.actions_view else {
-            return;
-        };
-        let count = view.jobs_ok().len();
-        if count == 0 {
-            return;
-        }
-        let next = view
-            .selected_job
-            .saturating_add_signed(delta)
-            .min(count - 1);
-        self.set_actions_job(next, cx);
+        self.dispatch_actions(ActionsEvent::SelectJobDelta(delta), cx);
     }
 
     /// Selects one job outright and reloads its log.
     fn set_actions_job(&mut self, index: usize, cx: &mut gpui::Context<Self>) {
-        let Some(view) = &mut self.actions_view else {
-            return;
-        };
-        if index == view.selected_job || index >= view.jobs_ok().len() {
-            return;
-        }
-        view.selected_job = index;
-        view.selected_step = None;
-        view.collapsed = false;
-        view.full_log = false;
-        self.scroll_actions_log_to_slice();
-        cx.notify();
+        self.dispatch_actions(ActionsEvent::SelectJob(index), cx);
     }
 
     /// Moves the step selection; the log slice follows.
     pub(super) fn select_actions_step(&mut self, delta: isize, cx: &mut gpui::Context<Self>) {
-        let Some(view) = &mut self.actions_view else {
-            return;
-        };
-        let Some(job) = view.selected() else {
-            return;
-        };
-        let count = job.steps.len();
-        if count == 0 {
-            return;
-        }
-        if view.collapsed {
-            view.collapsed = false;
-        } else {
-            let current = view.focused_step().unwrap_or(0);
-            let next = current.saturating_add_signed(delta).min(count - 1);
-            view.selected_step = Some(next);
-        }
-        view.full_log = false;
-        self.scroll_actions_log_to_slice();
-        cx.notify();
+        self.dispatch_actions(ActionsEvent::SelectStepDelta(delta), cx);
     }
 
     /// Reads one run's jobs; the outcome lands wherever the run lives now
@@ -614,7 +771,7 @@ impl SourcefourWindow {
             return;
         };
         self.fetch_github(
-            |this| &mut this.actions_request,
+            |this| &mut this.actions.request,
             move |token| {
                 sourcefour_github::run_jobs(
                     &sourcefour_github::UreqTransport,
@@ -637,10 +794,11 @@ impl SourcefourWindow {
         let Some(remote) = self.github_remote.clone() else {
             return;
         };
-        let Some(view) = &self.actions_view else {
+        let Some(view) = &self.actions.view else {
             return;
         };
         let run_id = view.run.id;
+        let generation = self.actions.log_generation;
         let method = self.settings.github.auth_method;
         let wanted: Vec<u64> = view
             .jobs_ok()
@@ -648,10 +806,10 @@ impl SourcefourWindow {
             .filter(|job| matches!(job.status, CheckStatus::Completed(_)))
             .filter(|job| !matches!(view.logs.get(&job.id), Some(Ok(_))))
             .map(|job| job.id)
-            .filter(|id| !self.actions_logs_pending.contains(id))
+            .filter(|id| !self.actions.logs_pending.contains(id))
             .collect();
         for job_id in wanted {
-            self.actions_logs_pending.insert(job_id);
+            self.actions.logs_pending.insert(job_id);
             let remote = remote.clone();
             let credentials = super::github::credentials_path();
             cx.spawn(async move |this, cx| {
@@ -669,22 +827,15 @@ impl SourcefourWindow {
                     })
                     .await;
                 this.update(cx, |this, cx| {
-                    this.actions_logs_pending.remove(&job_id);
-                    let Some(view) = &mut this.actions_view else {
-                        return;
-                    };
-                    if view.run.id != run_id {
-                        return;
-                    }
-                    let selected = view.selected().is_some_and(|job| job.id == job_id);
-                    view.logs.insert(
-                        job_id,
-                        outcome.map(|log| log.lines().map(str::to_owned).collect()),
+                    this.dispatch_actions(
+                        ActionsEvent::LogLoaded {
+                            generation,
+                            run_id,
+                            job_id,
+                            outcome: outcome.map(|log| log.lines().map(str::to_owned).collect()),
+                        },
+                        cx,
                     );
-                    if selected {
-                        this.scroll_actions_log_to_slice();
-                    }
-                    cx.notify();
                 })
                 .ok();
             })
@@ -694,22 +845,13 @@ impl SourcefourWindow {
 
     /// Re-reads jobs and every log past every cache, the ↻ affordance.
     pub(super) fn refresh_actions(&mut self, cx: &mut gpui::Context<Self>) {
-        let Some(view) = &mut self.actions_view else {
-            return;
-        };
-        view.logs.clear();
-        let run_id = view.run.id;
-        // Forget in-flight fetches as well: a refresh must be able to kick
-        // a hung request, not wait politely behind it.
-        self.actions_logs_pending.clear();
-        self.fetch_actions_jobs(run_id, cx);
+        self.dispatch_actions(ActionsEvent::Refresh, cx);
     }
 
     /// While the run is alive and its overlay open, jobs re-read every five
     /// seconds so steps tick live. The poll token retires stale loops.
     fn poll_actions(&mut self, cx: &mut gpui::Context<Self>) {
-        self.actions_poll += 1;
-        let poll = self.actions_poll;
+        let poll = self.actions.poll;
         cx.spawn(async move |this, cx| {
             let mut log_retries = 0_u32;
             loop {
@@ -718,11 +860,11 @@ impl SourcefourWindow {
                     .await;
                 let keep_going = this
                     .update(cx, |this, cx| {
-                        if this.actions_poll != poll {
+                        if this.actions.poll != poll {
                             return false;
                         }
                         let (done, logs_missing) = {
-                            let Some(view) = &this.actions_view else {
+                            let Some(view) = &this.actions.view else {
                                 return false;
                             };
                             let jobs = view.jobs_ok();
@@ -748,7 +890,7 @@ impl SourcefourWindow {
                             }
                             return false;
                         }
-                        if let Some(view) = &this.actions_view {
+                        if let Some(view) = &this.actions.view {
                             this.fetch_actions_jobs(view.run.id, cx);
                         }
                         true
@@ -765,7 +907,7 @@ impl SourcefourWindow {
     /// The log rows the list currently shows: the whole log, or the focused
     /// step's slice.
     fn actions_log_window(&self) -> Option<(usize, usize, usize)> {
-        let view = self.actions_view.as_ref()?;
+        let view = self.actions.view.as_ref()?;
         let job = view.selected()?;
         let Some(Ok(lines)) = view.logs.get(&job.id) else {
             return None;
@@ -783,7 +925,7 @@ impl SourcefourWindow {
         let Some((start, end, _)) = self.actions_log_window() else {
             return;
         };
-        let Some(view) = &self.actions_view else {
+        let Some(view) = &self.actions.view else {
             return;
         };
         let target = match view.selected().and_then(|job| view.logs.get(&job.id)) {
@@ -800,7 +942,7 @@ impl SourcefourWindow {
         &self,
         cx: &mut gpui::Context<Self>,
     ) -> Option<impl IntoElement + use<>> {
-        let view = self.actions_view.as_ref()?;
+        let view = self.actions.view.as_ref()?;
         Some(
             super::modal_backdrop("actions-overlay", &self.theme)
                 .key_context("Actions")
@@ -1205,20 +1347,7 @@ impl SourcefourWindow {
             .when(is_focused, |this| this.bg(self.theme.bg_hover))
             .hover(|style| style.bg(self.theme.bg_hover))
             .on_click(cx.listener(move |this, _, _, cx| {
-                let Some(view) = &mut this.actions_view else {
-                    return;
-                };
-                if is_focused {
-                    view.collapsed = true;
-                } else {
-                    view.selected_step = Some(index);
-                    view.collapsed = false;
-                }
-                view.full_log = false;
-                if !is_focused {
-                    this.scroll_actions_log_to_slice();
-                }
-                cx.notify();
+                this.dispatch_actions(ActionsEvent::ToggleStep(index), cx);
             }))
             .child(
                 div()
@@ -1333,7 +1462,7 @@ impl SourcefourWindow {
                         let Some((start, end, _)) = this.actions_log_window() else {
                             return Vec::new();
                         };
-                        let Some(view) = &this.actions_view else {
+                        let Some(view) = &this.actions.view else {
                             return Vec::new();
                         };
                         let Some(Ok(lines)) =
@@ -1399,11 +1528,7 @@ impl SourcefourWindow {
                     .cursor_pointer()
                     .text_color(self.theme.accent)
                     .on_click(cx.listener(|this, _, _, cx| {
-                        if let Some(view) = &mut this.actions_view {
-                            view.full_log = !view.full_log;
-                            this.scroll_actions_log_to_slice();
-                            cx.notify();
-                        }
+                        this.dispatch_actions(ActionsEvent::ToggleFullLog, cx);
                     }))
                     .child(if full_log { "step log" } else { "full log" }),
             )
@@ -1621,8 +1746,8 @@ mod tests {
     use sourcefour_model::{CheckConclusion, CheckStatus, WorkflowJob, WorkflowStep};
 
     use super::{
-        LineTint, bar_fraction, default_job, default_step, demo_log, demo_view, fmt_duration,
-        initial_job, line_tint,
+        ActionsEffect, ActionsEvent, ActionsState, LineTint, bar_fraction, default_job,
+        default_step, demo_log, demo_view, fmt_duration, initial_job, line_tint,
     };
 
     #[test]
@@ -1649,6 +1774,86 @@ mod tests {
         assert!(view.focused_step().is_some());
         view.collapsed = true;
         assert_eq!(view.focused_step(), None);
+    }
+
+    #[test]
+    fn closing_retires_every_actions_generation() {
+        let mut state = ActionsState {
+            view: Some(demo_view()),
+            request: 2,
+            poll: 3,
+            log_generation: 4,
+            logs_pending: [9].into_iter().collect(),
+            ..ActionsState::default()
+        };
+
+        assert!(state.reduce(ActionsEvent::Close).is_empty());
+
+        assert!(state.view.is_none());
+        assert!(state.logs_pending.is_empty());
+        assert_eq!(state.request, 3);
+        assert_eq!(state.poll, 4);
+        assert_eq!(state.log_generation, 5);
+    }
+
+    #[test]
+    fn stale_log_results_cannot_repopulate_a_refreshed_run() {
+        let mut state = ActionsState {
+            view: Some(demo_view()),
+            log_generation: 5,
+            logs_pending: [1].into_iter().collect(),
+            ..ActionsState::default()
+        };
+        let run_id = state.view.as_ref().expect("demo view").run.id;
+
+        let effects = state.reduce(ActionsEvent::Refresh);
+        assert_eq!(effects, vec![ActionsEffect::FetchJobs(run_id)]);
+        assert!(state.logs_pending.is_empty());
+
+        assert!(
+            state
+                .reduce(ActionsEvent::LogLoaded {
+                    generation: 5,
+                    run_id,
+                    job_id: 1,
+                    outcome: Ok(vec![String::from("stale")]),
+                })
+                .is_empty()
+        );
+        assert!(
+            !state
+                .view
+                .as_ref()
+                .expect("open view")
+                .logs
+                .contains_key(&1)
+        );
+    }
+
+    #[test]
+    fn refreshed_jobs_clamp_the_existing_selection() {
+        let mut view = demo_view();
+        view.selected_job = 1;
+        let run_id = view.run.id;
+        let replacement = vec![job(
+            "only",
+            CheckStatus::Completed(CheckConclusion::Success),
+            0,
+            1,
+        )];
+        let mut state = ActionsState {
+            view: Some(view),
+            ..ActionsState::default()
+        };
+
+        assert_eq!(
+            state.reduce(ActionsEvent::JobsLoaded {
+                run_id,
+                outcome: Ok(replacement),
+            }),
+            vec![ActionsEffect::LoadLogs]
+        );
+        assert_eq!(state.view.expect("open view").selected_job, 0);
     }
 
     fn job(name: &str, status: CheckStatus, started: i64, completed: i64) -> WorkflowJob {

@@ -14,6 +14,61 @@ use crate::{
 
 use super::{SourcefourWindow, counted, head_label};
 
+pub(super) enum NetworkOperationState {
+    Idle {
+        generation: u64,
+    },
+    Running {
+        generation: u64,
+        op: NetworkOp,
+        progress: Arc<Mutex<Option<OperationProgress>>>,
+        _cancel: Arc<AtomicBool>,
+    },
+}
+
+impl Default for NetworkOperationState {
+    fn default() -> Self {
+        Self::Idle { generation: 0 }
+    }
+}
+
+impl NetworkOperationState {
+    fn running_op(&self) -> Option<NetworkOp> {
+        match self {
+            Self::Idle { .. } => None,
+            Self::Running { op, .. } => Some(*op),
+        }
+    }
+
+    fn progress(&self) -> Option<&Arc<Mutex<Option<OperationProgress>>>> {
+        match self {
+            Self::Idle { .. } => None,
+            Self::Running { progress, .. } => Some(progress),
+        }
+    }
+
+    fn generation(&self) -> u64 {
+        match self {
+            Self::Idle { generation } | Self::Running { generation, .. } => *generation,
+        }
+    }
+
+    fn running_generation(&self) -> Option<u64> {
+        match self {
+            Self::Idle { .. } => None,
+            Self::Running { generation, .. } => Some(*generation),
+        }
+    }
+
+    fn finish(&mut self, generation: u64) -> bool {
+        if self.running_generation() != Some(generation) {
+            return false;
+        }
+        *self = Self::Idle { generation };
+        true
+    }
+}
+
 /// The three network operations the toolbar can launch (§6.12).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum NetworkOp {
@@ -168,8 +223,9 @@ impl SourcefourWindow {
     /// One live operation button: disabled while any operation runs, and
     /// wearing the running label while its own does (§6.12).
     fn operation_button(&self, op: NetworkOp, cx: &mut gpui::Context<Self>) -> gpui::Stateful<Div> {
-        let busy = self.fetching.is_some();
-        let mine = self.running_op == Some(op);
+        let running_op = self.network_operation.running_op();
+        let busy = running_op.is_some();
+        let mine = running_op == Some(op);
         self.toolbar_column(
             if mine { op.running_label() } else { op.label() },
             op.icon(),
@@ -244,7 +300,7 @@ impl SourcefourWindow {
     /// A second operation while one runs is a no-op: the buttons disable,
     /// and this guard holds even if a keybinding races the render.
     pub(super) fn start_operation(&mut self, op: NetworkOp, cx: &mut gpui::Context<Self>) {
-        if self.fetching.is_some() {
+        if self.network_operation.running_op().is_some() {
             return;
         }
         let Some(location) = self.location.clone() else {
@@ -257,9 +313,13 @@ impl SourcefourWindow {
         };
         let latest = Arc::new(Mutex::new(None));
         let cancel = Arc::new(AtomicBool::new(false));
-        self.fetching = Some(Arc::clone(&latest));
-        self.running_op = Some(op);
-        self.fetch_cancel = Some(Arc::clone(&cancel));
+        let generation = self.network_operation.generation().wrapping_add(1);
+        self.network_operation = NetworkOperationState::Running {
+            generation,
+            op,
+            progress: Arc::clone(&latest),
+            _cancel: Arc::clone(&cancel),
+        };
         self.op_status = None;
         cx.spawn(async move |this, cx| {
             let outcome = cx
@@ -276,9 +336,9 @@ impl SourcefourWindow {
                 })
                 .await;
             this.update(cx, |this, cx| {
-                this.fetching = None;
-                this.running_op = None;
-                this.fetch_cancel = None;
+                if !this.network_operation.finish(generation) {
+                    return;
+                }
                 match outcome {
                     Ok(OperationOutcome::Succeeded { summary, .. }) => {
                         this.op_status = Some((true, summary));
@@ -309,11 +369,11 @@ impl SourcefourWindow {
                     .await;
                 let done = this
                     .update(cx, |this, cx| {
-                        if this.fetching.is_none() {
-                            true
-                        } else {
+                        if this.network_operation.running_generation() == Some(generation) {
                             cx.notify();
                             false
+                        } else {
+                            true
                         }
                     })
                     .unwrap_or(true);
@@ -375,7 +435,7 @@ impl SourcefourWindow {
             .text_size(px(10.0))
             .text_color(self.theme.text_faint)
             .child(path)
-            .children(self.fetching.as_ref().map(|latest| {
+            .children(self.network_operation.progress().map(|latest| {
                 let message = latest
                     .lock()
                     .ok()
@@ -384,7 +444,9 @@ impl SourcefourWindow {
                         || {
                             format!(
                                 "{}…",
-                                self.running_op.map_or("Working", NetworkOp::running_label)
+                                self.network_operation
+                                    .running_op()
+                                    .map_or("Working", NetworkOp::running_label)
                             )
                         },
                         |progress| progress.message,
@@ -408,5 +470,40 @@ impl SourcefourWindow {
                 || String::from("Loading repository metadata..."),
                 status_summary,
             ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, Mutex, atomic::AtomicBool};
+
+    use super::{NetworkOp, NetworkOperationState};
+
+    fn running(generation: u64, op: NetworkOp) -> NetworkOperationState {
+        NetworkOperationState::Running {
+            generation,
+            op,
+            progress: Arc::new(Mutex::new(None)),
+            _cancel: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    #[test]
+    fn only_the_matching_network_operation_can_finish() {
+        let mut state = running(4, NetworkOp::Fetch);
+
+        assert!(!state.finish(3));
+        assert_eq!(state.running_op(), Some(NetworkOp::Fetch));
+        assert!(state.finish(4));
+        assert_eq!(state.running_op(), None);
+    }
+
+    #[test]
+    fn idle_state_retains_the_last_generation() {
+        let mut state = running(7, NetworkOp::Pull);
+
+        assert!(state.finish(7));
+        assert_eq!(state.generation(), 7);
+        assert_eq!(state.running_generation(), None);
     }
 }

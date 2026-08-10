@@ -20,13 +20,13 @@ use gpui::{
     Div, FocusHandle, FontWeight, IntoElement, Render, UniformListScrollHandle, Window, actions,
     div, prelude::*, px,
 };
-use std::sync::{Arc, Mutex, atomic::AtomicBool};
+use std::sync::Arc;
 
 use sourcefour_git::{GixHistoryCursor, HistoryCursor as _};
 use sourcefour_model::{
     AheadBehindUpdate, ChangeKind, CommitFiles, DiffParent, Generation, HistoryBatch, HistoryQuery,
-    HistoryScope, LoadState, OperationProgress, RepoEnvelope, RepoFailure, RepoLocation,
-    RepoSessionId, RepoSnapshot, RequestId,
+    HistoryScope, LoadState, RepoEnvelope, RepoFailure, RepoLocation, RepoSessionId, RepoSnapshot,
+    RequestId,
 };
 
 use crate::{
@@ -141,16 +141,8 @@ pub(crate) struct SourcefourWindow {
     >,
     /// Token for the newest rollup load, so stale results drop.
     github_states_request: u64,
-    /// Jobs warmed by a press before its click opens the overlay.
-    actions_prefetch: Option<actions::ActionsPrefetch>,
-    /// The Actions run overlay, while open (§ mockup/actions.html).
-    actions_view: Option<actions::ActionsView>,
-    /// Token for the newest jobs read of the overlay.
-    actions_request: u64,
-    /// Jobs whose log download is in flight, so sweeps never double-fetch.
-    actions_logs_pending: std::collections::HashSet<u64>,
-    /// Retires stale five-second poll loops when a new run opens.
-    actions_poll: u64,
+    /// GitHub Actions overlay, prefetch, request, and polling state.
+    actions: actions::ActionsState,
     /// Focus target while the Actions overlay is open, so Escape closes it.
     actions_focus: FocusHandle,
     /// Scroll position of the overlay's log list.
@@ -167,12 +159,8 @@ pub(crate) struct SourcefourWindow {
     compare_parent: DiffParent,
     /// §4.6: Space toggles the details pane collapsed.
     details_collapsed: bool,
-    /// Latest fetch progress while one runs; `None` when idle (§6.12).
-    fetching: Option<Arc<Mutex<Option<OperationProgress>>>>,
-    /// Cooperative cancellation flag of the running fetch.
-    fetch_cancel: Option<Arc<AtomicBool>>,
-    /// Which operation `fetching` belongs to, for button labels.
-    running_op: Option<chrome::NetworkOp>,
+    /// The mutually exclusive toolbar network operation state (§6.12).
+    network_operation: chrome::NetworkOperationState,
     /// The last operation outcome — any operation: success flag and message.
     op_status: Option<(bool, String)>,
     /// The §6.13 create-branch dialog, when open.
@@ -387,11 +375,7 @@ impl SourcefourWindow {
             github_checks_request: 0,
             github_states: None,
             github_states_request: 0,
-            actions_prefetch: None,
-            actions_view: None,
-            actions_request: 0,
-            actions_logs_pending: std::collections::HashSet::new(),
-            actions_poll: 0,
+            actions: actions::ActionsState::default(),
             actions_focus: cx.focus_handle(),
             actions_log_scroll: UniformListScrollHandle::new(),
             github_runs: None,
@@ -402,9 +386,7 @@ impl SourcefourWindow {
             compare_parent: DiffParent::FirstParent,
             details_collapsed: false,
             details_focus: cx.focus_handle(),
-            fetching: None,
-            fetch_cancel: None,
-            running_op: None,
+            network_operation: chrome::NetworkOperationState::default(),
             op_status: None,
             branch_dialog: None,
             branch_input: Self::plain_input("new-branch-name", cx),
@@ -1089,7 +1071,7 @@ impl SourcefourWindow {
                 return;
             }
             demo::Scene::Actions => {
-                self.actions_view = Some(actions::demo_view());
+                self.actions.view = Some(actions::demo_view());
                 return;
             }
             demo::Scene::Split => DiffMode::Split,
