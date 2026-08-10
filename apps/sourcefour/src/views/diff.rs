@@ -626,7 +626,7 @@ impl SourcefourWindow {
         let query = self
             .diff_file_input
             .read(cx)
-            .content
+            .text()
             .to_string()
             .to_lowercase();
         let mut matches: Vec<_> = view

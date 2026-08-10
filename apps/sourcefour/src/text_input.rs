@@ -18,6 +18,9 @@ use unicode_segmentation::UnicodeSegmentation;
 
 use crate::theme::Theme;
 
+mod editor;
+use editor::{EditKind, EditorState};
+
 const INPUT_LINE_HEIGHT: Pixels = Pixels(18.0);
 
 actions!(
@@ -51,80 +54,57 @@ actions!(
         InsertNewline,
         Up,
         Down,
+        Undo,
+        Redo,
     ]
 );
 
 /// Key bindings for the input, scoped to its own context.
 pub(crate) fn keymap() -> Vec<gpui::KeyBinding> {
-    const CONTEXT: Option<&str> = Some("FilterInput");
+    let mut bindings = editing_keymap(Some("TextInput"));
+    bindings.extend([
+        gpui::KeyBinding::new("enter", InsertNewline, Some("TextInput mode = multiline")),
+        gpui::KeyBinding::new("up", Up, Some("TextInput mode = multiline")),
+        gpui::KeyBinding::new("down", Down, Some("TextInput mode = multiline")),
+    ]);
+    bindings
+}
+
+fn editing_keymap(context: Option<&'static str>) -> Vec<gpui::KeyBinding> {
     vec![
-        gpui::KeyBinding::new("backspace", Backspace, CONTEXT),
-        gpui::KeyBinding::new("delete", Delete, CONTEXT),
-        gpui::KeyBinding::new("alt-backspace", DeleteWord, CONTEXT),
-        gpui::KeyBinding::new("cmd-backspace", DeleteToStart, CONTEXT),
-        gpui::KeyBinding::new("left", Left, CONTEXT),
-        gpui::KeyBinding::new("right", Right, CONTEXT),
-        gpui::KeyBinding::new("alt-left", WordLeft, CONTEXT),
-        gpui::KeyBinding::new("alt-right", WordRight, CONTEXT),
-        gpui::KeyBinding::new("alt-shift-left", SelectWordLeft, CONTEXT),
-        gpui::KeyBinding::new("alt-shift-right", SelectWordRight, CONTEXT),
-        gpui::KeyBinding::new("shift-left", SelectLeft, CONTEXT),
-        gpui::KeyBinding::new("shift-right", SelectRight, CONTEXT),
-        gpui::KeyBinding::new("cmd-a", SelectAll, CONTEXT),
-        gpui::KeyBinding::new("ctrl-a", SelectAll, CONTEXT),
-        gpui::KeyBinding::new("home", Home, CONTEXT),
-        gpui::KeyBinding::new("cmd-left", Home, CONTEXT),
-        gpui::KeyBinding::new("shift-home", SelectHome, CONTEXT),
-        gpui::KeyBinding::new("cmd-shift-left", SelectHome, CONTEXT),
-        gpui::KeyBinding::new("end", End, CONTEXT),
-        gpui::KeyBinding::new("cmd-right", End, CONTEXT),
-        gpui::KeyBinding::new("shift-end", SelectEnd, CONTEXT),
-        gpui::KeyBinding::new("cmd-shift-right", SelectEnd, CONTEXT),
-        gpui::KeyBinding::new("cmd-up", DocumentStart, CONTEXT),
-        gpui::KeyBinding::new("cmd-down", DocumentEnd, CONTEXT),
-        gpui::KeyBinding::new("cmd-shift-up", SelectDocumentStart, CONTEXT),
-        gpui::KeyBinding::new("cmd-shift-down", SelectDocumentEnd, CONTEXT),
-        gpui::KeyBinding::new("cmd-v", Paste, CONTEXT),
-        gpui::KeyBinding::new("cmd-c", Copy, CONTEXT),
-        gpui::KeyBinding::new("cmd-x", Cut, CONTEXT),
-        gpui::KeyBinding::new("ctrl-cmd-space", ShowCharacterPalette, CONTEXT),
-        gpui::KeyBinding::new("backspace", Backspace, Some("MultilineInput")),
-        gpui::KeyBinding::new("delete", Delete, Some("MultilineInput")),
-        gpui::KeyBinding::new("alt-backspace", DeleteWord, Some("MultilineInput")),
-        gpui::KeyBinding::new("cmd-backspace", DeleteToStart, Some("MultilineInput")),
-        gpui::KeyBinding::new("left", Left, Some("MultilineInput")),
-        gpui::KeyBinding::new("right", Right, Some("MultilineInput")),
-        gpui::KeyBinding::new("alt-left", WordLeft, Some("MultilineInput")),
-        gpui::KeyBinding::new("alt-right", WordRight, Some("MultilineInput")),
-        gpui::KeyBinding::new("alt-shift-left", SelectWordLeft, Some("MultilineInput")),
-        gpui::KeyBinding::new("alt-shift-right", SelectWordRight, Some("MultilineInput")),
-        gpui::KeyBinding::new("shift-left", SelectLeft, Some("MultilineInput")),
-        gpui::KeyBinding::new("shift-right", SelectRight, Some("MultilineInput")),
-        gpui::KeyBinding::new("cmd-a", SelectAll, Some("MultilineInput")),
-        gpui::KeyBinding::new("ctrl-a", SelectAll, Some("MultilineInput")),
-        gpui::KeyBinding::new("home", Home, Some("MultilineInput")),
-        gpui::KeyBinding::new("cmd-left", Home, Some("MultilineInput")),
-        gpui::KeyBinding::new("shift-home", SelectHome, Some("MultilineInput")),
-        gpui::KeyBinding::new("cmd-shift-left", SelectHome, Some("MultilineInput")),
-        gpui::KeyBinding::new("end", End, Some("MultilineInput")),
-        gpui::KeyBinding::new("cmd-right", End, Some("MultilineInput")),
-        gpui::KeyBinding::new("shift-end", SelectEnd, Some("MultilineInput")),
-        gpui::KeyBinding::new("cmd-shift-right", SelectEnd, Some("MultilineInput")),
-        gpui::KeyBinding::new("cmd-up", DocumentStart, Some("MultilineInput")),
-        gpui::KeyBinding::new("cmd-down", DocumentEnd, Some("MultilineInput")),
-        gpui::KeyBinding::new("cmd-shift-up", SelectDocumentStart, Some("MultilineInput")),
-        gpui::KeyBinding::new("cmd-shift-down", SelectDocumentEnd, Some("MultilineInput")),
-        gpui::KeyBinding::new("cmd-v", Paste, Some("MultilineInput")),
-        gpui::KeyBinding::new("cmd-c", Copy, Some("MultilineInput")),
-        gpui::KeyBinding::new("cmd-x", Cut, Some("MultilineInput")),
-        gpui::KeyBinding::new(
-            "ctrl-cmd-space",
-            ShowCharacterPalette,
-            Some("MultilineInput"),
-        ),
-        gpui::KeyBinding::new("enter", InsertNewline, Some("MultilineInput")),
-        gpui::KeyBinding::new("up", Up, Some("MultilineInput")),
-        gpui::KeyBinding::new("down", Down, Some("MultilineInput")),
+        gpui::KeyBinding::new("backspace", Backspace, context),
+        gpui::KeyBinding::new("delete", Delete, context),
+        gpui::KeyBinding::new("alt-backspace", DeleteWord, context),
+        gpui::KeyBinding::new("cmd-backspace", DeleteToStart, context),
+        gpui::KeyBinding::new("left", Left, context),
+        gpui::KeyBinding::new("right", Right, context),
+        gpui::KeyBinding::new("alt-left", WordLeft, context),
+        gpui::KeyBinding::new("alt-right", WordRight, context),
+        gpui::KeyBinding::new("alt-shift-left", SelectWordLeft, context),
+        gpui::KeyBinding::new("alt-shift-right", SelectWordRight, context),
+        gpui::KeyBinding::new("shift-left", SelectLeft, context),
+        gpui::KeyBinding::new("shift-right", SelectRight, context),
+        gpui::KeyBinding::new("cmd-a", SelectAll, context),
+        gpui::KeyBinding::new("ctrl-a", SelectAll, context),
+        gpui::KeyBinding::new("home", Home, context),
+        gpui::KeyBinding::new("cmd-left", Home, context),
+        gpui::KeyBinding::new("shift-home", SelectHome, context),
+        gpui::KeyBinding::new("cmd-shift-left", SelectHome, context),
+        gpui::KeyBinding::new("end", End, context),
+        gpui::KeyBinding::new("cmd-right", End, context),
+        gpui::KeyBinding::new("shift-end", SelectEnd, context),
+        gpui::KeyBinding::new("cmd-shift-right", SelectEnd, context),
+        gpui::KeyBinding::new("cmd-up", DocumentStart, context),
+        gpui::KeyBinding::new("cmd-down", DocumentEnd, context),
+        gpui::KeyBinding::new("cmd-shift-up", SelectDocumentStart, context),
+        gpui::KeyBinding::new("cmd-shift-down", SelectDocumentEnd, context),
+        gpui::KeyBinding::new("cmd-v", Paste, context),
+        gpui::KeyBinding::new("cmd-c", Copy, context),
+        gpui::KeyBinding::new("cmd-x", Cut, context),
+        gpui::KeyBinding::new("ctrl-cmd-space", ShowCharacterPalette, context),
+        gpui::KeyBinding::new("cmd-z", Undo, context),
+        gpui::KeyBinding::new("cmd-shift-z", Redo, context),
+        gpui::KeyBinding::new("cmd-y", Redo, context),
     ]
 }
 
@@ -134,24 +114,40 @@ enum InputMode {
     Multiline { rows: usize },
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum InputRole {
+    #[default]
+    Plain,
+    HistoryFilter,
+    DiffSwitcher,
+    BranchName,
+    GithubToken,
+    CommitMessage,
+}
+
+#[derive(Default)]
+struct LayoutSnapshot {
+    lines: Vec<WrappedLine>,
+    bounds: Bounds<Pixels>,
+    line_height: Pixels,
+    scroll_y: Pixels,
+    revision: u64,
+}
+
 /// A themed editable text field, single-line unless explicitly configured.
 pub(crate) struct TextInput {
     pub(crate) focus_handle: FocusHandle,
-    pub(crate) content: SharedString,
     /// Draw mask characters instead of the content (token fields). The mask
     /// is one `*` per byte so every caret offset stays valid; secrets are
     /// ASCII, so bytes and characters agree.
-    pub(crate) masked: bool,
+    masked: bool,
+    editor: EditorState,
+    next_edit_kind: EditKind,
     placeholder: SharedString,
     theme: Theme,
     mode: InputMode,
-    selected_range: Range<usize>,
-    selection_reversed: bool,
-    marked_range: Option<Range<usize>>,
-    last_layout: Vec<WrappedLine>,
-    last_bounds: Option<Bounds<Pixels>>,
-    last_line_height: Pixels,
-    last_scroll_y: Pixels,
+    role: InputRole,
+    layout: LayoutSnapshot,
     is_selecting: bool,
 }
 
@@ -163,18 +159,14 @@ impl TextInput {
     ) -> Self {
         Self {
             focus_handle: cx.focus_handle(),
-            content: SharedString::default(),
             masked: false,
+            editor: EditorState::new(),
+            next_edit_kind: EditKind::Typing,
             placeholder: placeholder.into(),
             theme: *theme,
             mode: InputMode::SingleLine,
-            selected_range: 0..0,
-            selection_reversed: false,
-            marked_range: None,
-            last_layout: Vec::new(),
-            last_bounds: None,
-            last_line_height: Pixels::ZERO,
-            last_scroll_y: Pixels::ZERO,
+            role: InputRole::Plain,
+            layout: LayoutSnapshot::default(),
             is_selecting: false,
         }
     }
@@ -183,6 +175,34 @@ impl TextInput {
     pub(crate) fn multiline(mut self, rows: usize) -> Self {
         self.mode = InputMode::Multiline { rows: rows.max(1) };
         self
+    }
+
+    pub(crate) fn masked(mut self) -> Self {
+        self.masked = true;
+        self
+    }
+
+    pub(crate) fn role(mut self, role: InputRole) -> Self {
+        self.role = role;
+        self
+    }
+
+    fn key_context(&self) -> &'static str {
+        match (self.mode, self.role) {
+            (InputMode::Multiline { .. }, InputRole::CommitMessage) => {
+                "TextInput mode = multiline role = commit_message"
+            }
+            (InputMode::Multiline { .. }, _) => "TextInput mode = multiline",
+            (_, InputRole::HistoryFilter) => "TextInput mode = singleline role = history_filter",
+            (_, InputRole::DiffSwitcher) => "TextInput mode = singleline role = diff_switcher",
+            (_, InputRole::BranchName) => "TextInput mode = singleline role = branch_name",
+            (_, InputRole::GithubToken) => "TextInput mode = singleline role = github_token",
+            _ => "TextInput mode = singleline",
+        }
+    }
+
+    pub(crate) fn text(&self) -> &str {
+        self.editor.text()
     }
 
     fn is_multiline(&self) -> bool {
@@ -198,61 +218,65 @@ impl TextInput {
 
     /// Replaces the whole content, moving the caret to the end.
     pub(crate) fn set_text(&mut self, text: &str, cx: &mut gpui::Context<Self>) {
-        self.content = SharedString::from(text.to_owned());
-        self.selected_range = self.content.len()..self.content.len();
-        self.selection_reversed = false;
-        self.marked_range = None;
+        self.editor.set_text(text);
         cx.notify();
     }
 
-    fn backspace(&mut self, _: &Backspace, window: &mut Window, cx: &mut gpui::Context<Self>) {
-        if self.selected_range.is_empty() {
-            self.select_to(self.previous_boundary(self.cursor_offset()), cx);
-        }
-        self.replace_text_in_range(None, "", window, cx);
+    fn backspace(&mut self, _: &Backspace, _: &mut Window, cx: &mut gpui::Context<Self>) {
+        let range = if self.editor.selection_is_empty() {
+            self.previous_boundary(self.cursor_offset())..self.cursor_offset()
+        } else {
+            self.editor.selection()
+        };
+        self.editor.replace(range, "", EditKind::Backspace);
+        cx.notify();
     }
 
-    fn delete(&mut self, _: &Delete, window: &mut Window, cx: &mut gpui::Context<Self>) {
-        if self.selected_range.is_empty() {
-            self.select_to(self.next_boundary(self.cursor_offset()), cx);
-        }
-        self.replace_text_in_range(None, "", window, cx);
+    fn delete(&mut self, _: &Delete, _: &mut Window, cx: &mut gpui::Context<Self>) {
+        let range = if self.editor.selection_is_empty() {
+            self.cursor_offset()..self.next_boundary(self.cursor_offset())
+        } else {
+            self.editor.selection()
+        };
+        self.editor.replace(range, "", EditKind::Delete);
+        cx.notify();
     }
 
     /// Alt+Backspace: delete to the start of the previous word.
-    fn delete_word(&mut self, _: &DeleteWord, window: &mut Window, cx: &mut gpui::Context<Self>) {
-        if self.selected_range.is_empty() {
-            self.select_to(self.previous_word_boundary(self.cursor_offset()), cx);
-        }
-        self.replace_text_in_range(None, "", window, cx);
+    fn delete_word(&mut self, _: &DeleteWord, _: &mut Window, cx: &mut gpui::Context<Self>) {
+        let range = if self.editor.selection_is_empty() {
+            self.previous_word_boundary(self.cursor_offset())..self.cursor_offset()
+        } else {
+            self.editor.selection()
+        };
+        self.editor.replace(range, "", EditKind::Backspace);
+        cx.notify();
     }
 
     /// Cmd+Backspace: delete from the caret to the start of the line.
-    fn delete_to_start(
-        &mut self,
-        _: &DeleteToStart,
-        window: &mut Window,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        if self.selected_range.is_empty() {
-            self.select_to(self.current_line_range().start, cx);
-        }
-        self.replace_text_in_range(None, "", window, cx);
+    fn delete_to_start(&mut self, _: &DeleteToStart, _: &mut Window, cx: &mut gpui::Context<Self>) {
+        let range = if self.editor.selection_is_empty() {
+            self.current_line_range().start..self.cursor_offset()
+        } else {
+            self.editor.selection()
+        };
+        self.editor.replace(range, "", EditKind::Backspace);
+        cx.notify();
     }
 
     fn left(&mut self, _: &Left, _: &mut Window, cx: &mut gpui::Context<Self>) {
-        if self.selected_range.is_empty() {
+        if self.editor.selection_is_empty() {
             self.move_to(self.previous_boundary(self.cursor_offset()), cx);
         } else {
-            self.move_to(self.selected_range.start, cx);
+            self.move_to(self.editor.selection().start, cx);
         }
     }
 
     fn right(&mut self, _: &Right, _: &mut Window, cx: &mut gpui::Context<Self>) {
-        if self.selected_range.is_empty() {
-            self.move_to(self.next_boundary(self.selected_range.end), cx);
+        if self.editor.selection_is_empty() {
+            self.move_to(self.next_boundary(self.editor.selection().end), cx);
         } else {
-            self.move_to(self.selected_range.end, cx);
+            self.move_to(self.editor.selection().end, cx);
         }
     }
 
@@ -292,7 +316,7 @@ impl TextInput {
 
     fn select_all(&mut self, _: &SelectAll, _: &mut Window, cx: &mut gpui::Context<Self>) {
         self.move_to(0, cx);
-        self.select_to(self.content.len(), cx);
+        self.select_to(self.editor.text().len(), cx);
     }
 
     fn home(&mut self, _: &Home, _: &mut Window, cx: &mut gpui::Context<Self>) {
@@ -316,7 +340,7 @@ impl TextInput {
     }
 
     fn document_end(&mut self, _: &DocumentEnd, _: &mut Window, cx: &mut gpui::Context<Self>) {
-        self.move_to(self.content.len(), cx);
+        self.move_to(self.editor.text().len(), cx);
     }
 
     fn select_document_start(
@@ -334,7 +358,7 @@ impl TextInput {
         _: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
-        self.select_to(self.content.len(), cx);
+        self.select_to(self.editor.text().len(), cx);
     }
 
     fn insert_newline(
@@ -344,6 +368,7 @@ impl TextInput {
         cx: &mut gpui::Context<Self>,
     ) {
         if self.is_multiline() {
+            self.next_edit_kind = EditKind::Newline;
             self.replace_text_in_range(None, "\n", window, cx);
         }
     }
@@ -354,6 +379,18 @@ impl TextInput {
 
     fn down(&mut self, _: &Down, _: &mut Window, cx: &mut gpui::Context<Self>) {
         self.move_vertical(1, cx);
+    }
+
+    fn undo(&mut self, _: &Undo, _: &mut Window, cx: &mut gpui::Context<Self>) {
+        if self.editor.undo() {
+            cx.notify();
+        }
+    }
+
+    fn redo(&mut self, _: &Redo, _: &mut Window, cx: &mut gpui::Context<Self>) {
+        if self.editor.redo() {
+            cx.notify();
+        }
     }
 
     #[expect(clippy::unused_self, reason = "action listeners take &mut self")]
@@ -373,23 +410,27 @@ impl TextInput {
             } else {
                 text.replace('\n', " ")
             };
+            self.next_edit_kind = EditKind::Paste;
             self.replace_text_in_range(None, &text, window, cx);
         }
     }
 
     fn copy(&mut self, _: &Copy, _: &mut Window, cx: &mut gpui::Context<Self>) {
-        if !self.selected_range.is_empty() {
+        let selection = self.editor.selection();
+        if !selection.is_empty() {
             cx.write_to_clipboard(ClipboardItem::new_string(
-                self.content[self.selected_range.clone()].to_string(),
+                self.editor.text()[selection].to_string(),
             ));
         }
     }
 
     fn cut(&mut self, _: &Cut, window: &mut Window, cx: &mut gpui::Context<Self>) {
-        if !self.selected_range.is_empty() {
+        let selection = self.editor.selection();
+        if !selection.is_empty() {
             cx.write_to_clipboard(ClipboardItem::new_string(
-                self.content[self.selected_range.clone()].to_string(),
+                self.editor.text()[selection].to_string(),
             ));
+            self.next_edit_kind = EditKind::Cut;
             self.replace_text_in_range(None, "", window, cx);
         }
     }
@@ -424,57 +465,45 @@ impl TextInput {
     }
 
     fn move_to(&mut self, offset: usize, cx: &mut gpui::Context<Self>) {
-        self.selected_range = offset..offset;
-        self.selection_reversed = false;
+        self.editor.collapse(offset);
         cx.notify();
     }
 
     fn cursor_offset(&self) -> usize {
-        if self.selection_reversed {
-            self.selected_range.start
-        } else {
-            self.selected_range.end
-        }
+        self.editor.head()
     }
 
     fn index_for_mouse_position(&self, position: Point<Pixels>) -> usize {
-        if self.content.is_empty() {
+        if self.editor.text().is_empty() {
             return 0;
         }
-        let Some(bounds) = self.last_bounds.as_ref() else {
+        let Some(layout) = self.valid_layout() else {
             return 0;
         };
+        let bounds = &layout.bounds;
         if position.y < bounds.top() {
             return 0;
         }
         if position.y > bounds.bottom() {
-            return self.content.len();
+            return self.editor.text().len();
         }
         index_for_position(
-            &self.last_layout,
-            position - bounds.origin + point(px(0.0), self.last_scroll_y),
-            self.last_line_height,
-            self.content.len(),
+            &layout.lines,
+            position - bounds.origin + point(px(0.0), layout.scroll_y),
+            layout.line_height,
+            self.editor.text().len(),
         )
     }
 
     fn select_to(&mut self, offset: usize, cx: &mut gpui::Context<Self>) {
-        if self.selection_reversed {
-            self.selected_range.start = offset;
-        } else {
-            self.selected_range.end = offset;
-        }
-        if self.selected_range.end < self.selected_range.start {
-            self.selection_reversed = !self.selection_reversed;
-            self.selected_range = self.selected_range.end..self.selected_range.start;
-        }
+        self.editor.extend(offset);
         cx.notify();
     }
 
     fn offset_from_utf16(&self, offset: usize) -> usize {
         let mut utf8_offset = 0;
         let mut utf16_count = 0;
-        for character in self.content.chars() {
+        for character in self.editor.text().chars() {
             if utf16_count >= offset {
                 break;
             }
@@ -487,7 +516,7 @@ impl TextInput {
     fn offset_to_utf16(&self, offset: usize) -> usize {
         let mut utf16_offset = 0;
         let mut utf8_count = 0;
-        for character in self.content.chars() {
+        for character in self.editor.text().chars() {
             if utf8_count >= offset {
                 break;
             }
@@ -506,7 +535,8 @@ impl TextInput {
     }
 
     fn previous_boundary(&self, offset: usize) -> usize {
-        self.content
+        self.editor
+            .text()
             .grapheme_indices(true)
             .rev()
             .find_map(|(index, _)| (index < offset).then_some(index))
@@ -514,56 +544,85 @@ impl TextInput {
     }
 
     fn next_boundary(&self, offset: usize) -> usize {
-        self.content
+        self.editor
+            .text()
             .grapheme_indices(true)
             .find_map(|(index, _)| (index > offset).then_some(index))
-            .unwrap_or(self.content.len())
+            .unwrap_or(self.editor.text().len())
     }
 
     fn previous_word_boundary(&self, offset: usize) -> usize {
-        previous_word_boundary(&self.content, offset)
+        previous_word_boundary(self.editor.text(), offset)
     }
 
     fn next_word_boundary(&self, offset: usize) -> usize {
-        next_word_boundary(&self.content, offset)
+        next_word_boundary(self.editor.text(), offset)
     }
 
     fn current_line_range(&self) -> Range<usize> {
-        line_range(&self.content, self.cursor_offset())
+        line_range(self.editor.text(), self.cursor_offset())
     }
 
     fn visual_row_range(&self) -> Range<usize> {
-        if self.content.is_empty() {
+        if self.editor.text().is_empty() {
             return 0..0;
         }
-        visual_row_range(
-            &self.last_layout,
-            self.cursor_offset(),
-            self.last_line_height,
-        )
-        .filter(|range| {
-            range.end <= self.content.len()
-                && self.content.is_char_boundary(range.start)
-                && self.content.is_char_boundary(range.end)
-        })
-        .unwrap_or_else(|| self.current_line_range())
+        self.valid_layout()
+            .and_then(|layout| {
+                visual_row_range(&layout.lines, self.cursor_offset(), layout.line_height)
+            })
+            .filter(|range| {
+                range.end <= self.editor.text().len()
+                    && self.editor.text().is_char_boundary(range.start)
+                    && self.editor.text().is_char_boundary(range.end)
+            })
+            .unwrap_or_else(|| self.current_line_range())
+    }
+
+    fn valid_layout(&self) -> Option<&LayoutSnapshot> {
+        (self.layout.revision == self.editor.revision()).then_some(&self.layout)
     }
 
     fn home_offset(&self) -> usize {
-        smart_home_offset(&self.content, self.visual_row_range(), self.cursor_offset())
+        smart_home_offset(
+            self.editor.text(),
+            self.visual_row_range(),
+            self.cursor_offset(),
+        )
     }
 
     fn move_vertical(&mut self, direction: isize, cx: &mut gpui::Context<Self>) {
         let cursor = self.cursor_offset();
-        let current = line_range(&self.content, cursor);
+        if let Some(layout) = self.valid_layout()
+            && let Some(position) = position_for_index(&layout.lines, cursor, layout.line_height)
+        {
+            let x = self.editor.preferred_x().unwrap_or(position.x.0);
+            let target_y = if direction < 0 {
+                position.y - layout.line_height
+            } else {
+                position.y + layout.line_height
+            };
+            let target = point(px(x), target_y);
+            let offset = index_for_position(
+                &layout.lines,
+                target,
+                layout.line_height,
+                self.editor.text().len(),
+            );
+            self.editor.collapse(offset);
+            self.editor.set_preferred_x(Some(x));
+            cx.notify();
+            return;
+        }
+        let current = line_range(self.editor.text(), cursor);
         let column = cursor - current.start;
         let target = if direction < 0 {
             current
                 .start
                 .checked_sub(1)
-                .map(|offset| line_range(&self.content, offset))
-        } else if current.end < self.content.len() {
-            Some(line_range(&self.content, current.end + 1))
+                .map(|offset| line_range(self.editor.text(), offset))
+        } else if current.end < self.editor.text().len() {
+            Some(line_range(self.editor.text(), current.end + 1))
         } else {
             None
         };
@@ -579,6 +638,22 @@ fn line_range(text: &str, offset: usize) -> Range<usize> {
         .find('\n')
         .map_or(text.len(), |index| offset + index);
     start..end
+}
+
+fn range_from_utf16_in(text: &str, range: &Range<usize>) -> Range<usize> {
+    fn offset(text: &str, target: usize) -> usize {
+        let mut utf8 = 0;
+        let mut utf16 = 0;
+        for character in text.chars() {
+            if utf16 >= target {
+                break;
+            }
+            utf16 += character.len_utf16();
+            utf8 += character.len_utf8();
+        }
+        utf8
+    }
+    offset(text, range.start)..offset(text, range.end)
 }
 
 fn previous_word_boundary(text: &str, offset: usize) -> usize {
@@ -750,7 +825,7 @@ impl EntityInputHandler for TextInput {
     ) -> Option<String> {
         let range = self.range_from_utf16(&range_utf16);
         actual_range.replace(self.range_to_utf16(&range));
-        Some(self.content[range].to_string())
+        Some(self.editor.text()[range].to_string())
     }
 
     fn selected_text_range(
@@ -760,8 +835,8 @@ impl EntityInputHandler for TextInput {
         _cx: &mut gpui::Context<Self>,
     ) -> Option<UTF16Selection> {
         Some(UTF16Selection {
-            range: self.range_to_utf16(&self.selected_range),
-            reversed: self.selection_reversed,
+            range: self.range_to_utf16(&self.editor.selection()),
+            reversed: self.editor.is_reversed(),
         })
     }
 
@@ -770,13 +845,14 @@ impl EntityInputHandler for TextInput {
         _window: &mut Window,
         _cx: &mut gpui::Context<Self>,
     ) -> Option<Range<usize>> {
-        self.marked_range
+        self.editor
+            .marked()
             .as_ref()
             .map(|range| self.range_to_utf16(range))
     }
 
     fn unmark_text(&mut self, _window: &mut Window, _cx: &mut gpui::Context<Self>) {
-        self.marked_range = None;
+        self.editor.unmark();
     }
 
     fn replace_text_in_range(
@@ -789,13 +865,11 @@ impl EntityInputHandler for TextInput {
         let range = range_utf16
             .as_ref()
             .map(|range_utf16| self.range_from_utf16(range_utf16))
-            .or(self.marked_range.clone())
-            .unwrap_or(self.selected_range.clone());
-        self.content =
-            (self.content[0..range.start].to_owned() + new_text + &self.content[range.end..])
-                .into();
-        self.selected_range = range.start + new_text.len()..range.start + new_text.len();
-        self.marked_range.take();
+            .or(self.editor.marked())
+            .unwrap_or_else(|| self.editor.selection());
+        self.editor.unmark();
+        let kind = std::mem::replace(&mut self.next_edit_kind, EditKind::Typing);
+        self.editor.replace(range, new_text, kind);
         cx.notify();
     }
 
@@ -810,19 +884,13 @@ impl EntityInputHandler for TextInput {
         let range = range_utf16
             .as_ref()
             .map(|range_utf16| self.range_from_utf16(range_utf16))
-            .or(self.marked_range.clone())
-            .unwrap_or(self.selected_range.clone());
-        self.content =
-            (self.content[0..range.start].to_owned() + new_text + &self.content[range.end..])
-                .into();
-        self.marked_range = Some(range.start..range.start + new_text.len());
-        self.selected_range = new_selected_range_utf16
-            .as_ref()
-            .map(|range_utf16| self.range_from_utf16(range_utf16))
-            .map_or_else(
-                || range.start + new_text.len()..range.start + new_text.len(),
-                |new_range| new_range.start + range.start..new_range.end + range.end,
-            );
+            .or(self.editor.marked())
+            .unwrap_or_else(|| self.editor.selection());
+        let selection = new_selected_range_utf16.as_ref().map_or_else(
+            || new_text.len()..new_text.len(),
+            |range_utf16| range_from_utf16_in(new_text, range_utf16),
+        );
+        self.editor.replace_marked(range, new_text, selection);
         cx.notify();
     }
 
@@ -834,11 +902,12 @@ impl EntityInputHandler for TextInput {
         _cx: &mut gpui::Context<Self>,
     ) -> Option<Bounds<Pixels>> {
         let range = self.range_from_utf16(&range_utf16);
-        let start = position_for_index(&self.last_layout, range.start, self.last_line_height)?;
-        let end = position_for_index(&self.last_layout, range.end, self.last_line_height)?;
+        let layout = self.valid_layout()?;
+        let start = position_for_index(&layout.lines, range.start, layout.line_height)?;
+        let end = position_for_index(&layout.lines, range.end, layout.line_height)?;
         Some(Bounds::from_corners(
-            bounds.origin + start - point(px(0.0), self.last_scroll_y),
-            bounds.origin + end + point(px(0.0), self.last_line_height - self.last_scroll_y),
+            bounds.origin + start - point(px(0.0), layout.scroll_y),
+            bounds.origin + end + point(px(0.0), layout.line_height - layout.scroll_y),
         ))
     }
 
@@ -848,13 +917,14 @@ impl EntityInputHandler for TextInput {
         _window: &mut Window,
         _cx: &mut gpui::Context<Self>,
     ) -> Option<usize> {
-        let bounds = self.last_bounds?;
+        let layout = self.valid_layout()?;
+        let bounds = layout.bounds;
         let line_point = bounds.localize(&point)?;
         let utf8_index = index_for_position(
-            &self.last_layout,
-            line_point + gpui::point(px(0.0), self.last_scroll_y),
-            self.last_line_height,
-            self.content.len(),
+            &layout.lines,
+            line_point + gpui::point(px(0.0), layout.scroll_y),
+            layout.line_height,
+            self.editor.text().len(),
         );
         Some(self.offset_to_utf16(utf8_index))
     }
@@ -909,9 +979,9 @@ impl Element for TextElement {
         cx: &mut App,
     ) -> Self::PrepaintState {
         let input = self.input.read(cx);
-        let content = input.content.clone();
+        let content = input.editor.shared_text();
         let theme = input.theme;
-        let selected_range = input.selected_range.clone();
+        let selected_range = input.editor.selection();
         let cursor = input.cursor_offset();
         let style = window.text_style();
 
@@ -931,7 +1001,7 @@ impl Element for TextElement {
             underline: None,
             strikethrough: None,
         };
-        let runs = if let Some(marked_range) = input.marked_range.as_ref() {
+        let runs = if let Some(marked_range) = input.editor.marked().as_ref() {
             vec![
                 TextRun {
                     len: marked_range.start,
@@ -1054,10 +1124,13 @@ impl Element for TextElement {
             window.paint_quad(cursor);
         }
         self.input.update(cx, |input, _cx| {
-            input.last_layout = std::mem::take(&mut prepaint.lines);
-            input.last_bounds = Some(bounds);
-            input.last_line_height = window.line_height();
-            input.last_scroll_y = prepaint.scroll_y;
+            input.layout = LayoutSnapshot {
+                lines: std::mem::take(&mut prepaint.lines),
+                bounds,
+                line_height: window.line_height(),
+                scroll_y: prepaint.scroll_y,
+                revision: input.editor.revision(),
+            };
         });
     }
 }
@@ -1069,11 +1142,7 @@ impl Render for TextInput {
             .flex_1()
             .min_w(px(1.0))
             .line_height(INPUT_LINE_HEIGHT)
-            .key_context(if self.is_multiline() {
-                "MultilineInput"
-            } else {
-                "FilterInput"
-            })
+            .key_context(self.key_context())
             .track_focus(&self.focus_handle(cx))
             .cursor(CursorStyle::IBeam)
             .on_action(cx.listener(Self::backspace))
@@ -1104,6 +1173,8 @@ impl Render for TextInput {
             .on_action(cx.listener(Self::insert_newline))
             .on_action(cx.listener(Self::up))
             .on_action(cx.listener(Self::down))
+            .on_action(cx.listener(Self::undo))
+            .on_action(cx.listener(Self::redo))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
             .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_mouse_up))
@@ -1125,7 +1196,7 @@ impl Focusable for TextInput {
 mod tests {
     use super::{
         INPUT_LINE_HEIGHT, caret_geometry, line_range, next_word_boundary, previous_word_boundary,
-        smart_home_offset,
+        range_from_utf16_in, smart_home_offset,
     };
 
     #[test]
@@ -1193,5 +1264,10 @@ mod tests {
         let text = "blåbær grøt";
         assert_eq!(next_word_boundary(text, 0), "blåbær".len());
         assert_eq!(previous_word_boundary(text, text.len()), "blåbær ".len());
+    }
+
+    #[test]
+    fn ime_selection_ranges_are_relative_to_the_composed_text() {
+        assert_eq!(range_from_utf16_in("a😀b", &(1..3)), 1..5);
     }
 }

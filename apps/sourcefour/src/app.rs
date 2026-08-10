@@ -184,24 +184,55 @@ fn history_keymap() -> Vec<gpui::KeyBinding> {
         gpui::KeyBinding::new("end", SelectLastLoadedCommit, Some("History")),
         // The filter is reachable from anywhere in the window (§4.7).
         gpui::KeyBinding::new("cmd-f", FocusFilter, None),
-        gpui::KeyBinding::new("escape", FilterEscape, Some("FilterInput")),
-        gpui::KeyBinding::new("enter", FilterEnter, Some("FilterInput")),
-        gpui::KeyBinding::new("down", NextDiffSwitcherResult, Some("FilterInput")),
-        gpui::KeyBinding::new("up", PrevDiffSwitcherResult, Some("FilterInput")),
+        gpui::KeyBinding::new(
+            "escape",
+            FilterEscape,
+            Some("TextInput role = history_filter"),
+        ),
+        gpui::KeyBinding::new(
+            "enter",
+            FilterEnter,
+            Some("TextInput role = history_filter"),
+        ),
+        gpui::KeyBinding::new(
+            "down",
+            NextDiffSwitcherResult,
+            Some("TextInput role = history_filter"),
+        ),
+        gpui::KeyBinding::new(
+            "up",
+            PrevDiffSwitcherResult,
+            Some("TextInput role = history_filter"),
+        ),
+        gpui::KeyBinding::new(
+            "escape",
+            FilterEscape,
+            Some("TextInput role = diff_switcher"),
+        ),
+        gpui::KeyBinding::new("enter", FilterEnter, Some("TextInput role = diff_switcher")),
+        gpui::KeyBinding::new(
+            "down",
+            NextDiffSwitcherResult,
+            Some("TextInput role = diff_switcher"),
+        ),
+        gpui::KeyBinding::new(
+            "up",
+            PrevDiffSwitcherResult,
+            Some("TextInput role = diff_switcher"),
+        ),
+        gpui::KeyBinding::new("escape", FilterEscape, Some("TextInput role = branch_name")),
+        gpui::KeyBinding::new("enter", FilterEnter, Some("TextInput role = branch_name")),
         // A "History"-context binding fires from any focused descendant,
         // filter input included, unless something more specific to
-        // "FilterInput" claims the same key first — escape and enter do that
+        // The focused TextInput role claims the same key first — escape and enter do that
         // above by overriding to a filter action; j/k have no filter action
         // to give them, so `NoAction` is what stops the letter from being
         // read as a navigation command instead of typed into the query.
-        gpui::KeyBinding::new("j", gpui::NoAction, Some("FilterInput")),
-        gpui::KeyBinding::new("k", gpui::NoAction, Some("FilterInput")),
+        gpui::KeyBinding::new("j", gpui::NoAction, Some("TextInput")),
+        gpui::KeyBinding::new("k", gpui::NoAction, Some("TextInput")),
         // Space has the same flaw below: without this, a multi-word filter
         // query toggles the details pane instead of typing the space.
-        gpui::KeyBinding::new("space", gpui::NoAction, Some("FilterInput")),
-        gpui::KeyBinding::new("j", gpui::NoAction, Some("MultilineInput")),
-        gpui::KeyBinding::new("k", gpui::NoAction, Some("MultilineInput")),
-        gpui::KeyBinding::new("space", gpui::NoAction, Some("MultilineInput")),
+        gpui::KeyBinding::new("space", gpui::NoAction, Some("TextInput")),
         gpui::KeyBinding::new("escape", CloseDiff, Some("Diff")),
         gpui::KeyBinding::new("cmd-c", CopyPreviewSelection, Some("Diff")),
         gpui::KeyBinding::new("cmd-p", OpenDiffFileSwitcher, Some("Diff")),

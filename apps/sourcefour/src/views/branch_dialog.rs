@@ -46,7 +46,7 @@ impl SourcefourWindow {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
-        let name = self.branch_input.read(cx).content.to_string();
+        let name = self.branch_input.read(cx).text().to_string();
         let (Some(start), Some(location)) = (self.branch_start(), self.location.clone()) else {
             return;
         };
@@ -113,7 +113,7 @@ impl SourcefourWindow {
         cx: &mut gpui::Context<Self>,
     ) -> Option<impl IntoElement + use<>> {
         let dialog = self.branch_dialog.as_ref()?;
-        let name = self.branch_input.read(cx).content.to_string();
+        let name = self.branch_input.read(cx).text().to_string();
         let creatable = !dialog.running && sourcefour_git::is_valid_branch_name(&name);
         let invalid = !name.is_empty() && !sourcefour_git::is_valid_branch_name(&name);
         let start = self

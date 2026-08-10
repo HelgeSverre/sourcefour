@@ -388,6 +388,7 @@ impl SourcefourWindow {
             initial_selection_pending: !launch.demo,
             commit_input: cx.new(|cx| {
                 crate::text_input::TextInput::new("Describe the change", &Theme::dark(), cx)
+                    .role(crate::text_input::InputRole::CommitMessage)
                     .multiline(4)
             }),
             committing: false,
@@ -397,7 +398,11 @@ impl SourcefourWindow {
             diff_request: 0,
             diff_cache: std::collections::VecDeque::new(),
             diff_focus: cx.focus_handle(),
-            diff_file_input: Self::plain_input("Switch file…", cx),
+            diff_file_input: Self::input(
+                "Switch file…",
+                crate::text_input::InputRole::DiffSwitcher,
+                cx,
+            ),
             diff_switcher_open: false,
             diff_switcher_selection: 0,
             diff_scroll: UniformListScrollHandle::new(),
@@ -429,10 +434,18 @@ impl SourcefourWindow {
             network_operation: chrome::NetworkOperationState::default(),
             op_status: None,
             branch_dialog: None,
-            branch_input: Self::plain_input("new-branch-name", cx),
+            branch_input: Self::input(
+                "new-branch-name",
+                crate::text_input::InputRole::BranchName,
+                cx,
+            ),
             list_scroll: UniformListScrollHandle::new(),
             focus: cx.focus_handle(),
-            filter_input: Self::plain_input("Filter commits", cx),
+            filter_input: Self::input(
+                "Filter commits",
+                crate::text_input::InputRole::HistoryFilter,
+                cx,
+            ),
         };
         Self::watch_filter(&window.filter_input, cx);
         cx.observe(&window.diff_file_input, |this, _, cx| {
@@ -474,7 +487,7 @@ impl SourcefourWindow {
         cx: &mut gpui::Context<Self>,
     ) {
         cx.observe(filter_input, |this, input, cx| {
-            let text = input.read(cx).content.to_string();
+            let text = input.read(cx).text().to_string();
             if this.history.filter != text {
                 this.history.set_filter(&text);
                 cx.notify();
@@ -847,7 +860,7 @@ impl SourcefourWindow {
         if self.committing {
             return;
         }
-        let summary = self.commit_input.read(cx).content.trim().to_string();
+        let summary = self.commit_input.read(cx).text().trim().to_string();
         if summary.is_empty() {
             return;
         }
@@ -1167,12 +1180,12 @@ impl SourcefourWindow {
         self.details_collapsed = state.details_collapsed;
     }
 
-    /// One themed text input with a placeholder.
-    fn plain_input(
+    fn input(
         placeholder: &'static str,
+        role: crate::text_input::InputRole,
         cx: &mut gpui::Context<Self>,
     ) -> gpui::Entity<crate::text_input::TextInput> {
-        cx.new(|cx| crate::text_input::TextInput::new(placeholder, &Theme::dark(), cx))
+        cx.new(|cx| crate::text_input::TextInput::new(placeholder, &Theme::dark(), cx).role(role))
     }
 
     /// The GitHub section's token field: like every input, but masked.
@@ -1180,10 +1193,9 @@ impl SourcefourWindow {
         cx: &mut gpui::Context<Self>,
     ) -> gpui::Entity<crate::text_input::TextInput> {
         cx.new(|cx| {
-            let mut input =
-                crate::text_input::TextInput::new("ghp_… or github_pat_…", &Theme::dark(), cx);
-            input.masked = true;
-            input
+            crate::text_input::TextInput::new("ghp_… or github_pat_…", &Theme::dark(), cx)
+                .role(crate::text_input::InputRole::GithubToken)
+                .masked()
         })
     }
 
