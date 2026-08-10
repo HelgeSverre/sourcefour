@@ -7,7 +7,9 @@
 use std::{
     collections::BTreeMap,
     fmt,
+    ops::Range,
     path::PathBuf,
+    sync::Arc,
     time::{Duration, Instant, SystemTime},
 };
 
@@ -664,8 +666,92 @@ pub struct FileDiffRequest {
     pub oid: Oid,
     /// Parent-selection policy.
     pub parent: DiffParent,
-    /// Selected path in the commit side of the comparison.
-    pub path: RepoPath,
+    /// Paths on the two sides of the comparison.
+    pub paths: DiffPaths,
+}
+
+/// The repository paths used to read each side of a file comparison.
+///
+/// The fields are private so a request can never omit both sides. Renames and
+/// copies retain both names instead of pretending the new name existed in the
+/// parent tree.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct DiffPaths {
+    old: Option<RepoPath>,
+    new: Option<RepoPath>,
+    display: RepoPath,
+}
+
+impl DiffPaths {
+    /// Builds a comparison whose path is unchanged.
+    #[must_use]
+    pub fn same(path: RepoPath) -> Self {
+        Self {
+            old: Some(path.clone()),
+            new: Some(path.clone()),
+            display: path,
+        }
+    }
+
+    /// Builds an added-file comparison.
+    #[must_use]
+    pub fn added(path: RepoPath) -> Self {
+        Self {
+            old: None,
+            new: Some(path.clone()),
+            display: path,
+        }
+    }
+
+    /// Builds a deleted-file comparison.
+    #[must_use]
+    pub fn deleted(path: RepoPath) -> Self {
+        Self {
+            old: Some(path.clone()),
+            new: None,
+            display: path,
+        }
+    }
+
+    /// Builds a comparison whose path changed between sides.
+    #[must_use]
+    pub fn changed(old_path: RepoPath, new_path: RepoPath) -> Self {
+        Self {
+            old: Some(old_path),
+            new: Some(new_path.clone()),
+            display: new_path,
+        }
+    }
+
+    /// Builds paths from a changed-file summary.
+    #[must_use]
+    pub fn for_file(file: &ChangedFile) -> Option<Self> {
+        match (&file.old_path, &file.new_path) {
+            (Some(old), Some(new)) if old == new => Some(Self::same(old.clone())),
+            (Some(old), Some(new)) => Some(Self::changed(old.clone(), new.clone())),
+            (Some(old), None) => Some(Self::deleted(old.clone())),
+            (None, Some(new)) => Some(Self::added(new.clone())),
+            (None, None) => None,
+        }
+    }
+
+    /// Path used to read the old side.
+    #[must_use]
+    pub fn old_path(&self) -> Option<&RepoPath> {
+        self.old.as_ref()
+    }
+
+    /// Path used to read the new side.
+    #[must_use]
+    pub fn new_path(&self) -> Option<&RepoPath> {
+        self.new.as_ref()
+    }
+
+    /// Best path for titles, language detection, and new-side previews.
+    #[must_use]
+    pub fn display_path(&self) -> &RepoPath {
+        &self.display
+    }
 }
 
 /// Bounded display representation of one file diff.
@@ -680,8 +766,8 @@ pub struct FileDiff {
 /// Safe outcome of formatting a diff.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DiffContent {
-    /// Textual unified diff lines.
-    Text { lines: Vec<DiffLine> },
+    /// Semantic text diff. Layout-specific rows are projected by the reader.
+    Text(Arc<TextDiff>),
     /// The compared path contains binary content.
     Binary { message: String },
     /// The compared path is an image: encoded bytes for each present side.
@@ -723,6 +809,168 @@ pub enum DiffContent {
     Unavailable { message: String },
 }
 
+/// One decoded side of a textual comparison.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TextSide {
+    text: Arc<str>,
+    line_ranges: Arc<[Range<usize>]>,
+    ends_with_newline: bool,
+    decoding: TextDecoding,
+}
+
+impl TextSide {
+    /// Constructs an immutable text side and indexes its display lines.
+    #[must_use]
+    pub fn new(text: String, decoding: TextDecoding) -> Self {
+        let ends_with_newline = text.ends_with('\n');
+        let line_ranges = line_ranges(&text).into();
+        Self {
+            text: text.into(),
+            line_ranges,
+            ends_with_newline,
+            decoding,
+        }
+    }
+
+    /// Entire decoded source text.
+    #[must_use]
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+
+    /// Number of source lines.
+    #[must_use]
+    pub fn line_count(&self) -> usize {
+        self.line_ranges.len()
+    }
+
+    /// One display line without its CR/LF terminator.
+    #[must_use]
+    pub fn line(&self, index: usize) -> Option<&str> {
+        self.line_ranges
+            .get(index)
+            .and_then(|range| self.text.get(range.clone()))
+    }
+
+    /// Whether the source has a final line terminator.
+    #[must_use]
+    pub const fn ends_with_newline(&self) -> bool {
+        self.ends_with_newline
+    }
+
+    /// How the source bytes were decoded.
+    #[must_use]
+    pub const fn decoding(&self) -> TextDecoding {
+        self.decoding
+    }
+}
+
+fn line_ranges(text: &str) -> Vec<Range<usize>> {
+    let mut ranges = Vec::new();
+    let mut start = 0;
+    for line in text.split_inclusive('\n') {
+        let mut end = start + line.len();
+        if line.ends_with('\n') {
+            end -= 1;
+        }
+        if end > start && text.as_bytes()[end - 1] == b'\r' {
+            end -= 1;
+        }
+        ranges.push(start..end);
+        start += line.len();
+    }
+    ranges
+}
+
+/// Whether a textual side was valid UTF-8 or needed replacement characters.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TextDecoding {
+    /// Source bytes were valid UTF-8.
+    Utf8,
+    /// Invalid sequences were replaced with U+FFFD for safe display.
+    LossyUtf8,
+}
+
+/// Semantic changes between two immutable text sides.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TextDiff {
+    /// Old side, absent for an added file.
+    pub old: Option<TextSide>,
+    /// New side, absent for a deleted file.
+    pub new: Option<TextSide>,
+    /// Equal and replacement regions in source order.
+    pub changes: Arc<[TextChange]>,
+}
+
+impl TextDiff {
+    /// Whether the semantic diff contains no changed region.
+    #[must_use]
+    pub fn is_unchanged(&self) -> bool {
+        self.changes
+            .iter()
+            .all(|change| matches!(change, TextChange::Equal { .. }))
+    }
+
+    /// Whether either side required lossy decoding.
+    #[must_use]
+    pub fn is_lossy(&self) -> bool {
+        [&self.old, &self.new]
+            .into_iter()
+            .flatten()
+            .any(|side| matches!(side.decoding(), TextDecoding::LossyUtf8))
+    }
+}
+
+/// One equal or changed region of a textual comparison.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum TextChange {
+    /// Lines shared by both sides.
+    Equal {
+        /// Zero-based old-side range.
+        old_lines: Range<usize>,
+        /// Zero-based new-side range.
+        new_lines: Range<usize>,
+    },
+    /// Lines removed and/or added at the same position.
+    Replace {
+        /// Zero-based old-side range; empty for a pure insertion.
+        old_lines: Range<usize>,
+        /// Zero-based new-side range; empty for a pure deletion.
+        new_lines: Range<usize>,
+        /// Stable split-view alignment for the changed lines.
+        alignment: Arc<[LinePair]>,
+    },
+}
+
+/// One aligned row within a changed region.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LinePair {
+    /// Zero-based old-side line, absent for an insertion row.
+    pub old_line: Option<usize>,
+    /// Zero-based new-side line, absent for a deletion row.
+    pub new_line: Option<usize>,
+}
+
+/// A stable source position independent of rendered layout.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct DiffCoordinate {
+    /// Source side.
+    pub side: DiffSide,
+    /// Zero-based source line.
+    pub line: usize,
+    /// Optional UTF-8 byte offset within that line.
+    pub byte_offset: Option<usize>,
+}
+
+/// Side of a textual comparison.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum DiffSide {
+    /// Parent/index side.
+    Old,
+    /// Commit/worktree side.
+    New,
+}
+
 /// What one side of a video comparison reports about itself.
 ///
 /// Everything but the byte count is optional: whether a probe ran at all
@@ -742,36 +990,6 @@ pub struct VideoInfo {
     /// unreadable container or an exotic codec is nothing they can act on,
     /// and a decoder they have not installed is.
     pub tools_missing: bool,
-}
-
-/// Classified display line in a unified diff.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct DiffLine {
-    /// Semantic line class.
-    pub kind: DiffLineKind,
-    /// Text excluding the line ending.
-    pub text: String,
-    /// Old-side line number where applicable.
-    pub old_line: Option<u32>,
-    /// New-side line number where applicable.
-    pub new_line: Option<u32>,
-}
-
-/// Unified-diff line class.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum DiffLineKind {
-    /// File header or metadata.
-    Meta,
-    /// Hunk boundary.
-    Hunk,
-    /// Context line.
-    Context,
-    /// Added line.
-    Addition,
-    /// Removed line.
-    Deletion,
-    /// Marker such as no-newline-at-end-of-file.
-    Marker,
 }
 
 /// Explicit Git operation supported by the v1 command boundary.
@@ -1136,6 +1354,24 @@ pub struct WorkflowStep {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn diff_paths_keep_rename_sides_distinct() {
+        let paths = DiffPaths::changed(RepoPath(b"old.rs".to_vec()), RepoPath(b"new.rs".to_vec()));
+        assert_eq!(paths.old_path(), Some(&RepoPath(b"old.rs".to_vec())));
+        assert_eq!(paths.new_path(), Some(&RepoPath(b"new.rs".to_vec())));
+        assert_eq!(paths.display_path(), &RepoPath(b"new.rs".to_vec()));
+    }
+
+    #[test]
+    fn text_side_indexes_lf_crlf_and_missing_final_newline() {
+        let side = TextSide::new("one\r\ntwo\nthree".into(), TextDecoding::Utf8);
+        assert_eq!(side.line_count(), 3);
+        assert_eq!(side.line(0), Some("one"));
+        assert_eq!(side.line(1), Some("two"));
+        assert_eq!(side.line(2), Some("three"));
+        assert!(!side.ends_with_newline());
+    }
 
     #[test]
     fn oid_round_trips_sha1_and_sha256() -> Result<(), OidParseError> {

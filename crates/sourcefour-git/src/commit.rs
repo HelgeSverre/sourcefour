@@ -1,6 +1,6 @@
 //! The commit operation, run through the user's own Git.
 //!
-//! `git commit -m <summary>` through the §10 runner: hooks run and may be
+//! `git commit -m <message>` through the §10 runner: hooks run and may be
 //! slow, `commit.gpgsign` and identity configuration apply, and a failing
 //! hook's own words surface verbatim.
 
@@ -14,11 +14,11 @@ use crate::{
 };
 
 /// The exact commit argv: the summary rides as one argument, never a shell.
-fn commit_argv(summary: &str) -> Vec<String> {
+fn commit_argv(message: &str) -> Vec<String> {
     vec![
         String::from("commit"),
         String::from("-m"),
-        summary.to_owned(),
+        message.to_owned(),
     ]
 }
 
@@ -30,7 +30,7 @@ fn summarize(stdout: &str) -> String {
         .map_or_else(|| String::from("Committed"), |line| line.trim().to_owned())
 }
 
-/// Runs `git commit -m <summary>`, honoring cancellation.
+/// Runs `git commit -m <message>`, honoring cancellation.
 ///
 /// # Errors
 ///
@@ -39,14 +39,14 @@ fn summarize(stdout: &str) -> String {
 /// [`OperationOutcome::Failed`], preserving the browsing session.
 pub fn commit(
     location: &RepoLocation,
-    summary: &str,
+    message: &str,
     sink: &dyn OperationSink,
     cancelled: &AtomicBool,
 ) -> Result<OperationOutcome, RepoFailure> {
     run(
         &GitOperation {
             kind: OperationKind::Commit,
-            argv: commit_argv(summary),
+            argv: commit_argv(message),
             summarize: &summarize,
             classify: &classify_stderr,
             failed_title: "Commit failed",
@@ -83,6 +83,14 @@ mod tests {
         assert_eq!(
             commit_argv("fix: spaces & symbols; no shell"),
             ["commit", "-m", "fix: spaces & symbols; no shell"]
+        );
+    }
+
+    #[test]
+    fn a_multiline_message_rides_as_one_argument() {
+        assert_eq!(
+            commit_argv("subject\n\nbody"),
+            ["commit", "-m", "subject\n\nbody"]
         );
     }
 

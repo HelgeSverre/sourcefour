@@ -1,0 +1,24 @@
+Sourcefour diff render profiling, 2026-08-10
+Revision: working tree after 13306ba
+Machine: MacBook Pro (Mac14,6), Apple M2 Max, 32 GB, macOS
+Profile: release, interactive warm-cache runs
+
+Exact command shape:
+SOURCEFOUR_DIFF_STRESS=N SOURCEFOUR_STARTUP_LOG=1 SOURCEFOUR_FRAME_LOG=1 \
+  ./target/release/sourcefour --demo --scene diff --width 1280 --height 800
+
+Baseline element-construction samples (three runs per stress level):
+N=1   rows=38   hunks=3   diff-build-ms=0.014,0.003,0.004
+N=50  rows=1851 hunks=101 diff-build-ms=0.014,0.042,0.014
+N=200 rows=7401 hunks=401 diff-build-ms=0.065,0.078,0.047
+
+Projection samples after adding the projection probe (one run per level):
+N=1   unified_rows=38   split_rows=35   diff-project-ms=0.028 diff-build-ms=0.014
+N=50  unified_rows=1851 split_rows=1701 diff-project-ms=0.037 diff-build-ms=0.015
+N=200 unified_rows=7401 split_rows=6801 diff-project-ms=0.138 diff-build-ms=0.048
+
+Finding:
+Both synchronous row projection and repeated element construction remain well
+below 1 ms at 7,401 rendered rows. Caching hunk and widest-row scans would add
+invalidation state without a measurable user-facing benefit, so it was not
+implemented. The virtualized list remains the correct performance boundary.

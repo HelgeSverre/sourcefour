@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sourcefour — four marks, seven treatments</title>
+<!-- Tokens come from the site, which lifts them from theme.rs. -->
+<link rel="stylesheet" href="../website/brand.css">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--page);
+    color: var(--ink-2);
+    font-family: var(--font-ui);
+    font-size: var(--text-base);
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap { max-width: 1340px; margin: 0 auto; padding: 0 24px; }
+  code { font-family: var(--font-mono); font-size: 0.9em; color: var(--ink); }
+  em { font-style: italic; }
+
+  header.top { padding: 64px 0 36px; border-bottom: 1px solid var(--border); }
+  header.top h1 {
+    color: var(--ink); font-size: var(--text-2xl); font-weight: 600;
+    letter-spacing: -0.02em; margin-bottom: 12px;
+  }
+  header.top p { max-width: 68ch; }
+  header.top p + p { margin-top: 12px; }
+
+  section.mark { padding: 44px 0; border-bottom: 1px solid var(--border); }
+
+  .mark-head { display: flex; align-items: baseline; gap: 14px; margin-bottom: 22px; }
+  .mark-head h2 {
+    color: var(--ink); font-size: var(--text-lg); font-weight: 600;
+    letter-spacing: -0.02em;
+  }
+  .mark-head .note { color: var(--ink-3); font-size: var(--text-sm);
+                     margin-left: auto; max-width: 52ch; text-align: right; }
+
+  .strip {
+    display: grid; gap: 14px;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  }
+
+  .card {
+    --tile: #12151b;
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: var(--r-lg); padding: 14px;
+    display: flex; flex-direction: column; align-items: center; gap: 11px;
+  }
+
+  /* The macOS grid: the mark filling a squircle tile. */
+  .tile {
+    width: 104px; height: 104px;
+    border-radius: 23%;
+    background: var(--tile);
+    display: grid; place-items: center;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.45), inset 0 0 0 1px rgba(255,255,255,0.05);
+  }
+
+  /* The sizes that decide it: favicon, nav, menu bar. */
+  .sizes { display: flex; align-items: center; gap: 9px; }
+  .chip {
+    background: var(--tile); border-radius: var(--r-sm);
+    padding: 4px; display: grid; place-items: center;
+  }
+  .chip.white { background: #f4f5f7; }
+
+  .name {
+    font-family: var(--font-mono); font-size: 10px; color: var(--ink-3);
+    text-transform: uppercase; letter-spacing: 0.09em; text-align: center;
+  }
+
+  .s66 { width: 66px; height: 66px; }
+  .s32 { width: 32px; height: 32px; }
+  .s24 { width: 24px; height: 24px; }
+  .s16 { width: 16px; height: 16px; }
+  .s22 { width: 22px; height: 22px; }
+
+  /* The nav lockup, matching website/style.css .brand */
+  .lockups { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 18px; }
+  .lockup {
+    --tile: var(--chrome);
+    display: flex; align-items: center; gap: 9px;
+    background: var(--chrome); border: 1px solid var(--border);
+    border-radius: var(--r-md); padding: 9px 14px;
+    color: var(--ink); font-weight: 600; letter-spacing: -0.01em;
+  }
+  .lockup em { font-style: normal; color: var(--ink-3); }
+
+  footer { padding: 36px 0 96px; }
+  footer p { max-width: 68ch; font-size: var(--text-sm); }
+
+  /* ---- Geometry is drawn once; every treatment is CSS ------------------ *
+   * --sw stroke weight, --nr node radius, --cr the knocked-out node core,
+   * --c1/--c2 the two lanes, --tile whatever sits behind the mark. */
+
+  .ln { fill: none; stroke-linecap: round; stroke-linejoin: round;
+        stroke-width: var(--sw, 2.5); }
+  .ln1 { stroke: var(--c1); }
+  .ln2 { stroke: var(--c2); }
+  .n1  { fill: var(--c1); r: var(--nr, 3px); }
+  .n2  { fill: var(--c2); r: var(--nr, 3px); }
+  .core { fill: var(--tile); r: var(--cr, 0px); }
+
+  /* Per-mark palette: the two lanes, plus the hue it knocks out of. */
+  .m-play  { --c1: var(--accent); --c2: var(--green);  --knock: var(--green); }
+  .m-route { --c1: var(--green);  --c2: var(--orange); --knock: var(--green); }
+  .m-fork  { --c1: var(--green);  --c2: var(--orange); --knock: var(--orange); }
+  .m-four  { --c1: var(--accent); --c2: var(--green);  --knock: var(--accent); }
+
+  .t-line  { --sw: 2.5; --nr: 3px; }                      /* the site's today */
+  .t-bold  { --sw: 3.8; --nr: 3.6px; }
+  .t-node  { --sw: 3.4; --nr: 5px; }                      /* dots dominant */
+  .t-heavy { --sw: 5.4; --nr: 3.8px; }                    /* nodes near-fused */
+  .t-ring  { --sw: 5.4; --nr: 5.4px; --cr: 2.3px; }       /* nodes as rings */
+  .t-mono  { --sw: 5.4; --nr: 3.8px; --c2: var(--c1); }   /* one hue only */
+  .t-knock { --sw: 5.4; --nr: 3.8px;
+             --c1: #12151b; --c2: #12151b; --tile: var(--knock); }
+  .t-ink   { --sw: 5.4; --nr: 3.8px; --c1: var(--ink); --c2: var(--ink); }
+
+  /* ---- The other species ---------------------------------------------- *
+   * These are not lane glyphs with a weight dial, so they carry their own
+   * colours rather than --c1/--c2. */
+  .mono { font-family: var(--font-mono); }
+  .fg-green  { fill: var(--green); }
+  .fg-blue   { fill: var(--accent); }
+  .fg-orange { fill: var(--orange); }
+  .fg-red    { fill: var(--red); }
+  .fg-ink    { fill: var(--ink); }
+  .fg-ink3   { fill: var(--ink-3); }
+  .fg-tile   { fill: var(--tile); }
+
+  section.fresh { padding: 44px 0 0; }
+  section.fresh > h2 {
+    color: var(--ink); font-size: var(--text-lg); font-weight: 600;
+    letter-spacing: -0.02em;
+  }
+  section.fresh > p.intro {
+    max-width: 68ch; margin: 10px 0 24px; font-size: var(--text-sm);
+  }
+  .card .why {
+    color: var(--ink-3); font-size: var(--text-xs); line-height: 1.5;
+    text-align: center; margin-top: -2px;
+  }
+  .fresh .strip { grid-template-columns: repeat(auto-fit, minmax(196px, 1fr)); }
+</style>
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <!-- Redrawn to fill the 24-grid rather than float in the middle of it: at a
+         5-unit stroke the old geometry closed its own counters and went to mush.
+         Node centres stay inside 4–20, so the heaviest treatment still clears
+         the edge. -->
+
+    <!-- Play — a graph shaped like run this. -->
+    <symbol id="play" viewBox="0 0 24 24">
+      <path class="ln ln1" d="M7 4.5v15"/>
+      <path class="ln ln2" d="M7 4.5L19 12 7 19.5"/>
+      <circle class="n1" cx="7" cy="4.5"/><circle class="core" cx="7" cy="4.5"/>
+      <circle class="n1" cx="7" cy="19.5"/><circle class="core" cx="7" cy="19.5"/>
+      <circle class="n2" cx="19" cy="12"/><circle class="core" cx="19" cy="12"/>
+    </symbol>
+
+    <!-- Route — an S built from the graph's own elbowed lane routing. -->
+    <symbol id="route" viewBox="0 0 24 24">
+      <path class="ln ln1" d="M19 4.5H10a5 5 0 0 0 0 7.5h4a5 5 0 0 1 0 7.5H5"/>
+      <circle class="n1" cx="19" cy="4.5"/><circle class="core" cx="19" cy="4.5"/>
+      <circle class="n2" cx="12" cy="12"/><circle class="core" cx="12" cy="12"/>
+      <circle class="n1" cx="5" cy="19.5"/><circle class="core" cx="5" cy="19.5"/>
+    </symbol>
+
+    <!-- Fork — a lane and the branch that leaves it. -->
+    <symbol id="fork" viewBox="0 0 24 24">
+      <path class="ln ln1" d="M7 4v16"/>
+      <path class="ln ln2" d="M7 10.5c0 4.5 3.5 5.5 11 5.5"/>
+      <circle class="n1" cx="7" cy="4"/><circle class="core" cx="7" cy="4"/>
+      <circle class="n1" cx="7" cy="20"/><circle class="core" cx="7" cy="20"/>
+      <circle class="n2" cx="18" cy="16"/><circle class="core" cx="18" cy="16"/>
+    </symbol>
+
+    <!-- Four — the numeral drawn as a lane with a branch off it. -->
+    <symbol id="four" viewBox="0 0 24 24">
+      <path class="ln ln2" d="M16 4.5L4 15h17"/>
+      <path class="ln ln1" d="M16 4.5V20"/>
+      <circle class="n1" cx="16" cy="4.5"/><circle class="core" cx="16" cy="4.5"/>
+      <circle class="n1" cx="16" cy="20"/><circle class="core" cx="16" cy="20"/>
+      <circle class="n2" cx="4" cy="15"/><circle class="core" cx="4" cy="15"/>
+    </symbol>
+
+    <!-- ===================== A DIFFERENT SPECIES ====================== -->
+
+    <!-- Pixel — the graph as a bitmap. Drawn on a 16-unit grid with square
+         ends, so at 16px every block lands on a whole device pixel instead of
+         being resampled into grey. The one construction here that gets
+         sharper as it gets smaller. -->
+    <symbol id="px" viewBox="0 0 16 16" shape-rendering="crispEdges">
+      <rect class="fg-blue" x="4" y="3" width="2" height="10"/>
+      <rect class="fg-blue" x="3" y="1" width="4" height="4"/>
+      <rect class="fg-blue" x="3" y="11" width="4" height="4"/>
+      <rect class="fg-green" x="6" y="7" width="4" height="2"/>
+      <rect class="fg-green" x="9" y="6" width="4" height="4"/>
+    </symbol>
+
+    <!-- Hunk — not the graph at all: the diff. Gutter marks and the lines
+         they change, which is the half of the window you actually read. -->
+    <symbol id="hunk" viewBox="0 0 24 24">
+      <!-- Two rows, not three: at three the gutter marks shrink until the whole
+           thing reads as a bulleted list rather than a diff. -->
+      <rect class="fg-green" x="3" y="6.8" width="6" height="2.4" rx="1.2"/>
+      <rect class="fg-green" x="4.8" y="5" width="2.4" height="6" rx="1.2"/>
+      <rect class="fg-ink3" x="11" y="6.8" width="10" height="2.4" rx="1.2"/>
+      <rect class="fg-red" x="3" y="14.8" width="6" height="2.4" rx="1.2"/>
+      <rect class="fg-ink3" x="11" y="14.8" width="7.5" height="2.4" rx="1.2"/>
+    </symbol>
+
+    <!-- Ascii — the mark is a fragment of `git log --graph` output, set in the
+         platform's mono face. Nothing is illustrated; the logo is the thing
+         the terminal already prints. -->
+    <symbol id="ascii" viewBox="0 0 24 24">
+      <!-- Every character is placed on its own column centre rather than left
+           to flow, so row two lands under row one whatever the platform's mono
+           face measures. The characters are the ones git itself prints. -->
+      <g class="mono" font-size="10" font-weight="700" text-anchor="middle">
+        <text class="fg-green"  x="6"  y="10.5">*</text>
+        <text class="fg-ink3"   x="12" y="10.5">-</text>
+        <text class="fg-orange" x="18" y="10.5">\</text>
+        <text class="fg-green"  x="6"  y="20.5">|</text>
+        <text class="fg-orange" x="18" y="20.5">*</text>
+      </g>
+    </symbol>
+
+    <!-- Prompt — the product is a command. A sigil and a block cursor say the
+         one thing the graph glyphs never manage to: you type this. -->
+    <symbol id="prompt" viewBox="0 0 24 24">
+      <text class="mono fg-green" x="2" y="18.5" font-size="18"
+            font-weight="700">$</text>
+      <rect class="fg-blue" x="13.5" y="6.5" width="7.5" height="12" rx="1.5"/>
+    </symbol>
+
+    <!-- Monogram — no picture at all: the command you type, abbreviated, with
+         the four carrying the colour. Type is the only thing here guaranteed
+         to be legible at every size, because that is what type is for. -->
+    <symbol id="mono4" viewBox="0 0 24 24">
+      <text class="mono" x="12" y="18.5" font-size="17" font-weight="700"
+            text-anchor="middle" letter-spacing="-1"><tspan
+            class="fg-ink">s</tspan><tspan class="fg-blue">4</tspan></text>
+    </symbol>
+  </defs>
+</svg>
+
+<header class="top">
+  <div class="wrap">
+    <h1>Four marks, seven treatments</h1>
+    <p>
+      Play, Route, Fork and Four. Each shape is drawn once and every column is
+      only a change of stroke weight, node size and hue, so nothing drifts
+      between treatments — pick a cell and it is one SVG, not a redraw.
+    </p>
+    <p>
+      All four were redrawn to fill the icon grid instead of floating inside it;
+      at a heavy stroke the old geometry closed its own counters. Column one is
+      the weight the site ships today, kept only as the thing to beat. Judge on
+      the 16 and 24 pixel row, not the tile.
+    </p>
+  </div>
+</header>
+
+<main class="wrap">
+  <div id="sheet"></div>
+  <section class="fresh" id="fresh"></section>
+</main>
+
+<footer class="wrap">
+  <p>
+    Name a mark and a treatment — <em>play heavy</em>, <em>four knockout</em> —
+    and it becomes <code>website/logo.svg</code> plus the glyph in
+    <code>scripts/make-icon.py</code>, which regenerates the <code>.icns</code>,
+    <code>.ico</code> and <code>.png</code>.
+  </p>
+</footer>
+
+<script>
+  // The sheet is one row of markup repeated 28 times; templating it keeps the
+  // treatments editable in one place instead of 28.
+  const MARKS = [
+    ['play', 'Play',
+     'Reads as <em>run this</em> before it reads as a graph — which is how the app is used. The only mark with a closed counter, so it gains the most from being redrawn wider.'],
+    ['route', 'Route',
+     'An S made of elbowed lanes: a monogram that is also a diagram. The bends are the thing to watch — they are the first detail any weight increase eats.'],
+    ['fork', 'Fork',
+     "The site's mark today. Weight is precisely what it was missing: thin, it is three dots and a hair; heavy, it is a lane with somewhere to go."],
+    ['four', 'Four',
+     'The only one that says the name out loud. Past a certain weight it stops being a diagram of a 4 and simply becomes one.'],
+  ];
+
+  const TREATMENTS = [
+    ['t-line',  'line · today'],
+    ['t-bold',  'bold'],
+    ['t-node',  'node'],
+    ['t-heavy', 'heavy'],
+    ['t-ring',  'ringed'],
+    ['t-mono',  'mono'],
+    ['t-knock', 'knockout'],
+  ];
+
+  // Knockout paints the tile in the accent, so its light chip would be a dark
+  // mark on white — meaningless. It gets a fourth tile chip instead.
+  const use = (id, size) => `<svg class="s${size}"><use href="#${id}"/></svg>`;
+
+  document.getElementById('sheet').innerHTML = MARKS.map(([id, title, note]) => `
+    <section class="mark m-${id}">
+      <div class="mark-head">
+        <h2>${title}</h2>
+        <p class="note">${note}</p>
+      </div>
+      <div class="strip">
+        ${TREATMENTS.map(([cls, label]) => `
+          <div class="card ${cls}">
+            <div class="tile">${use(id, 66)}</div>
+            <div class="sizes">
+              <span class="chip">${use(id, 16)}</span>
+              <span class="chip">${use(id, 24)}</span>
+              <span class="chip">${use(id, 32)}</span>
+              <span class="chip ${cls === 't-knock' ? '' : 'white'}">${use(id, 16)}</span>
+            </div>
+            <span class="name">${label}</span>
+          </div>`).join('')}
+      </div>
+      <div class="lockups">
+        ${['t-bold', 't-node', 't-heavy', 't-ring', 't-mono', 't-ink'].map(cls =>
+          `<span class="lockup ${cls}">${use(id, 22)}Source<em>four</em></span>`).join('')}
+      </div>
+    </section>`).join('');
+
+  // A different species: not lane glyphs at all, so they get one card each
+  // rather than a weight ladder.
+  const OTHER = [
+    ['px', 'Pixel',
+     'A bitmap on a 16-unit grid. Every block lands on a whole pixel, so unlike everything above it sharpens as it shrinks.'],
+    ['hunk', 'Hunk',
+     'Drops the graph entirely and draws the diff — the half of the window you actually read. Says what the app is for, not what it looks like.'],
+    ['ascii', 'Ascii',
+     'A fragment of <code>git log --graph</code> in the platform mono face. Illustrates nothing; the logo is what the terminal already prints.'],
+    ['prompt', 'Prompt',
+     'Sigil and block cursor. Says the one thing no graph glyph manages — you type this — at the cost of looking like every terminal app.'],
+    ['mono4', 'Monogram',
+     'No picture at all. Type is the only thing here guaranteed to survive every size, because surviving every size is what type is for.'],
+  ];
+
+  document.getElementById('fresh').innerHTML = `
+    <h2>A different species</h2>
+    <p class="intro">
+      Everything above is one idea — a rounded lane glyph on a dark tile — argued
+      at seven weights. These five are not that. Each drops a different
+      assumption: that the mark must be drawn with strokes, that it must depict
+      the graph, that it must be a picture at all.
+    </p>
+    <div class="strip">
+      ${OTHER.map(([id, title, why]) => `
+        <div class="card">
+          <div class="tile">${use(id, 66)}</div>
+          <div class="sizes">
+            <span class="chip">${use(id, 16)}</span>
+            <span class="chip">${use(id, 24)}</span>
+            <span class="chip">${use(id, 32)}</span>
+            <span class="chip white">${use(id, 16)}</span>
+          </div>
+          <span class="name">${title}</span>
+          <p class="why">${why}</p>
+        </div>`).join('')}
+    </div>
+    <div class="lockups">
+      ${OTHER.map(([id]) =>
+        `<span class="lockup">${use(id, 22)}Source<em>four</em></span>`).join('')}
+    </div>`;
+</script>
+
+</body>
+</html>

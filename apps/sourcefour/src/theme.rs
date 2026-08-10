@@ -144,6 +144,11 @@ impl Theme {
         self.border_strong
     }
 
+    /// Persistent outline for the hunk selected by diff navigation.
+    pub(crate) fn active_hunk_border(&self) -> Hsla {
+        self.accent.opacity(0.4)
+    }
+
     /// The wash behind an added diff line. A tint over `bg_list`, never a
     /// surface of its own.
     pub(crate) fn tint_added(&self) -> Hsla {

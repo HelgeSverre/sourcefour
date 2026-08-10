@@ -135,11 +135,21 @@ pub(crate) enum Density {
 #[serde(default)]
 pub(crate) struct DiffSettings {
     pub(crate) line_height: f32,
+    pub(crate) wrap: bool,
+    pub(crate) syntax_highlighting: bool,
+    pub(crate) show_whitespace: bool,
+    pub(crate) tab_width: u8,
 }
 
 impl Default for DiffSettings {
     fn default() -> Self {
-        Self { line_height: 1.55 }
+        Self {
+            line_height: 1.55,
+            wrap: false,
+            syntax_highlighting: true,
+            show_whitespace: false,
+            tab_width: 4,
+        }
     }
 }
 
@@ -294,7 +304,14 @@ mod tests {
 
         let loaded = AppSettings::load_from(&path);
 
-        assert_eq!(loaded.diff, DiffSettings { line_height: 1.7 });
+        assert_eq!(
+            loaded.diff,
+            DiffSettings {
+                line_height: 1.7,
+                wrap: true,
+                ..DiffSettings::default()
+            }
+        );
         Ok(())
     }
 
@@ -306,7 +323,13 @@ mod tests {
 
         let loaded = AppSettings::load_from(&path);
 
-        assert_eq!(loaded.diff, DiffSettings { line_height: 1.8 });
+        assert_eq!(
+            loaded.diff,
+            DiffSettings {
+                line_height: 1.8,
+                ..DiffSettings::default()
+            }
+        );
         Ok(())
     }
 
@@ -526,7 +549,21 @@ mod tests {
         reason = "row_height is computed from the exact constants this test compares against"
     )]
     fn row_height_clamps_to_a_sane_range() {
-        assert_eq!(DiffSettings { line_height: 0.5 }.row_height(), 11.0);
-        assert_eq!(DiffSettings { line_height: 99.0 }.row_height(), 33.0);
+        assert_eq!(
+            DiffSettings {
+                line_height: 0.5,
+                ..DiffSettings::default()
+            }
+            .row_height(),
+            11.0
+        );
+        assert_eq!(
+            DiffSettings {
+                line_height: 99.0,
+                ..DiffSettings::default()
+            }
+            .row_height(),
+            33.0
+        );
     }
 }

@@ -6,15 +6,15 @@
 //! chips along the bottom, and the card that stands in when no frame was
 //! decoded, know a video from an image.
 
-use std::sync::Arc;
+use std::{ops::Range, sync::Arc};
 
 use gpui::{
-    Div, FontWeight, IntoElement, StatefulInteractiveElement, UniformListScrollHandle, Window, div,
-    prelude::*, px, uniform_list,
+    Div, FontWeight, IntoElement, ListHorizontalSizingBehavior, StatefulInteractiveElement,
+    UniformListScrollHandle, Window, div, prelude::*, px, svg, uniform_list,
 };
 use sourcefour_model::{
-    ChangeKind, ChangedFile, DiffContent, DiffLine, DiffLineKind, FileDiffRequest, RepoPath,
-    VideoInfo,
+    ChangeKind, ChangedFile, DiffContent, DiffCoordinate, DiffPaths, DiffSide, FileDiffRequest,
+    RepoPath, TextDiff, VideoInfo,
 };
 
 use super::{
@@ -54,8 +54,8 @@ pub(super) enum DiffOrigin {
     Commit(FileDiffRequest),
     /// One working-tree file, on whichever side of the index was clicked.
     WorkingTree {
-        /// The file's repository-relative path.
-        path: RepoPath,
+        /// Paths on the index/tree and commit/worktree sides.
+        paths: DiffPaths,
         /// Whether the staged side is being shown.
         staged: bool,
     },
@@ -65,8 +65,8 @@ impl DiffOrigin {
     /// The path the diff is showing, as the repository names it.
     pub(super) fn path(&self) -> &RepoPath {
         match self {
-            Self::Commit(request) => &request.path,
-            Self::WorkingTree { path, .. } => path,
+            Self::Commit(request) => request.paths.display_path(),
+            Self::WorkingTree { paths, .. } => paths.display_path(),
         }
     }
 }
@@ -75,6 +75,11 @@ impl DiffOrigin {
 pub(super) struct DiffView {
     pub(super) title: String,
     pub(super) status: ChangeKind,
+    pub(super) files: Arc<[ChangedFile]>,
+    pub(super) file_index: usize,
+    pub(super) current_hunk: usize,
+    pub(super) selection: Option<DiffSelection>,
+    pub(super) full_context: bool,
     /// Where the file came from, for the preview's own read.
     pub(super) origin: DiffOrigin,
     /// `None` while the read is in flight.
@@ -85,8 +90,13 @@ pub(super) struct DiffView {
     pub(super) show_preview: bool,
     /// The parsed document with its images, `None` until the load lands.
     pub(super) preview: Option<PreviewState>,
-    /// Side-by-side rows, computed once per content when split is shown.
-    pub(super) split: Option<Vec<crate::diff_split::SplitRow>>,
+    /// Optional syntax and intraline layers, computed after plain rows land.
+    pub(super) highlight: Option<Arc<crate::diff_highlight::DiffHighlight>>,
+    pub(super) highlight_message: Option<&'static str>,
+    /// Layout projections, computed once per loaded semantic diff.
+    pub(super) unified: Option<Vec<crate::diff_split::DiffRow>>,
+    pub(super) split: Option<Vec<crate::diff_split::DiffRow>>,
+    pub(super) wrap_list: Option<gpui::ListState>,
     /// Renderable old-side image, wrapped once per content.
     pub(super) before_image: Option<Arc<gpui::Image>>,
     /// Renderable new-side image, wrapped once per content.
@@ -95,15 +105,230 @@ pub(super) struct DiffView {
     pub(super) slider: f32,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct HunkEdges {
+    active: bool,
+    top: bool,
+    bottom: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct DiffSelection {
+    anchor: DiffCoordinate,
+    head: DiffCoordinate,
+}
+
+impl DiffSelection {
+    fn contains(self, cell: &crate::diff_split::DiffCell) -> bool {
+        if self.anchor.side != cell.side || self.head.side != cell.side {
+            return false;
+        }
+        let start = self.anchor.line.min(self.head.line);
+        let end = self.anchor.line.max(self.head.line);
+        (start..=end).contains(&cell.line)
+    }
+}
+
 impl DiffView {
-    /// Builds the split pairing when it is needed and not yet cached.
-    pub(super) fn ensure_split(&mut self) {
-        if self.split.is_some() || self.mode != DiffMode::Split {
+    fn new(
+        status: ChangeKind,
+        files: Arc<[ChangedFile]>,
+        file_index: usize,
+        origin: DiffOrigin,
+        mode: DiffMode,
+    ) -> Self {
+        Self {
+            title: origin.path().display_lossy(),
+            status,
+            files,
+            file_index,
+            current_hunk: 0,
+            selection: None,
+            full_context: false,
+            origin,
+            content: None,
+            mode,
+            show_preview: false,
+            preview: None,
+            highlight: None,
+            highlight_message: None,
+            unified: None,
+            split: None,
+            wrap_list: None,
+            before_image: None,
+            after_image: None,
+            slider: 0.5,
+        }
+    }
+
+    pub(super) fn for_commit(
+        request: FileDiffRequest,
+        status: ChangeKind,
+        files: Arc<[ChangedFile]>,
+        file_index: usize,
+        mode: DiffMode,
+    ) -> Self {
+        Self::new(status, files, file_index, DiffOrigin::Commit(request), mode)
+    }
+
+    pub(super) fn for_working_tree(
+        paths: DiffPaths,
+        staged: bool,
+        status: ChangeKind,
+        files: Arc<[ChangedFile]>,
+        file_index: usize,
+        mode: DiffMode,
+    ) -> Self {
+        Self::new(
+            status,
+            files,
+            file_index,
+            DiffOrigin::WorkingTree { paths, staged },
+            mode,
+        )
+    }
+
+    pub(super) fn replace_content(&mut self, content: DiffContent) {
+        let started = std::time::Instant::now();
+        self.content = Some(content);
+        self.current_hunk = 0;
+        self.selection = None;
+        self.highlight = None;
+        self.highlight_message = None;
+        self.unified = None;
+        self.split = None;
+        self.wrap_list = None;
+        self.before_image = None;
+        self.after_image = None;
+        self.ensure_rows();
+        self.ensure_images();
+        if std::env::var_os("SOURCEFOUR_FRAME_LOG").is_some() {
+            eprintln!(
+                "diff-project-ms {:.3} unified_rows={} split_rows={}",
+                started.elapsed().as_secs_f64() * 1000.0,
+                self.unified.as_ref().map_or(0, Vec::len),
+                self.split.as_ref().map_or(0, Vec::len),
+            );
+        }
+    }
+
+    fn set_mode(&mut self, mode: DiffMode) {
+        self.mode = mode;
+        self.ensure_rows();
+        self.current_hunk = self
+            .current_hunk
+            .min(self.hunk_rows().len().saturating_sub(1));
+        self.selection = None;
+        self.wrap_list = None;
+    }
+
+    fn toggle_full_context(&mut self) {
+        self.full_context = !self.full_context;
+        self.current_hunk = 0;
+        self.selection = None;
+        self.unified = None;
+        self.split = None;
+        self.wrap_list = None;
+        self.ensure_rows();
+    }
+
+    /// Builds lightweight layout projections when text content lands.
+    pub(super) fn ensure_rows(&mut self) {
+        if self.unified.is_some() && self.split.is_some() {
             return;
         }
-        if let Some(DiffContent::Text { lines }) = &self.content {
-            self.split = Some(crate::diff_split::split_rows(lines));
+        if let Some(DiffContent::Text(diff)) = &self.content {
+            self.unified = Some(crate::diff_split::unified_rows_with_context(
+                diff,
+                self.full_context,
+            ));
+            self.split = Some(crate::diff_split::split_rows_with_context(
+                diff,
+                self.full_context,
+            ));
         }
+    }
+
+    fn text_diff(&self) -> Option<&TextDiff> {
+        match &self.content {
+            Some(DiffContent::Text(diff)) => Some(diff),
+            _ => None,
+        }
+    }
+
+    fn rows(&self) -> &[crate::diff_split::DiffRow] {
+        match self.mode {
+            DiffMode::Unified => self.unified.as_deref().unwrap_or_default(),
+            DiffMode::Split => self.split.as_deref().unwrap_or_default(),
+        }
+    }
+
+    fn hunk_rows(&self) -> Vec<usize> {
+        self.rows()
+            .iter()
+            .enumerate()
+            .filter_map(|(index, row)| {
+                matches!(row, crate::diff_split::DiffRow::Hunk { .. }).then_some(index)
+            })
+            .collect()
+    }
+
+    fn active_hunk_edges(&self, row_index: usize) -> HunkEdges {
+        let rows = self.rows();
+        let Some(start) = rows
+            .iter()
+            .enumerate()
+            .filter_map(|(index, row)| {
+                matches!(row, crate::diff_split::DiffRow::Hunk { .. }).then_some(index)
+            })
+            .nth(self.current_hunk)
+        else {
+            return HunkEdges::default();
+        };
+        let end = rows
+            .iter()
+            .enumerate()
+            .skip(start + 1)
+            .find_map(|(index, row)| {
+                matches!(
+                    row,
+                    crate::diff_split::DiffRow::Hunk { .. }
+                        | crate::diff_split::DiffRow::Gap { .. }
+                )
+                .then_some(index)
+            })
+            .unwrap_or(rows.len());
+        let active = (start..end).contains(&row_index);
+        HunkEdges {
+            active,
+            top: active && row_index == start,
+            bottom: active && row_index + 1 == end,
+        }
+    }
+
+    fn widest_row(&self) -> Option<usize> {
+        let diff = self.text_diff()?;
+        self.rows()
+            .iter()
+            .enumerate()
+            .max_by_key(|(_, row)| match row {
+                crate::diff_split::DiffRow::Line { left, right } => [left, right]
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|cell| {
+                        let side = match cell.side {
+                            DiffSide::Old => diff.old.as_ref(),
+                            DiffSide::New => diff.new.as_ref(),
+                        }?;
+                        side.line(cell.line).map(str::len)
+                    })
+                    .max()
+                    .unwrap_or_default(),
+                crate::diff_split::DiffRow::Hunk { .. }
+                | crate::diff_split::DiffRow::Gap { .. }
+                | crate::diff_split::DiffRow::Marker { .. } => 0,
+            })
+            .map(|(index, _)| index)
     }
 
     /// Wraps image bytes for gpui once per loaded content; wrapping per frame
@@ -309,9 +534,177 @@ impl SourcefourWindow {
     /// Closes the diff overlay, returning focus to the history.
     pub(crate) fn close_diff(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) {
         self.diff_view = None;
+        self.diff_switcher_open = false;
         self.clear_preview_selection();
         self.focus.focus(window);
         cx.notify();
+    }
+
+    pub(super) fn open_diff_file_switcher(
+        &mut self,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.diff_view.is_none() {
+            return;
+        }
+        self.diff_switcher_open = true;
+        self.diff_switcher_selection = 0;
+        self.diff_file_input
+            .update(cx, |input, cx| input.set_text("", cx));
+        self.diff_file_input
+            .read(cx)
+            .focus_handle
+            .clone()
+            .focus(window);
+        cx.notify();
+    }
+
+    pub(super) fn close_diff_file_switcher(
+        &mut self,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.diff_switcher_open = false;
+        self.diff_focus.focus(window);
+        cx.notify();
+    }
+
+    pub(super) fn open_selected_diff_file(
+        &mut self,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let Some(index) = self
+            .diff_file_matches(cx)
+            .get(self.diff_switcher_selection)
+            .copied()
+        else {
+            return;
+        };
+        self.open_diff_file_at(index, window, cx);
+    }
+
+    pub(super) fn move_diff_switcher_selection(
+        &mut self,
+        delta: isize,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let count = self.diff_file_matches(cx).len().min(10);
+        self.diff_switcher_selection = offset_index(self.diff_switcher_selection, delta, count);
+        cx.notify();
+    }
+
+    fn open_diff_file_at(
+        &mut self,
+        index: usize,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let Some(view) = &self.diff_view else {
+            return;
+        };
+        let Some(file) = view.files.get(index).cloned() else {
+            return;
+        };
+        let staged = match &view.origin {
+            DiffOrigin::Commit(_) => None,
+            DiffOrigin::WorkingTree { staged, .. } => Some(*staged),
+        };
+        self.diff_switcher_open = false;
+        if let Some(staged) = staged {
+            self.open_worktree_diff(&file, staged, window, cx);
+        } else {
+            self.open_diff(&file, window, cx);
+        }
+    }
+
+    fn diff_file_matches(&self, cx: &gpui::App) -> Vec<usize> {
+        let Some(view) = &self.diff_view else {
+            return Vec::new();
+        };
+        let query = self
+            .diff_file_input
+            .read(cx)
+            .content
+            .to_string()
+            .to_lowercase();
+        let mut matches: Vec<_> = view
+            .files
+            .iter()
+            .enumerate()
+            .filter_map(|(index, file)| {
+                let path = file
+                    .new_path
+                    .as_ref()
+                    .or(file.old_path.as_ref())?
+                    .display_lossy();
+                let lowercase = path.to_lowercase();
+                lowercase.contains(&query).then(|| {
+                    let basename = lowercase.rsplit('/').next().unwrap_or(&lowercase);
+                    (index, usize::from(!basename.contains(&query)))
+                })
+            })
+            .collect();
+        matches.sort_by_key(|(index, basename_rank)| (*basename_rank, *index));
+        matches.into_iter().map(|(index, _)| index).collect()
+    }
+
+    pub(super) fn clear_diff_selection(&mut self) -> bool {
+        self.diff_view
+            .as_mut()
+            .is_some_and(|view| view.selection.take().is_some())
+    }
+
+    fn select_diff_line(
+        &mut self,
+        coordinate: DiffCoordinate,
+        extend: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let Some(view) = &mut self.diff_view else {
+            return;
+        };
+        view.selection = match (extend, view.selection) {
+            (true, Some(selection)) if selection.anchor.side == coordinate.side => {
+                Some(DiffSelection {
+                    anchor: selection.anchor,
+                    head: coordinate,
+                })
+            }
+            _ => Some(DiffSelection {
+                anchor: coordinate,
+                head: coordinate,
+            }),
+        };
+        cx.notify();
+    }
+
+    pub(super) fn copy_diff_selection(&self, cx: &mut gpui::App) -> bool {
+        let Some(view) = &self.diff_view else {
+            return false;
+        };
+        let Some(selection) = view.selection else {
+            return false;
+        };
+        let Some(diff) = view.text_diff() else {
+            return false;
+        };
+        let side = match selection.anchor.side {
+            DiffSide::Old => diff.old.as_ref(),
+            DiffSide::New => diff.new.as_ref(),
+        };
+        let Some(side) = side else {
+            return false;
+        };
+        let start = selection.anchor.line.min(selection.head.line);
+        let end = selection.anchor.line.max(selection.head.line);
+        let text = (start..=end)
+            .filter_map(|line| side.line(line))
+            .collect::<Vec<_>>()
+            .join("\n");
+        cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
+        true
     }
 
     /// Opens the diff overlay for one changed file of the selection (§6.11).
@@ -327,34 +720,39 @@ impl SourcefourWindow {
         let Some(location) = self.location.clone() else {
             return;
         };
-        let path = file
-            .new_path
-            .as_ref()
-            .or(file.old_path.as_ref())
-            .cloned()
-            .unwrap_or_else(|| sourcefour_model::RepoPath(Vec::new()));
+        let Some(paths) = DiffPaths::for_file(file) else {
+            return;
+        };
         let request = FileDiffRequest {
             oid,
             parent: self.compare_parent,
-            path,
+            paths,
         };
-        self.diff_view = Some(DiffView {
-            title: request.path.display_lossy(),
-            status: file.status,
-            origin: DiffOrigin::Commit(request.clone()),
-            content: None,
-            mode: self.preferred_diff_mode,
-            show_preview: false,
-            preview: None,
-            split: None,
-            before_image: None,
-            after_image: None,
-            slider: 0.5,
-        });
+        let cached = self.cached_commit_diff(&request);
+        let files: Arc<[ChangedFile]> = self
+            .files
+            .as_ref()
+            .map_or_else(|| vec![file.clone()], |files| files.files.clone())
+            .into();
+        let file_index = files
+            .iter()
+            .position(|candidate| candidate == file)
+            .unwrap_or(0);
+        self.diff_view = Some(DiffView::for_commit(
+            request.clone(),
+            file.status,
+            files,
+            file_index,
+            self.preferred_diff_mode,
+        ));
         self.diff_request += 1;
         let token = self.diff_request;
         self.diff_scroll = UniformListScrollHandle::new();
         self.diff_focus.focus(window);
+        if let Some(diff) = cached {
+            self.set_diff_content(token, Ok(DiffContent::Text(diff)), cx);
+            return;
+        }
         let ffmpeg_dir = self.settings.video.ffmpeg_dir.clone();
         cx.spawn(async move |this, cx| {
             let diff = cx
@@ -384,28 +782,33 @@ impl SourcefourWindow {
         let Some(location) = self.location.clone() else {
             return;
         };
-        let path = file
-            .new_path
+        let Some(paths) = DiffPaths::for_file(file) else {
+            return;
+        };
+        let files: Arc<[ChangedFile]> = self
+            .working_tree_status
             .as_ref()
-            .or(file.old_path.as_ref())
-            .cloned()
-            .unwrap_or_else(|| sourcefour_model::RepoPath(Vec::new()));
-        self.diff_view = Some(DiffView {
-            title: path.display_lossy(),
-            status: file.status,
-            origin: DiffOrigin::WorkingTree {
-                path: path.clone(),
-                staged,
-            },
-            content: None,
-            mode: self.preferred_diff_mode,
-            show_preview: false,
-            preview: None,
-            split: None,
-            before_image: None,
-            after_image: None,
-            slider: 0.5,
-        });
+            .map(|status| {
+                if staged {
+                    &status.staged
+                } else {
+                    &status.unstaged
+                }
+            })
+            .map_or_else(|| vec![file.clone()], Clone::clone)
+            .into();
+        let file_index = files
+            .iter()
+            .position(|candidate| candidate == file)
+            .unwrap_or(0);
+        self.diff_view = Some(DiffView::for_working_tree(
+            paths.clone(),
+            staged,
+            file.status,
+            files,
+            file_index,
+            self.preferred_diff_mode,
+        ));
         self.diff_request += 1;
         let token = self.diff_request;
         self.diff_scroll = UniformListScrollHandle::new();
@@ -417,7 +820,7 @@ impl SourcefourWindow {
                 .spawn(async move {
                     sourcefour_git::worktree_file_diff(
                         &location,
-                        &path,
+                        &paths,
                         staged,
                         ffmpeg_dir.as_deref(),
                     )
@@ -442,17 +845,95 @@ impl SourcefourWindow {
         if self.diff_request != token {
             return;
         }
+        let syntax_enabled = self.settings.diff.syntax_highlighting;
+        let mut enrichment = None;
+        let mut cache_entry = None;
         if let Some(view) = &mut self.diff_view {
-            view.content = Some(content.unwrap_or_else(|failure| DiffContent::Unavailable {
+            let content = content.unwrap_or_else(|failure| DiffContent::Unavailable {
                 message: failure.user.message,
-            }));
-            view.split = None;
-            view.ensure_split();
-            view.before_image = None;
-            view.after_image = None;
-            view.ensure_images();
+            });
+            if let (DiffOrigin::Commit(request), DiffContent::Text(diff)) = (&view.origin, &content)
+            {
+                cache_entry = Some((request.clone(), Arc::clone(diff)));
+            }
+            view.replace_content(content);
+            if syntax_enabled && let Some(DiffContent::Text(diff)) = &view.content {
+                enrichment = Some((Arc::clone(diff), view.origin.path().clone()));
+            }
+        }
+        if let Some((request, diff)) = cache_entry {
+            self.cache_commit_diff(request, diff);
+        }
+        self.reset_diff_wrap_list(cx);
+        if let Some((diff, path)) = enrichment {
+            cx.spawn(async move |this, cx| {
+                let result = cx
+                    .background_executor()
+                    .spawn(async move { crate::diff_highlight::enrich(&diff, &path) })
+                    .await;
+                this.update(cx, |this, cx| {
+                    if this.diff_request != token {
+                        return;
+                    }
+                    if let Some(view) = &mut this.diff_view {
+                        view.highlight = result.highlight.map(Arc::new);
+                        view.highlight_message = result.message;
+                    }
+                    cx.notify();
+                })
+                .ok();
+            })
+            .detach();
         }
         cx.notify();
+    }
+
+    fn cached_commit_diff(&mut self, request: &FileDiffRequest) -> Option<Arc<TextDiff>> {
+        let index = self
+            .diff_cache
+            .iter()
+            .position(|entry| &entry.request == request)?;
+        let entry = self.diff_cache.remove(index)?;
+        let diff = Arc::clone(&entry.diff);
+        self.diff_cache.push_back(entry);
+        Some(diff)
+    }
+
+    fn cache_commit_diff(&mut self, request: FileDiffRequest, diff: Arc<TextDiff>) {
+        const MAX_ENTRIES: usize = 8;
+        const MAX_BYTES: usize = 64 * 1024 * 1024;
+        let bytes = diff
+            .old
+            .iter()
+            .chain(diff.new.iter())
+            .map(|side| side.text().len() + side.line_count() * size_of::<Range<usize>>())
+            .sum::<usize>()
+            + diff.changes.len() * size_of::<sourcefour_model::TextChange>();
+        if bytes > MAX_BYTES {
+            return;
+        }
+        if let Some(index) = self
+            .diff_cache
+            .iter()
+            .position(|entry| entry.request == request)
+        {
+            self.diff_cache.remove(index);
+        }
+        self.diff_cache.push_back(super::DiffCacheEntry {
+            request,
+            diff,
+            bytes,
+        });
+        while self.diff_cache.len() > MAX_ENTRIES
+            || self
+                .diff_cache
+                .iter()
+                .map(|entry| entry.bytes)
+                .sum::<usize>()
+                > MAX_BYTES
+        {
+            self.diff_cache.pop_front();
+        }
     }
 
     /// The full-window diff overlay (§6.11), closed by Escape, ✕, or a click
@@ -462,10 +943,7 @@ impl SourcefourWindow {
         cx: &mut gpui::Context<Self>,
     ) -> Option<impl IntoElement + use<>> {
         let view = self.diff_view.as_ref()?;
-        let line_count = match &view.content {
-            Some(DiffContent::Text { lines }) => lines.len(),
-            _ => 0,
-        };
+        let line_count = view.rows().len();
         let body = self.diff_body(view, line_count, cx);
         Some(
             super::modal_backdrop("diff-overlay", &self.theme)
@@ -517,9 +995,109 @@ impl SourcefourWindow {
                                     None
                                 } else {
                                     self.diff_scrollbar(cx)
-                                }),
+                                })
+                                .children(self.diff_file_switcher(view, cx)),
                         ),
                 ),
+        )
+    }
+
+    fn diff_file_switcher(
+        &self,
+        view: &DiffView,
+        cx: &mut gpui::Context<Self>,
+    ) -> Option<impl IntoElement + use<>> {
+        if !self.diff_switcher_open {
+            return None;
+        }
+        let matches = self.diff_file_matches(cx);
+        Some(
+            div()
+                .id("diff-file-switcher")
+                .absolute()
+                .top(px(12.0))
+                .left(gpui::relative(0.5))
+                .ml(px(-260.0))
+                .w(px(520.0))
+                .max_h(px(420.0))
+                .overflow_hidden()
+                .rounded(px(8.0))
+                .border_1()
+                .border_color(self.theme.border_strong)
+                .bg(self.theme.bg_chrome)
+                .on_click(|_, _, cx| cx.stop_propagation())
+                .child(
+                    div()
+                        .h(px(38.0))
+                        .flex()
+                        .items_center()
+                        .px(px(12.0))
+                        .border_b_1()
+                        .border_color(self.theme.border)
+                        .text_size(px(12.0))
+                        .text_color(self.theme.text_primary)
+                        .child(self.diff_file_input.clone()),
+                )
+                .children(matches.iter().take(10).enumerate().filter_map(
+                    |(match_index, file_index)| {
+                        let file = view.files.get(*file_index)?;
+                        let path = file
+                            .new_path
+                            .as_ref()
+                            .or(file.old_path.as_ref())?
+                            .display_lossy();
+                        let target = *file_index;
+                        Some(
+                            div()
+                                .id(("diff-file-result", target))
+                                .h(px(34.0))
+                                .flex()
+                                .items_center()
+                                .gap(px(9.0))
+                                .px(px(12.0))
+                                .cursor_pointer()
+                                .bg(if match_index == self.diff_switcher_selection {
+                                    self.theme.bg_selected
+                                } else {
+                                    self.theme.bg_chrome
+                                })
+                                .hover(|style| style.bg(self.theme.bg_hover))
+                                .child(
+                                    div()
+                                        .w(px(14.0))
+                                        .flex_none()
+                                        .font_weight(FontWeight::BOLD)
+                                        .text_color(change_color(&self.theme, file.status))
+                                        .child(change_letter(file.status)),
+                                )
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w(px(1.0))
+                                        .overflow_hidden()
+                                        .text_ellipsis()
+                                        .whitespace_nowrap()
+                                        .font_family(self.mono_font())
+                                        .text_size(px(11.5))
+                                        .text_color(self.theme.text_primary)
+                                        .child(path),
+                                )
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    this.open_diff_file_at(target, window, cx);
+                                })),
+                        )
+                    },
+                ))
+                .children(matches.is_empty().then(|| {
+                    div()
+                        .h(px(44.0))
+                        .flex()
+                        .items_center()
+                        .px(px(12.0))
+                        .text_size(px(11.5))
+                        .text_color(self.theme.text_faint)
+                        .child("No changed files match")
+                })),
         )
     }
 
@@ -534,7 +1112,7 @@ impl SourcefourWindow {
             None => self.diff_notice("Computing diff…").into_any_element(),
             // Preview renders both versions of the document, the old side
             // left and the new side right — the raw text stays under Source.
-            Some(DiffContent::Text { .. }) if preview::showing(view) => match &view.preview {
+            Some(DiffContent::Text(_)) if preview::showing(view) => match &view.preview {
                 Some(preview) => {
                     let started = std::time::Instant::now();
                     // A layout belongs to the frame that painted it; the
@@ -565,10 +1143,10 @@ impl SourcefourWindow {
                 }
                 None => self.diff_notice("Rendering preview…").into_any_element(),
             },
-            Some(DiffContent::Text { lines }) if lines.is_empty() => {
+            Some(DiffContent::Text(diff)) if diff.is_unchanged() => {
                 self.diff_notice("No textual changes.").into_any_element()
             }
-            Some(DiffContent::Text { .. }) => self.diff_text_list(view, line_count, cx),
+            Some(DiffContent::Text(_)) => self.diff_text_list(view, line_count, cx),
             // A video no decoder opened has nothing to lay out two ways, so
             // the card carries the numbers instead.
             Some(DiffContent::Video { .. }) if !view.has_poster() => {
@@ -603,52 +1181,65 @@ impl SourcefourWindow {
         line_count: usize,
         cx: &mut gpui::Context<Self>,
     ) -> gpui::AnyElement {
-        match &view.content {
-            Some(DiffContent::Text { .. }) if view.mode == DiffMode::Split => uniform_list(
+        let started = std::time::Instant::now();
+        if self.settings.diff.wrap
+            && let Some(list) = &view.wrap_list
+        {
+            let element = gpui::list(list.clone()).size_full().into_any_element();
+            diff_build_probe(started, view, true);
+            return element;
+        }
+        let element = match &view.content {
+            Some(DiffContent::Text(_)) if view.mode == DiffMode::Split => uniform_list(
                 cx.entity(),
                 "diff-split-rows",
-                view.split.as_ref().map_or(0, Vec::len),
-                move |this, range, _window, _cx| {
-                    let Some(rows) = this.diff_view.as_ref().and_then(|view| view.split.as_ref())
-                    else {
+                view.rows().len(),
+                move |this, range, _window, cx| {
+                    let Some(view) = this.diff_view.as_ref() else {
                         return Vec::new();
                     };
                     range
-                        .filter_map(|index| rows.get(index).cloned())
-                        .map(|row| this.split_row_view(&row))
+                        .filter_map(|index| view.rows().get(index).cloned().map(|row| (index, row)))
+                        .map(|(index, row)| this.split_row_view(view, index, &row, cx))
                         .collect()
                 },
             )
+            .with_width_from_item(view.widest_row())
+            .with_horizontal_sizing_behavior(ListHorizontalSizingBehavior::Unconstrained)
             .track_scroll(self.diff_scroll.clone())
             .size_full()
             .into_any_element(),
-            Some(DiffContent::Text { .. }) => uniform_list(
+            Some(DiffContent::Text(_)) => uniform_list(
                 cx.entity(),
                 "diff-lines",
                 line_count,
-                move |this, range, _window, _cx| {
-                    let Some(DiffContent::Text { lines }) = this
-                        .diff_view
-                        .as_ref()
-                        .and_then(|view| view.content.as_ref())
-                    else {
+                move |this, range, _window, cx| {
+                    let Some(view) = this.diff_view.as_ref() else {
                         return Vec::new();
                     };
                     range
-                        .filter_map(|index| lines.get(index).cloned())
-                        .map(|line| this.diff_line_row(&line))
+                        .filter_map(|index| view.rows().get(index).cloned().map(|row| (index, row)))
+                        .map(|(index, row)| this.diff_line_row(view, index, &row, cx))
                         .collect()
                 },
             )
+            .with_width_from_item(view.widest_row())
+            .with_horizontal_sizing_behavior(ListHorizontalSizingBehavior::Unconstrained)
             .track_scroll(self.diff_scroll.clone())
             .size_full()
             .into_any_element(),
             // Only text content reaches here; diff_body routed the rest.
             _ => self.diff_notice("No textual changes.").into_any_element(),
-        }
+        };
+        diff_build_probe(started, view, false);
+        element
     }
 
     /// The diff overlay's title bar: status, path, counts, and close.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the diff toolbar composes independent controls in visual order"
+    )]
     pub(super) fn diff_header(
         &self,
         view: &DiffView,
@@ -656,6 +1247,11 @@ impl SourcefourWindow {
         cx: &mut gpui::Context<Self>,
     ) -> Div {
         let status_color = change_color(&self.theme, view.status);
+        let hunk_count = view.hunk_rows().len();
+        let previous_hunk_enabled = view.current_hunk > 0;
+        let next_hunk_enabled = view.current_hunk + 1 < hunk_count;
+        let previous_file_enabled = view.file_index > 0;
+        let next_file_enabled = view.file_index + 1 < view.files.len();
         div()
             .h(px(40.0))
             .flex_none()
@@ -685,6 +1281,72 @@ impl SourcefourWindow {
                     .text_color(self.theme.text_primary)
                     .child(view.title.clone()),
             )
+            .children(
+                view.text_diff()
+                    .is_some_and(TextDiff::is_lossy)
+                    .then_some("Invalid UTF-8 replaced")
+                    .or(view.highlight_message)
+                    .map(|message| {
+                        div()
+                            .flex_none()
+                            .text_size(px(10.5))
+                            .text_color(self.theme.text_faint)
+                            .child(message)
+                    }),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .text_size(px(10.5))
+                    .text_color(self.theme.text_faint)
+                    .child(format!("{} / {}", view.file_index + 1, view.files.len())),
+            )
+            .child(
+                self.icon_segment_button(
+                    "previous-diff-file",
+                    "icons/chevron-left.svg",
+                    previous_file_enabled,
+                )
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.navigate_diff_file(-1, window, cx);
+                })),
+            )
+            .child(
+                self.icon_segment_button(
+                    "next-diff-file",
+                    "icons/chevron-right.svg",
+                    next_file_enabled,
+                )
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.navigate_diff_file(1, window, cx);
+                })),
+            )
+            .children((hunk_count > 0).then(|| {
+                let count = hunk_count;
+                div()
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .gap(px(3.0))
+                    .child(
+                        div()
+                            .text_size(px(10.5))
+                            .text_color(self.theme.text_faint)
+                            .child(format!("hunk {} / {count}", view.current_hunk + 1)),
+                    )
+                    .child(
+                        self.segment_button("↑", false)
+                            .when(!previous_hunk_enabled, |button| button.opacity(0.4))
+                            .on_click(
+                                cx.listener(|this, _, _, cx| this.navigate_diff_hunk(-1, cx)),
+                            ),
+                    )
+                    .child(
+                        self.segment_button("↓", false)
+                            .when(!next_hunk_enabled, |button| button.opacity(0.4))
+                            .on_click(cx.listener(|this, _, _, cx| this.navigate_diff_hunk(1, cx))),
+                    )
+            }))
             .children(preview::applies(view).then(|| self.preview_toggle(view.show_preview, cx)))
             // The layout control chooses how source lines lay out; while both
             // rendered documents show, it has nothing to say. Nor does it for a
@@ -718,6 +1380,38 @@ impl SourcefourWindow {
                         cx,
                     ))
             }))
+            .children(
+                (view.text_diff().is_some() && !preview::showing(view)).then(|| {
+                    div()
+                        .flex_none()
+                        .flex()
+                        .child(
+                            self.segment_button("Full context", view.full_context)
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.toggle_diff_context(cx);
+                                })),
+                        )
+                        .child(
+                            self.segment_button("Wrap", self.settings.diff.wrap)
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    let enabled = !this.settings.diff.wrap;
+                                    this.update_settings(cx, |settings| {
+                                        settings.diff.wrap = enabled;
+                                    });
+                                    this.reset_diff_wrap_list(cx);
+                                })),
+                        )
+                        .child(
+                            self.segment_button("Whitespace", self.settings.diff.show_whitespace)
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    let enabled = !this.settings.diff.show_whitespace;
+                                    this.update_settings(cx, |settings| {
+                                        settings.diff.show_whitespace = enabled;
+                                    });
+                                })),
+                        )
+                }),
+            )
             .children((line_count > 0).then(|| {
                 div()
                     .flex_none()
@@ -776,6 +1470,35 @@ impl SourcefourWindow {
             .child(label)
     }
 
+    fn icon_segment_button(
+        &self,
+        id: &'static str,
+        path: &'static str,
+        enabled: bool,
+    ) -> gpui::Stateful<Div> {
+        div()
+            .id(id)
+            .size(px(28.0))
+            .flex_none()
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(4.0))
+            .bg(self.theme.bg_list)
+            .when(enabled, |button| {
+                button
+                    .cursor_pointer()
+                    .hover(|style| style.bg(self.theme.bg_hover))
+            })
+            .when(!enabled, |button| button.opacity(0.4))
+            .child(
+                svg()
+                    .path(path)
+                    .size(px(16.0))
+                    .text_color(self.theme.text_secondary),
+            )
+    }
+
     /// One segment of the unified/split toggle.
     pub(super) fn diff_mode_button(
         &self,
@@ -786,14 +1509,148 @@ impl SourcefourWindow {
     ) -> gpui::Stateful<Div> {
         self.segment_button(label, mode == active)
             .on_click(cx.listener(move |this, _, _, cx| {
-                if let Some(view) = &mut this.diff_view {
-                    view.mode = mode;
-                    view.ensure_split();
-                }
-                this.preferred_diff_mode = mode;
-                this.persist_ui_state(cx);
-                cx.notify();
+                this.set_diff_mode(mode, cx);
             }))
+    }
+
+    pub(super) fn set_diff_mode(&mut self, mode: DiffMode, cx: &mut gpui::Context<Self>) {
+        if let Some(view) = &mut self.diff_view {
+            view.set_mode(mode);
+        }
+        self.preferred_diff_mode = mode;
+        self.diff_scroll = UniformListScrollHandle::new();
+        self.reset_diff_wrap_list(cx);
+        self.persist_ui_state(cx);
+        cx.notify();
+    }
+
+    pub(super) fn apply_responsive_diff_mode(
+        &mut self,
+        viewport_width: f32,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let desired = if viewport_width - 52.0 < 900.0 {
+            DiffMode::Unified
+        } else {
+            self.preferred_diff_mode
+        };
+        let changed = self
+            .diff_view
+            .as_ref()
+            .is_some_and(|view| view.mode != desired);
+        if !changed {
+            return;
+        }
+        if let Some(view) = &mut self.diff_view {
+            view.set_mode(desired);
+            view.current_hunk = 0;
+        }
+        self.diff_scroll = UniformListScrollHandle::new();
+        self.reset_diff_wrap_list(cx);
+    }
+
+    fn toggle_diff_context(&mut self, cx: &mut gpui::Context<Self>) {
+        if let Some(view) = &mut self.diff_view {
+            view.toggle_full_context();
+        }
+        self.diff_scroll = UniformListScrollHandle::new();
+        self.reset_diff_wrap_list(cx);
+        cx.notify();
+    }
+
+    pub(super) fn reset_diff_wrap_list(&mut self, cx: &mut gpui::Context<Self>) {
+        let Some(view) = &mut self.diff_view else {
+            return;
+        };
+        let count = view.rows().len();
+        let weak = cx.entity().downgrade();
+        view.wrap_list = Some(gpui::ListState::new(
+            count,
+            gpui::ListAlignment::Top,
+            px(200.0),
+            move |index, _window, cx| {
+                let Some(entity) = weak.upgrade() else {
+                    return div().into_any_element();
+                };
+                let coordinate = entity.read(cx).diff_row_coordinate(index);
+                let row = entity.read(cx).wrapped_diff_row(index);
+                let Some(coordinate) = coordinate else {
+                    return row;
+                };
+                let target = entity.downgrade();
+                div()
+                    .id(("wrapped-diff-row", cell_coordinate_key(coordinate)))
+                    .cursor_pointer()
+                    .child(row)
+                    .on_click(move |event: &gpui::ClickEvent, _, cx| {
+                        if let Some(entity) = target.upgrade() {
+                            entity.update(cx, |this, cx| {
+                                this.select_diff_line(coordinate, event.modifiers().shift, cx);
+                            });
+                        }
+                    })
+                    .into_any_element()
+            },
+        ));
+    }
+
+    fn diff_row_coordinate(&self, index: usize) -> Option<DiffCoordinate> {
+        let view = self.diff_view.as_ref()?;
+        let crate::diff_split::DiffRow::Line { left, right } = view.rows().get(index)? else {
+            return None;
+        };
+        let cell = right.as_ref().or(left.as_ref())?;
+        Some(DiffCoordinate {
+            side: cell.side,
+            line: cell.line,
+            byte_offset: None,
+        })
+    }
+
+    pub(super) fn navigate_diff_hunk(&mut self, delta: isize, cx: &mut gpui::Context<Self>) {
+        let Some(view) = &mut self.diff_view else {
+            return;
+        };
+        let hunks = view.hunk_rows();
+        if hunks.len() < 2 {
+            return;
+        }
+        view.current_hunk = offset_index(view.current_hunk, delta, hunks.len());
+        let row = hunks[view.current_hunk];
+        if self.settings.diff.wrap {
+            if let Some(list) = &view.wrap_list {
+                list.scroll_to_reveal_item(row);
+            }
+        } else {
+            self.diff_scroll
+                .scroll_to_item(row, gpui::ScrollStrategy::Top);
+        }
+        cx.notify();
+    }
+
+    pub(super) fn navigate_diff_file(
+        &mut self,
+        delta: isize,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let Some(view) = &self.diff_view else {
+            return;
+        };
+        let next = offset_index(view.file_index, delta, view.files.len());
+        if next == view.file_index {
+            return;
+        }
+        let file = view.files[next].clone();
+        let staged = match &view.origin {
+            DiffOrigin::Commit(_) => None,
+            DiffOrigin::WorkingTree { staged, .. } => Some(*staged),
+        };
+        if let Some(staged) = staged {
+            self.open_worktree_diff(&file, staged, window, cx);
+        } else {
+            self.open_diff(&file, window, cx);
+        }
     }
 
     /// Side-by-side before/after panes for an image comparison (§6.11).
@@ -1106,35 +1963,43 @@ impl SourcefourWindow {
     }
 
     /// One visual row of the side-by-side view.
-    pub(super) fn split_row_view(&self, row: &crate::diff_split::SplitRow) -> Div {
-        if let Some(hunk) = &row.hunk {
-            return div()
+    pub(super) fn split_row_view(
+        &self,
+        view: &DiffView,
+        row_index: usize,
+        row: &crate::diff_split::DiffRow,
+        cx: &mut gpui::Context<Self>,
+    ) -> Div {
+        use crate::diff_split::DiffRow;
+        let row = match row {
+            DiffRow::Hunk {
+                old_lines,
+                new_lines,
+            } => self.diff_banner(hunk_label(old_lines, new_lines), false),
+            DiffRow::Gap {
+                old_lines,
+                new_lines,
+            } => self.diff_banner(gap_label(old_lines, new_lines), true),
+            DiffRow::Marker { side } => self.diff_banner(eof_marker_label(*side), true),
+            DiffRow::Line { left, right } => div()
                 .h(px(self.diff_row_height()))
                 .w_full()
                 .flex()
-                .items_center()
-                .px(px(10.0))
-                .bg(self.theme.bg_hover)
-                .font_family(self.mono_font())
-                .text_size(px(11.0))
-                .text_color(self.theme.accent)
-                .child(hunk.clone());
-        }
-        div()
-            .h(px(self.diff_row_height()))
-            .w_full()
-            .flex()
-            .child(self.split_half(row.left.as_ref(), false))
-            .child(div().w(px(1.0)).flex_none().h_full().bg(self.theme.border))
-            .child(self.split_half(row.right.as_ref(), true))
+                .child(self.split_half(view, left.as_ref(), cx))
+                .child(div().w(px(1.0)).flex_none().h_full().bg(self.theme.border))
+                .child(self.split_half(view, right.as_ref(), cx)),
+        };
+        self.outline_diff_row(row, view.active_hunk_edges(row_index))
     }
 
     /// One half of a split row: number, marker tint, and content.
     pub(super) fn split_half(
         &self,
-        side: Option<&crate::diff_split::SplitSide>,
-        right: bool,
-    ) -> Div {
+        view: &DiffView,
+        cell: Option<&crate::diff_split::DiffCell>,
+        cx: &mut gpui::Context<Self>,
+    ) -> gpui::AnyElement {
+        use crate::diff_split::CellKind;
         let base = div().flex_1().min_w(px(1.0)).h_full().flex().items_center();
         let rule = || {
             div()
@@ -1144,18 +2009,37 @@ impl SourcefourWindow {
                 .mr(px(6.0))
                 .bg(self.theme.gutter_rule())
         };
-        let Some(side) = side else {
+        let Some(cell) = cell else {
             return base
                 .bg(self.theme.bg_panel.opacity(0.4))
                 .child(div().w(px(44.0)).flex_none().h_full())
-                .child(rule());
+                .child(rule())
+                .into_any_element();
         };
-        let (text_color, background) = match side.kind {
-            DiffLineKind::Addition if right => (self.theme.green, Some(self.theme.tint_added())),
-            DiffLineKind::Deletion if !right => (self.theme.red, Some(self.theme.tint_removed())),
-            _ => (self.theme.text_secondary, None),
+        let (marker, text_color, background) = match cell.kind {
+            CellKind::Addition => ("+", self.theme.green, Some(self.theme.tint_added())),
+            CellKind::Deletion => ("-", self.theme.red, Some(self.theme.tint_removed())),
+            CellKind::Context => (" ", self.theme.text_secondary, None),
         };
-        base.when_some(background, gpui::Styled::bg)
+        let selected = view
+            .selection
+            .is_some_and(|selection| selection.contains(cell));
+        let coordinate = DiffCoordinate {
+            side: cell.side,
+            line: cell.line,
+            byte_offset: None,
+        };
+        base.id(("split-diff-cell", cell_key(cell)))
+            .bg(if selected {
+                self.theme.accent.opacity(0.35)
+            } else {
+                background.unwrap_or(gpui::transparent_black())
+            })
+            .cursor_pointer()
+            .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
+                this.select_diff_line(coordinate, event.modifiers().shift, cx);
+            }))
+            .child(div().w(px(2.0)).flex_none().h_full().bg(text_color))
             .child(
                 div()
                     .w(px(44.0))
@@ -1164,12 +2048,18 @@ impl SourcefourWindow {
                     .font_family(self.mono_font())
                     .text_size(px(10.5))
                     .text_color(self.theme.text_faint)
-                    .child(
-                        side.number
-                            .map_or_else(String::new, |number| number.to_string()),
-                    ),
+                    .child((cell.line + 1).to_string()),
             )
             .child(rule())
+            .child(
+                div()
+                    .w(px(14.0))
+                    .flex_none()
+                    .font_family(self.mono_font())
+                    .text_size(px(11.0))
+                    .text_color(text_color)
+                    .child(marker),
+            )
             .child(
                 div()
                     .flex_1()
@@ -1179,7 +2069,214 @@ impl SourcefourWindow {
                     .font_family(self.mono_font())
                     .text_size(px(11.0))
                     .text_color(text_color)
-                    .child(side.text.clone()),
+                    .child(self.styled_diff_text(view, cell)),
+            )
+            .into_any_element()
+    }
+
+    fn styled_diff_text(
+        &self,
+        view: &DiffView,
+        cell: &crate::diff_split::DiffCell,
+    ) -> gpui::StyledText {
+        use crate::diff_split::CellKind;
+        let text = cell_text(view.text_diff(), cell);
+        if self.settings.diff.show_whitespace {
+            return gpui::StyledText::new(visible_whitespace(
+                text,
+                usize::from(self.settings.diff.tab_width.clamp(1, 16)),
+            ));
+        }
+        let Some(highlight) = &view.highlight else {
+            return gpui::StyledText::new(text.to_owned());
+        };
+        let syntax = highlight.syntax(cell.side, cell.line);
+        let intraline = highlight.intraline(cell.side, cell.line);
+        let mut boundaries = vec![0, text.len()];
+        boundaries.extend(
+            syntax
+                .iter()
+                .flat_map(|span| [span.range.start, span.range.end]),
+        );
+        boundaries.extend(intraline.iter().flat_map(|range| [range.start, range.end]));
+        boundaries.retain(|boundary| *boundary <= text.len() && text.is_char_boundary(*boundary));
+        boundaries.sort_unstable();
+        boundaries.dedup();
+        let semantic_color = match cell.kind {
+            CellKind::Addition => self.theme.green,
+            CellKind::Deletion => self.theme.red,
+            CellKind::Context => self.theme.accent,
+        };
+        let runs = boundaries.windows(2).filter_map(|window| {
+            let range = window[0]..window[1];
+            let syntax = syntax
+                .iter()
+                .find(|span| span.range.start <= range.start && span.range.end >= range.end);
+            let emphasized = intraline
+                .iter()
+                .any(|span| span.start <= range.start && span.end >= range.end);
+            if syntax.is_none() && !emphasized {
+                return None;
+            }
+            let color = syntax.map(|span| {
+                let (red, green, blue) = span.rgb;
+                gpui::rgb((u32::from(red) << 16) | (u32::from(green) << 8) | u32::from(blue)).into()
+            });
+            Some((
+                range,
+                gpui::HighlightStyle {
+                    color,
+                    font_weight: syntax.filter(|span| span.bold).map(|_| FontWeight::BOLD),
+                    font_style: syntax
+                        .filter(|span| span.italic)
+                        .map(|_| gpui::FontStyle::Italic),
+                    background_color: emphasized.then(|| semantic_color.opacity(0.28)),
+                    ..gpui::HighlightStyle::default()
+                },
+            ))
+        });
+        gpui::StyledText::new(text.to_owned()).with_highlights(runs)
+    }
+
+    fn wrapped_diff_row(&self, index: usize) -> gpui::AnyElement {
+        use crate::diff_split::DiffRow;
+        let Some(view) = &self.diff_view else {
+            return div().into_any_element();
+        };
+        let Some(row) = view.rows().get(index) else {
+            return div().into_any_element();
+        };
+        let row = match row {
+            DiffRow::Hunk {
+                old_lines,
+                new_lines,
+            } => self.diff_banner(hunk_label(old_lines, new_lines), false),
+            DiffRow::Gap {
+                old_lines,
+                new_lines,
+            } => self.diff_banner(gap_label(old_lines, new_lines), true),
+            DiffRow::Marker { side } => self.diff_banner(eof_marker_label(*side), true),
+            DiffRow::Line { left, right } if view.mode == DiffMode::Split => div()
+                .w_full()
+                .min_h(px(self.diff_row_height()))
+                .flex()
+                .child(self.wrapped_split_half(view, left.as_ref()))
+                .child(div().w(px(1.0)).flex_none().h_full().bg(self.theme.border))
+                .child(self.wrapped_split_half(view, right.as_ref())),
+            DiffRow::Line { left, right } => {
+                use crate::diff_split::CellKind;
+                let Some(cell) = right.as_ref().or(left.as_ref()) else {
+                    return div().into_any_element();
+                };
+                let (marker, text_color, background) = match cell.kind {
+                    CellKind::Addition => ("+", self.theme.green, self.theme.tint_added()),
+                    CellKind::Deletion => ("-", self.theme.red, self.theme.tint_removed()),
+                    CellKind::Context => {
+                        (" ", self.theme.text_secondary, gpui::transparent_black())
+                    }
+                };
+                let number = |cell: Option<&crate::diff_split::DiffCell>| {
+                    div()
+                        .w(px(44.0))
+                        .flex_none()
+                        .pr(px(6.0))
+                        .font_family(self.mono_font())
+                        .text_size(px(10.5))
+                        .text_color(self.theme.text_faint)
+                        .child(cell.map_or_else(String::new, |cell| (cell.line + 1).to_string()))
+                };
+                div()
+                    .w_full()
+                    .min_h(px(self.diff_row_height()))
+                    .flex()
+                    .items_start()
+                    .bg(background)
+                    .child(div().w(px(2.0)).flex_none().h_full().bg(text_color))
+                    .child(number(left.as_ref()))
+                    .child(number(right.as_ref()))
+                    .child(
+                        div()
+                            .w(px(1.0))
+                            .flex_none()
+                            .h_full()
+                            .mr(px(6.0))
+                            .bg(self.theme.gutter_rule()),
+                    )
+                    .child(
+                        div()
+                            .w(px(14.0))
+                            .flex_none()
+                            .font_family(self.mono_font())
+                            .text_size(px(11.0))
+                            .text_color(text_color)
+                            .child(marker),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(1.0))
+                            .whitespace_normal()
+                            .font_family(self.mono_font())
+                            .text_size(px(11.0))
+                            .text_color(text_color)
+                            .child(self.styled_diff_text(view, cell)),
+                    )
+            }
+        };
+        self.outline_diff_row(row, view.active_hunk_edges(index))
+            .into_any_element()
+    }
+
+    fn wrapped_split_half(
+        &self,
+        view: &DiffView,
+        cell: Option<&crate::diff_split::DiffCell>,
+    ) -> Div {
+        use crate::diff_split::CellKind;
+        let Some(cell) = cell else {
+            return div().flex_1().h_full().bg(self.theme.bg_panel.opacity(0.4));
+        };
+        let (marker, color, background) = match cell.kind {
+            CellKind::Addition => ("+", self.theme.green, self.theme.tint_added()),
+            CellKind::Deletion => ("-", self.theme.red, self.theme.tint_removed()),
+            CellKind::Context => (" ", self.theme.text_secondary, gpui::transparent_black()),
+        };
+        div()
+            .flex_1()
+            .min_w(px(1.0))
+            .h_full()
+            .flex()
+            .items_start()
+            .bg(background)
+            .child(div().w(px(2.0)).flex_none().h_full().bg(color))
+            .child(
+                div()
+                    .w(px(44.0))
+                    .flex_none()
+                    .pr(px(6.0))
+                    .font_family(self.mono_font())
+                    .text_size(px(10.5))
+                    .text_color(self.theme.text_faint)
+                    .child((cell.line + 1).to_string()),
+            )
+            .child(
+                div()
+                    .w(px(14.0))
+                    .flex_none()
+                    .font_family(self.mono_font())
+                    .text_size(px(11.0))
+                    .text_color(color)
+                    .child(marker),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(1.0))
+                    .whitespace_normal()
+                    .font_family(self.mono_font())
+                    .text_size(px(11.0))
+                    .text_color(color)
+                    .child(self.styled_diff_text(view, cell)),
             )
     }
 
@@ -1193,13 +2290,10 @@ impl SourcefourWindow {
         if preview::showing(view) {
             return 0;
         }
-        match (&view.content, view.mode) {
-            (Some(DiffContent::Text { .. }), DiffMode::Split) => {
-                view.split.as_ref().map_or(0, Vec::len)
-            }
-            (Some(DiffContent::Text { lines }), DiffMode::Unified) => lines.len(),
-            _ => 0,
+        if self.settings.diff.wrap {
+            return 0;
         }
+        usize::from(matches!(view.content, Some(DiffContent::Text(_)))) * view.rows().len()
     }
 
     /// A draggable scrollbar for scrubbing through large diffs.
@@ -1283,16 +2377,74 @@ impl SourcefourWindow {
             .child(message.into())
     }
 
-    /// One rendered diff line: numbers, marker, and tinted content.
-    pub(super) fn diff_line_row(&self, line: &DiffLine) -> Div {
-        let (marker, text_color, background) = match line.kind {
-            DiffLineKind::Addition => ("+", self.theme.green, Some(self.theme.tint_added())),
-            DiffLineKind::Deletion => ("-", self.theme.red, Some(self.theme.tint_removed())),
-            DiffLineKind::Hunk => ("", self.theme.accent, Some(self.theme.bg_hover)),
-            DiffLineKind::Meta | DiffLineKind::Marker => ("", self.theme.text_faint, None),
-            DiffLineKind::Context => (" ", self.theme.text_secondary, None),
+    fn diff_banner(&self, label: String, gap: bool) -> Div {
+        div()
+            .h(px(self.diff_row_height()))
+            .w_full()
+            .flex()
+            .items_center()
+            .px(px(10.0))
+            .bg(if gap {
+                self.theme.bg_panel
+            } else {
+                self.theme.bg_hover
+            })
+            .font_family(self.mono_font())
+            .text_size(px(11.0))
+            .text_color(if gap {
+                self.theme.text_faint
+            } else {
+                self.theme.accent
+            })
+            .child(label)
+    }
+
+    fn outline_diff_row<R: gpui::Styled>(&self, row: R, edges: HunkEdges) -> R {
+        if !edges.active {
+            return row;
+        }
+        let row = row.border_l_1().border_r_1();
+        let row = if edges.top { row.border_t_1() } else { row };
+        let row = if edges.bottom { row.border_b_1() } else { row };
+        row.border_color(self.theme.active_hunk_border())
+    }
+
+    /// One rendered unified row, resolved lazily from source indices.
+    pub(super) fn diff_line_row(
+        &self,
+        view: &DiffView,
+        row_index: usize,
+        row: &crate::diff_split::DiffRow,
+        cx: &mut gpui::Context<Self>,
+    ) -> gpui::AnyElement {
+        use crate::diff_split::{CellKind, DiffRow};
+        let DiffRow::Line { left, right } = row else {
+            let row = match row {
+                DiffRow::Hunk {
+                    old_lines,
+                    new_lines,
+                } => self.diff_banner(hunk_label(old_lines, new_lines), false),
+                DiffRow::Gap {
+                    old_lines,
+                    new_lines,
+                } => self.diff_banner(gap_label(old_lines, new_lines), true),
+                DiffRow::Marker { side } => self.diff_banner(eof_marker_label(*side), true),
+                DiffRow::Line { .. } => unreachable!(),
+            };
+            return self
+                .outline_diff_row(row, view.active_hunk_edges(row_index))
+                .into_any_element();
         };
-        let number = |value: Option<u32>| {
+        let cell = right
+            .as_ref()
+            .or(left.as_ref())
+            .expect("line rows have a side");
+        let (marker, text_color, background) = match cell.kind {
+            CellKind::Addition => ("+", self.theme.green, Some(self.theme.tint_added())),
+            CellKind::Deletion => ("-", self.theme.red, Some(self.theme.tint_removed())),
+            CellKind::Context => (" ", self.theme.text_secondary, None),
+        };
+        let number = |value: Option<usize>| {
             div()
                 .w(px(44.0))
                 .flex_none()
@@ -1300,24 +2452,42 @@ impl SourcefourWindow {
                 .font_family(self.mono_font())
                 .text_size(px(10.5))
                 .text_color(self.theme.text_faint)
-                .child(value.map_or_else(String::new, |value| value.to_string()))
+                .child(value.map_or_else(String::new, |value| (value + 1).to_string()))
         };
-        // The gutter rule pauses on hunk headers, which read as full-width
-        // banners rather than numbered lines.
-        let rule = if matches!(line.kind, DiffLineKind::Hunk) {
-            gpui::transparent_black()
-        } else {
-            self.theme.gutter_rule()
+        let selected = view
+            .selection
+            .is_some_and(|selection| selection.contains(cell));
+        let coordinate = DiffCoordinate {
+            side: cell.side,
+            line: cell.line,
+            byte_offset: None,
         };
-        div()
+        let row = div()
+            .id(("unified-diff-cell", cell_key(cell)))
             .h(px(self.diff_row_height()))
             .w_full()
             .flex()
             .items_center()
-            .when_some(background, gpui::Styled::bg)
-            .child(number(line.old_line))
-            .child(number(line.new_line))
-            .child(div().w(px(1.0)).flex_none().h_full().mr(px(6.0)).bg(rule))
+            .bg(if selected {
+                self.theme.accent.opacity(0.35)
+            } else {
+                background.unwrap_or(gpui::transparent_black())
+            })
+            .cursor_pointer()
+            .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
+                this.select_diff_line(coordinate, event.modifiers().shift, cx);
+            }))
+            .child(div().w(px(2.0)).flex_none().h_full().bg(text_color))
+            .child(number(left.as_ref().map(|cell| cell.line)))
+            .child(number(right.as_ref().map(|cell| cell.line)))
+            .child(
+                div()
+                    .w(px(1.0))
+                    .flex_none()
+                    .h_full()
+                    .mr(px(6.0))
+                    .bg(self.theme.gutter_rule()),
+            )
             .child(
                 div()
                     .w(px(14.0))
@@ -1336,14 +2506,235 @@ impl SourcefourWindow {
                     .font_family(self.mono_font())
                     .text_size(px(11.0))
                     .text_color(text_color)
-                    .child(line.text.clone()),
-            )
+                    .child(self.styled_diff_text(view, cell)),
+            );
+        self.outline_diff_row(row, view.active_hunk_edges(row_index))
+            .into_any_element()
     }
+}
+
+fn cell_text<'a>(diff: Option<&'a TextDiff>, cell: &crate::diff_split::DiffCell) -> &'a str {
+    let side = match cell.side {
+        DiffSide::Old => diff.and_then(|diff| diff.old.as_ref()),
+        DiffSide::New => diff.and_then(|diff| diff.new.as_ref()),
+    };
+    side.and_then(|side| side.line(cell.line))
+        .unwrap_or_default()
+}
+
+fn hunk_label(old_lines: &Range<usize>, new_lines: &Range<usize>) -> String {
+    format!(
+        "@@ -{} +{} @@",
+        source_range_label(old_lines),
+        source_range_label(new_lines)
+    )
+}
+
+fn source_range_label(lines: &Range<usize>) -> String {
+    if lines.is_empty() {
+        String::from("0,0")
+    } else {
+        format!("{},{}", lines.start + 1, lines.len())
+    }
+}
+
+fn gap_label(old_lines: &Range<usize>, new_lines: &Range<usize>) -> String {
+    let hidden = old_lines.len().max(new_lines.len());
+    format!("⋯ {hidden} unchanged lines")
+}
+
+fn eof_marker_label(side: DiffSide) -> String {
+    let side = match side {
+        DiffSide::Old => "old",
+        DiffSide::New => "new",
+    };
+    format!("\\ No newline at end of file ({side})")
+}
+
+fn offset_index(index: usize, delta: isize, len: usize) -> usize {
+    index
+        .saturating_add_signed(delta)
+        .min(len.saturating_sub(1))
+}
+
+fn cell_key(cell: &crate::diff_split::DiffCell) -> usize {
+    cell_coordinate_key(DiffCoordinate {
+        side: cell.side,
+        line: cell.line,
+        byte_offset: None,
+    })
+}
+
+fn cell_coordinate_key(coordinate: DiffCoordinate) -> usize {
+    coordinate.line.saturating_mul(2)
+        + match coordinate.side {
+            DiffSide::Old => 0,
+            DiffSide::New => 1,
+        }
+}
+
+fn visible_whitespace(text: &str, tab_width: usize) -> String {
+    let trailing = text.len() - text.trim_end_matches(' ').len();
+    let body_end = text.len() - trailing;
+    let mut output = String::new();
+    let mut column = 0;
+    for (offset, character) in text.char_indices() {
+        if offset >= body_end && character == ' ' {
+            output.push('·');
+            column += 1;
+        } else if character == '\t' {
+            output.push('→');
+            let spaces = tab_width - column % tab_width;
+            output.extend(std::iter::repeat_n(' ', spaces.saturating_sub(1)));
+            column += spaces;
+        } else {
+            output.push(character);
+            column += 1;
+        }
+    }
+    output
+}
+
+fn diff_build_probe(started: std::time::Instant, view: &DiffView, wrapped: bool) {
+    if std::env::var_os("SOURCEFOUR_FRAME_LOG").is_none() {
+        return;
+    }
+    eprintln!(
+        "diff-build-ms {:.3} rows={} hunks={} mode={} wrapped={wrapped}",
+        started.elapsed().as_secs_f64() * 1000.0,
+        view.rows().len(),
+        view.hunk_rows().len(),
+        view.mode.name(),
+    );
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn empty_view() -> DiffView {
+        DiffView::for_working_tree(
+            DiffPaths::same(RepoPath(b"src/main.rs".to_vec())),
+            false,
+            ChangeKind::Modified,
+            Arc::from([]),
+            0,
+            DiffMode::Unified,
+        )
+    }
+
+    #[test]
+    fn diff_construction_derives_its_title_from_the_origin() {
+        let view = empty_view();
+
+        assert_eq!(view.title, "src/main.rs");
+        assert!((view.slider - 0.5).abs() < f32::EPSILON);
+        assert!(view.content.is_none());
+    }
+
+    #[test]
+    fn replacing_content_clears_derived_and_interaction_state() {
+        let mut view = empty_view();
+        view.current_hunk = 8;
+        view.selection = Some(DiffSelection {
+            anchor: DiffCoordinate {
+                side: DiffSide::New,
+                line: 2,
+                byte_offset: None,
+            },
+            head: DiffCoordinate {
+                side: DiffSide::New,
+                line: 4,
+                byte_offset: None,
+            },
+        });
+        view.highlight_message = Some("old enrichment");
+        view.unified = Some(Vec::new());
+        view.split = Some(Vec::new());
+
+        view.replace_content(DiffContent::Binary {
+            message: "Binary files differ".to_owned(),
+        });
+
+        assert_eq!(view.current_hunk, 0);
+        assert!(view.selection.is_none());
+        assert!(view.highlight_message.is_none());
+        assert!(view.unified.is_none());
+        assert!(view.split.is_none());
+    }
+
+    #[test]
+    fn context_changes_clear_layout_dependent_state() {
+        let mut view = empty_view();
+        view.current_hunk = 3;
+        view.selection = Some(DiffSelection {
+            anchor: DiffCoordinate {
+                side: DiffSide::Old,
+                line: 1,
+                byte_offset: None,
+            },
+            head: DiffCoordinate {
+                side: DiffSide::Old,
+                line: 1,
+                byte_offset: None,
+            },
+        });
+
+        view.toggle_full_context();
+
+        assert!(view.full_context);
+        assert_eq!(view.current_hunk, 0);
+        assert!(view.selection.is_none());
+        assert!(view.wrap_list.is_none());
+    }
+
+    #[test]
+    fn the_active_hunk_outline_spans_rows_until_the_next_gap() {
+        let mut view = empty_view();
+        view.replace_content(crate::demo::Scene::Diff.content());
+        let hunks = view.hunk_rows();
+        assert!(hunks.len() > 1, "the demo diff must exercise navigation");
+        let first_end = view.rows()[hunks[0] + 1..]
+            .iter()
+            .position(|row| {
+                matches!(
+                    row,
+                    crate::diff_split::DiffRow::Hunk { .. }
+                        | crate::diff_split::DiffRow::Gap { .. }
+                )
+            })
+            .map_or(view.rows().len(), |offset| hunks[0] + 1 + offset);
+
+        assert_eq!(
+            view.active_hunk_edges(hunks[0]),
+            HunkEdges {
+                active: true,
+                top: true,
+                bottom: false,
+            }
+        );
+        assert!(view.active_hunk_edges(hunks[0] + 1).active);
+        assert!(view.active_hunk_edges(first_end - 1).bottom);
+        assert_eq!(view.active_hunk_edges(first_end), HunkEdges::default());
+        assert_eq!(view.active_hunk_edges(hunks[1]), HunkEdges::default());
+
+        view.current_hunk = 1;
+        assert_eq!(view.active_hunk_edges(hunks[0]), HunkEdges::default());
+        assert!(view.active_hunk_edges(hunks[1]).top);
+    }
+
+    #[test]
+    fn whitespace_markers_expand_tabs_and_mark_only_trailing_spaces() {
+        assert_eq!(visible_whitespace("\tvalue  ", 4), "→   value··");
+        assert_eq!(visible_whitespace("a b", 4), "a b");
+    }
+
+    #[test]
+    fn bounded_navigation_does_not_wrap() {
+        assert_eq!(offset_index(0, -1, 3), 0);
+        assert_eq!(offset_index(1, 1, 3), 2);
+        assert_eq!(offset_index(2, 1, 3), 2);
+    }
 
     #[test]
     fn a_duration_grows_an_hours_field_only_when_it_has_one() {

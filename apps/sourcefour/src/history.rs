@@ -63,6 +63,26 @@ pub(crate) struct HistoryState {
 }
 
 impl HistoryState {
+    /// Applies the latest working-tree summary and optionally gives a dirty
+    /// tree startup selection priority over the first loaded commit.
+    ///
+    /// Returns whether the selection changed, so the view can refresh the
+    /// corresponding details without coupling this data model to GPUI.
+    pub(crate) fn apply_working_tree(
+        &mut self,
+        summary: Option<WorkingTreeSummary>,
+        select_when_dirty: bool,
+    ) -> bool {
+        let previous = self.selected;
+        self.working_tree = summary;
+        if select_when_dirty && self.working_tree.is_some() {
+            self.selected = Some(Selection::WorkingTree);
+        } else if self.selected == Some(Selection::WorkingTree) && self.working_tree.is_none() {
+            self.selected = self.row_at(0).map(|row| Selection::Commit(row.oid));
+        }
+        self.selected != previous
+    }
+
     /// Appends a batch, keeping rows and graph rows the same length.
     ///
     /// The two vectors are indexed together by the renderer, so a mismatch
@@ -622,6 +642,29 @@ mod tests {
         assert_eq!(state.selected, Some(Selection::Commit(oid(0))));
         assert_eq!(state.selected_commit(), Some(oid(0)));
         assert_eq!(state.selected_index(), Some(0));
+    }
+
+    #[test]
+    fn dirty_startup_selects_the_working_tree_in_either_completion_order() {
+        let mut status_first = HistoryState::default();
+        assert!(status_first.apply_working_tree(Some(summary(1, 2)), true));
+        status_first.extend(vec![row(0)], vec![graph_row()], false);
+        assert_eq!(status_first.selected, Some(Selection::WorkingTree));
+
+        let mut history_first = loaded(1);
+        assert!(history_first.apply_working_tree(Some(summary(1, 2)), true));
+        assert_eq!(history_first.selected, Some(Selection::WorkingTree));
+    }
+
+    #[test]
+    fn clean_startup_and_later_refreshes_preserve_commit_selection() {
+        let mut state = loaded(2);
+        state.select_index(1);
+
+        assert!(!state.apply_working_tree(None, true));
+        assert_eq!(state.selected_commit(), Some(oid(1)));
+        assert!(!state.apply_working_tree(Some(summary(0, 1)), false));
+        assert_eq!(state.selected_commit(), Some(oid(1)));
     }
 
     #[test]

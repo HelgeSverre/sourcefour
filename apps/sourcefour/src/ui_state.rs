@@ -37,6 +37,8 @@ pub(crate) struct UiState {
     /// Section names in display order; ignored unless it names all sections.
     pub(crate) section_order: Option<Vec<String>>,
     pub(crate) collapsed_sections: Vec<String>,
+    /// Slash-delimited local-branch folder paths that are collapsed.
+    pub(crate) collapsed_branch_folders: Vec<String>,
     /// "unified" or "split".
     pub(crate) diff_mode: Option<String>,
     pub(crate) details_collapsed: bool,
@@ -102,6 +104,7 @@ mod tests {
                 String::from("branches"),
             ]),
             collapsed_sections: vec![String::from("branches")],
+            collapsed_branch_folders: vec![String::from("feature/auth")],
             diff_mode: Some(String::from("split")),
             details_collapsed: true,
         };
@@ -139,6 +142,7 @@ mod tests {
 
         assert_eq!(loaded.sidebar_width, Some(250.0));
         assert_eq!(loaded.collapsed_sections, vec![String::from("remotes")]);
+        assert!(loaded.collapsed_branch_folders.is_empty());
         assert_eq!(loaded.section_order, None, "missing fields default");
         Ok(())
     }

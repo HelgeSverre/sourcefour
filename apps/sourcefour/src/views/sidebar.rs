@@ -5,7 +5,11 @@ use gpui::{
     Div, FontWeight, IntoElement, Render, StatefulInteractiveElement, Window, div, prelude::*, px,
     svg,
 };
-use sourcefour_model::{AheadBehindState, HeadSnapshot, RepoSnapshot, WorktreeAccessibility};
+use sourcefour_model::{
+    AheadBehindState, BranchSnapshot, HeadSnapshot, RepoSnapshot, WorktreeAccessibility,
+};
+
+use std::collections::BTreeMap;
 
 use crate::{
     history::{is_scoped_to, toggled_scope},
@@ -61,6 +65,35 @@ struct SectionDrag(SidebarSection);
 struct SectionDragPreview {
     title: &'static str,
     theme: Theme,
+}
+
+#[derive(Debug, Default)]
+struct BranchTree<'a> {
+    branch: Option<&'a BranchSnapshot>,
+    children: BTreeMap<&'a str, BranchTree<'a>>,
+    path: String,
+}
+
+impl<'a> BranchTree<'a> {
+    fn from_branches(branches: &'a [BranchSnapshot]) -> Self {
+        let mut root = Self::default();
+        for branch in branches {
+            let mut node = &mut root;
+            let mut path = String::new();
+            for segment in branch.short_name.split('/') {
+                if !path.is_empty() {
+                    path.push('/');
+                }
+                path.push_str(segment);
+                node = node.children.entry(segment).or_insert_with(|| Self {
+                    path: path.clone(),
+                    ..Self::default()
+                });
+            }
+            node.branch = Some(branch);
+        }
+        root
+    }
 }
 
 impl Render for SectionDragPreview {
@@ -210,6 +243,7 @@ fn disclosure(theme: &Theme, expanded: bool) -> Div {
     };
     div()
         .size(px(12.0))
+        .flex_none()
         .flex()
         .items_center()
         .justify_center()
@@ -220,7 +254,20 @@ fn branch_marker(theme: &Theme) -> gpui::Svg {
     svg()
         .path("icons/git-branch.svg")
         .size(px(12.0))
+        .flex_none()
         .text_color(theme.text_faint)
+}
+
+fn folder_marker(theme: &Theme) -> gpui::Svg {
+    svg()
+        .path("icons/folder.svg")
+        .size(px(12.0))
+        .flex_none()
+        .text_color(theme.text_faint)
+}
+
+fn branch_indent(depth: usize) -> f32 {
+    15.0 + f32::from(u16::try_from(depth).unwrap_or(u16::MAX)) * 16.0
 }
 
 fn remote_marker(theme: &Theme) -> gpui::Svg {
@@ -300,6 +347,7 @@ impl SourcefourWindow {
         snapshot: &RepoSnapshot,
         cx: &mut gpui::Context<Self>,
     ) -> gpui::Stateful<Div> {
+        let branch_tree = BranchTree::from_branches(&snapshot.local_branches);
         let mut root = div()
             .w(px(self.panels.sidebar))
             .flex_none()
@@ -333,12 +381,7 @@ impl SourcefourWindow {
                         cx,
                     ))
                     .when(self.sections.expanded(section), |this| {
-                        this.children(
-                            snapshot
-                                .local_branches
-                                .iter()
-                                .map(|branch| self.branch_row(branch, cx)),
-                        )
+                        this.children(self.branch_tree_rows(&branch_tree, 0, cx))
                     }),
                 // The prototype counts remotes here, not their branches.
                 SidebarSection::Remotes => root
@@ -451,7 +494,9 @@ impl SourcefourWindow {
 
     pub(super) fn branch_row(
         &self,
-        branch: &sourcefour_model::BranchSnapshot,
+        branch: &BranchSnapshot,
+        label: impl Into<gpui::SharedString>,
+        depth: usize,
         cx: &mut gpui::Context<Self>,
     ) -> gpui::Stateful<Div> {
         let scoped = is_scoped_to(self.history.scope.as_ref(), &branch.full_name);
@@ -463,7 +508,8 @@ impl SourcefourWindow {
             .flex_none()
             .flex()
             .items_center()
-            .px(px(15.0))
+            .pl(px(branch_indent(depth)))
+            .pr(px(15.0))
             .gap(px(7.0))
             .cursor_pointer()
             .hover(|style| style.bg(self.theme.bg_hover))
@@ -484,7 +530,7 @@ impl SourcefourWindow {
                 self.theme.text_secondary
             })
             .child(branch_marker(&self.theme))
-            .child(branch.short_name.clone())
+            .child(label.into())
             .children(self.pr_chip(&branch.short_name))
             .child(div().flex_grow())
             .children(ahead_behind_text(branch.ahead_behind).map(|text| {
@@ -492,6 +538,78 @@ impl SourcefourWindow {
                     .text_size(px(10.5))
                     .text_color(self.theme.accent)
                     .child(text)
+            }))
+    }
+
+    fn branch_tree_rows(
+        &self,
+        tree: &BranchTree<'_>,
+        depth: usize,
+        cx: &mut gpui::Context<Self>,
+    ) -> Vec<gpui::AnyElement> {
+        let mut rows = Vec::new();
+        for (&segment, node) in &tree.children {
+            if node.children.is_empty() {
+                if let Some(branch) = node.branch {
+                    rows.push(
+                        self.branch_row(branch, segment.to_owned(), depth, cx)
+                            .into_any_element(),
+                    );
+                }
+                continue;
+            }
+
+            let expanded = !self.collapsed_branch_folders.contains(&node.path);
+            rows.push(
+                self.branch_folder_row(segment, &node.path, depth, expanded, cx)
+                    .into_any_element(),
+            );
+            if !expanded {
+                continue;
+            }
+            if let Some(branch) = node.branch {
+                rows.push(
+                    self.branch_row(branch, branch.short_name.clone(), depth + 1, cx)
+                        .into_any_element(),
+                );
+            }
+            rows.extend(self.branch_tree_rows(node, depth + 1, cx));
+        }
+        rows
+    }
+
+    fn branch_folder_row(
+        &self,
+        label: &str,
+        path: &str,
+        depth: usize,
+        expanded: bool,
+        cx: &mut gpui::Context<Self>,
+    ) -> gpui::Stateful<Div> {
+        let path = path.to_owned();
+        div()
+            .id(gpui::SharedString::from(format!("branch-folder:{path}")))
+            .h(px(26.0))
+            .flex_none()
+            .flex()
+            .items_center()
+            .pl(px(branch_indent(depth)))
+            .pr(px(15.0))
+            .gap(px(7.0))
+            .cursor_pointer()
+            .hover(|style| style.bg(self.theme.bg_hover))
+            .text_size(px(12.0))
+            .font_weight(FontWeight::MEDIUM)
+            .text_color(self.theme.text_secondary)
+            .child(disclosure(&self.theme, expanded))
+            .child(folder_marker(&self.theme))
+            .child(label.to_owned())
+            .on_click(cx.listener(move |this, _, _, cx| {
+                if !this.collapsed_branch_folders.remove(&path) {
+                    this.collapsed_branch_folders.insert(path.clone());
+                }
+                this.persist_ui_state(cx);
+                cx.notify();
             }))
     }
 
@@ -571,6 +689,63 @@ mod tests {
     use sourcefour_model::{AheadBehindState, Oid};
 
     use super::*;
+
+    fn branch(short_name: &str) -> BranchSnapshot {
+        BranchSnapshot {
+            full_name: format!("refs/heads/{short_name}"),
+            short_name: short_name.to_owned(),
+            tip: Oid::sha1([0; 20]),
+            is_current: false,
+            upstream: None,
+            ahead_behind: AheadBehindState::Unavailable,
+            checked_out_in: None,
+        }
+    }
+
+    #[test]
+    fn branches_form_a_recursive_alphabetical_tree() {
+        let branches = [
+            branch("main"),
+            branch("feature/zebra"),
+            branch("feature/auth/login"),
+            branch("fix/crash"),
+        ];
+
+        let tree = BranchTree::from_branches(&branches);
+        assert_eq!(
+            tree.children.keys().copied().collect::<Vec<_>>(),
+            ["feature", "fix", "main"]
+        );
+        let feature = &tree.children["feature"];
+        assert_eq!(feature.path, "feature");
+        assert_eq!(
+            feature.children.keys().copied().collect::<Vec<_>>(),
+            ["auth", "zebra"]
+        );
+        assert_eq!(
+            feature.children["auth"].children["login"].path,
+            "feature/auth/login"
+        );
+    }
+
+    #[test]
+    fn a_branch_can_also_be_a_folder_prefix() {
+        let branches = [branch("feature"), branch("feature/login")];
+
+        let tree = BranchTree::from_branches(&branches);
+        let feature = &tree.children["feature"];
+
+        assert_eq!(
+            feature.branch.map(|branch| branch.short_name.as_str()),
+            Some("feature")
+        );
+        assert_eq!(
+            feature.children["login"]
+                .branch
+                .map(|branch| branch.short_name.as_str()),
+            Some("feature/login")
+        );
+    }
 
     #[test]
     fn sidebar_sections_start_expanded_and_toggle_independently() {

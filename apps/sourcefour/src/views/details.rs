@@ -368,14 +368,14 @@ impl SourcefourWindow {
                     .child(
                         div()
                             .mt(px(6.0))
-                            .h(px(30.0))
                             .flex()
-                            .items_center()
                             .px(px(10.0))
+                            .py(px(8.0))
                             .rounded(px(6.0))
                             .border_1()
                             .border_color(self.theme.border_strong)
                             .bg(self.theme.bg_list)
+                            .overflow_hidden()
                             .text_size(px(12.0))
                             .text_color(self.theme.text_primary)
                             .child(self.commit_input.clone()),
@@ -431,7 +431,7 @@ impl SourcefourWindow {
         };
         let reason = match (staged, summary_empty) {
             (0, _) => Some("Nothing staged yet"),
-            (_, true) => Some("Write a summary line"),
+            (_, true) => Some("Write a commit message"),
             _ => None,
         };
         div()

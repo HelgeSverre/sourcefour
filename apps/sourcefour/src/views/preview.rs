@@ -257,7 +257,7 @@ pub(super) enum PreviewImage {
 /// Whether the open diff could be previewed: a Markdown path whose diff came
 /// back as text. Nothing else has a renderer yet.
 pub(super) fn applies(view: &DiffView) -> bool {
-    matches!(view.content, Some(DiffContent::Text { .. }))
+    matches!(view.content, Some(DiffContent::Text(_)))
         && DocumentKind::detect(&view.origin.path().0) == Some(DocumentKind::Markdown)
 }
 
@@ -268,14 +268,29 @@ pub(super) fn showing(view: &DiffView) -> bool {
 
 /// The new side of `origin`: the commit's own blob, the staged blob for a
 /// staged working-tree entry, the file on disk otherwise.
-fn doc_source(origin: &DiffOrigin) -> DocSource {
+fn doc_source(origin: &DiffOrigin) -> Option<DocSource> {
     match origin {
-        DiffOrigin::Commit(request) => DocSource::Commit {
-            oid: request.oid,
-            path: request.path.clone(),
-        },
-        DiffOrigin::WorkingTree { path, staged: true } => DocSource::Index { path: path.clone() },
-        DiffOrigin::WorkingTree { path, .. } => DocSource::Worktree { path: path.clone() },
+        DiffOrigin::Commit(request) => {
+            request
+                .paths
+                .new_path()
+                .cloned()
+                .map(|path| DocSource::Commit {
+                    oid: request.oid,
+                    path,
+                })
+        }
+        DiffOrigin::WorkingTree {
+            paths,
+            staged: true,
+        } => paths
+            .new_path()
+            .cloned()
+            .map(|path| DocSource::Index { path }),
+        DiffOrigin::WorkingTree { paths, .. } => paths
+            .new_path()
+            .cloned()
+            .map(|path| DocSource::Worktree { path }),
     }
 }
 
@@ -289,18 +304,21 @@ fn old_doc_source(
 ) -> Option<DocSource> {
     match origin {
         DiffOrigin::Commit(request) => {
-            sourcefour_git::parent_commit_oid(location, request.oid, request.parent).map(|oid| {
-                DocSource::Commit {
-                    oid,
-                    path: request.path.clone(),
-                }
-            })
+            let path = request.paths.old_path()?.clone();
+            sourcefour_git::parent_commit_oid(location, request.oid, request.parent)
+                .map(|oid| DocSource::Commit { oid, path })
         }
-        DiffOrigin::WorkingTree { path, staged: true } => head.map(|oid| DocSource::Commit {
-            oid,
-            path: path.clone(),
-        }),
-        DiffOrigin::WorkingTree { path, .. } => Some(DocSource::Index { path: path.clone() }),
+        DiffOrigin::WorkingTree {
+            paths,
+            staged: true,
+        } => {
+            let path = paths.old_path()?.clone();
+            head.map(|oid| DocSource::Commit { oid, path })
+        }
+        DiffOrigin::WorkingTree { paths, .. } => paths
+            .old_path()
+            .cloned()
+            .map(|path| DocSource::Index { path }),
     }
 }
 
@@ -337,7 +355,7 @@ fn load(
             old_doc_source(location, origin, head).as_ref(),
             &path,
         ),
-        load_side(location, Some(&doc_source(origin)), &path),
+        load_side(location, doc_source(origin).as_ref(), &path),
     )
 }
 
@@ -1173,7 +1191,7 @@ impl SourcefourWindow {
 mod tests {
     use gpui::{FontWeight, Hsla, TextRun};
     use sourcefour_doc::{DocBlockKind, DocSpan};
-    use sourcefour_model::{DiffParent, FileDiffRequest, Oid, RepoPath};
+    use sourcefour_model::{DiffParent, DiffPaths, FileDiffRequest, Oid, RepoPath};
 
     use crate::theme::Theme;
 
@@ -1415,13 +1433,13 @@ mod tests {
         let origin = DiffOrigin::Commit(FileDiffRequest {
             oid,
             parent: DiffParent::FirstParent,
-            path: path("README.md"),
+            paths: DiffPaths::same(path("README.md")),
         });
 
         assert!(
             matches!(
                 doc_source(&origin),
-                DocSource::Commit { oid: read, path: read_path }
+                Some(DocSource::Commit { oid: read, path: read_path })
                     if read == oid && read_path == path("README.md")
             ),
             "the preview must read the side the diff is showing"
@@ -1431,17 +1449,17 @@ mod tests {
     #[test]
     fn a_working_tree_diff_previews_the_side_that_was_clicked() {
         let origin = |staged| DiffOrigin::WorkingTree {
-            path: path("docs/notes.md"),
+            paths: DiffPaths::same(path("docs/notes.md")),
             staged,
         };
 
         assert!(matches!(
             doc_source(&origin(true)),
-            DocSource::Index { path: read } if read == path("docs/notes.md")
+            Some(DocSource::Index { path: read }) if read == path("docs/notes.md")
         ));
         assert!(matches!(
             doc_source(&origin(false)),
-            DocSource::Worktree { path: read } if read == path("docs/notes.md")
+            Some(DocSource::Worktree { path: read }) if read == path("docs/notes.md")
         ));
     }
 

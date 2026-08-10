@@ -375,6 +375,7 @@ impl SourcefourWindow {
                 )
             })
             .on_click(cx.listener(move |this, _, _, cx| {
+                this.initial_selection_pending = false;
                 this.history.selected = Some(crate::history::Selection::Commit(oid));
                 this.load_selected_files(cx);
                 cx.notify();
