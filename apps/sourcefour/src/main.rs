@@ -2,6 +2,7 @@
 
 mod app;
 mod demo;
+mod diff_highlight;
 mod diff_split;
 mod graph_paint;
 mod history;

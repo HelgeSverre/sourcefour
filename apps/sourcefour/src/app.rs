@@ -165,9 +165,11 @@ pub(crate) fn run(request: &LaunchRequest) -> ExitCode {
 fn history_keymap() -> Vec<gpui::KeyBinding> {
     use crate::views::{
         CloseActionsRun, CloseDiff, CloseSettings, CopyPreviewSelection, FilterEnter, FilterEscape,
-        FocusDetails, FocusFilter, NextActionsJob, NextActionsStep, OpenSettings, PageDown, PageUp,
-        PrevActionsJob, PrevActionsStep, SelectFirstCommit, SelectLastLoadedCommit,
-        SelectNextCommit, SelectPreviousCommit, ToggleDetails,
+        FocusDetails, FocusFilter, NextActionsJob, NextActionsStep, NextDiffFile, NextDiffHunk,
+        NextDiffSwitcherResult, OpenDiffFileSwitcher, OpenSettings, PageDown, PageUp,
+        PrevActionsJob, PrevActionsStep, PrevDiffFile, PrevDiffHunk, PrevDiffSwitcherResult,
+        SelectFirstCommit, SelectLastLoadedCommit, SelectNextCommit, SelectPreviousCommit,
+        ShowSplitDiff, ShowUnifiedDiff, ToggleDetails, ToggleDiffWhitespace, ToggleDiffWrap,
     };
     vec![
         gpui::KeyBinding::new("down", SelectNextCommit, Some("History")),
@@ -184,6 +186,8 @@ fn history_keymap() -> Vec<gpui::KeyBinding> {
         gpui::KeyBinding::new("cmd-f", FocusFilter, None),
         gpui::KeyBinding::new("escape", FilterEscape, Some("FilterInput")),
         gpui::KeyBinding::new("enter", FilterEnter, Some("FilterInput")),
+        gpui::KeyBinding::new("down", NextDiffSwitcherResult, Some("FilterInput")),
+        gpui::KeyBinding::new("up", PrevDiffSwitcherResult, Some("FilterInput")),
         // A "History"-context binding fires from any focused descendant,
         // filter input included, unless something more specific to
         // "FilterInput" claims the same key first — escape and enter do that
@@ -195,8 +199,24 @@ fn history_keymap() -> Vec<gpui::KeyBinding> {
         // Space has the same flaw below: without this, a multi-word filter
         // query toggles the details pane instead of typing the space.
         gpui::KeyBinding::new("space", gpui::NoAction, Some("FilterInput")),
+        gpui::KeyBinding::new("j", gpui::NoAction, Some("MultilineInput")),
+        gpui::KeyBinding::new("k", gpui::NoAction, Some("MultilineInput")),
+        gpui::KeyBinding::new("space", gpui::NoAction, Some("MultilineInput")),
         gpui::KeyBinding::new("escape", CloseDiff, Some("Diff")),
         gpui::KeyBinding::new("cmd-c", CopyPreviewSelection, Some("Diff")),
+        gpui::KeyBinding::new("cmd-p", OpenDiffFileSwitcher, Some("Diff")),
+        gpui::KeyBinding::new("j", NextDiffHunk, Some("Diff")),
+        gpui::KeyBinding::new("k", PrevDiffHunk, Some("Diff")),
+        gpui::KeyBinding::new("down", NextDiffHunk, Some("Diff")),
+        gpui::KeyBinding::new("up", PrevDiffHunk, Some("Diff")),
+        gpui::KeyBinding::new("shift-j", NextDiffFile, Some("Diff")),
+        gpui::KeyBinding::new("shift-k", PrevDiffFile, Some("Diff")),
+        gpui::KeyBinding::new("right", NextDiffFile, Some("Diff")),
+        gpui::KeyBinding::new("left", PrevDiffFile, Some("Diff")),
+        gpui::KeyBinding::new("u", ShowUnifiedDiff, Some("Diff")),
+        gpui::KeyBinding::new("s", ShowSplitDiff, Some("Diff")),
+        gpui::KeyBinding::new("v", ToggleDiffWhitespace, Some("Diff")),
+        gpui::KeyBinding::new("w", ToggleDiffWrap, Some("Diff")),
         gpui::KeyBinding::new("space", ToggleDetails, Some("History")),
         gpui::KeyBinding::new("enter", FocusDetails, Some("History")),
         // Settings, the macOS way (§ settings overlay).
@@ -321,12 +341,15 @@ const ASSETS: &[(&str, &[u8])] = &[
     asset!("icons/archive.svg"),
     asset!("icons/arrow-down-to-line.svg"),
     asset!("icons/arrow-up-from-line.svg"),
+    asset!("icons/chevron-left.svg"),
+    asset!("icons/chevron-up.svg"),
     asset!("icons/chevron-down.svg"),
     asset!("icons/chevron-right.svg"),
     asset!("icons/cloud-download.svg"),
     asset!("icons/git-branch.svg"),
     asset!("icons/git-commit-horizontal.svg"),
     asset!("icons/git-merge.svg"),
+    asset!("icons/folder.svg"),
     asset!("icons/globe.svg"),
     asset!("icons/search.svg"),
     asset!("icons/settings.svg"),

@@ -537,7 +537,7 @@ pub enum RepoCommand {
     LoadNextHistoryBatch,
     LoadCommitDetail { oid: ObjectId },
     LoadCommitFiles { oid: ObjectId, parent: DiffParent },
-    LoadFileDiff { oid: ObjectId, parent: DiffParent, path: RepoPath },
+    LoadFileDiff { oid: ObjectId, parent: DiffParent, paths: DiffPaths },
     Fetch { remote: FetchTarget },
     CreateBranch { name: String, start: ObjectId, checkout: bool },
 }
@@ -850,14 +850,22 @@ Use gix tree changes and blob diff support for read-only diffs.
 Defaults:
 
 - Unified context: 3 lines.
-- No syntax highlighting in v1.
+- Show the plain semantic diff first, then add syntax and word-level intraline
+  highlighting from a background worker. Unknown languages stay plain.
+- Skip syntax enrichment above 5 MiB per side, 100,000 total lines, or a
+  10,000-byte line; never truncate the underlying text diff.
 - Respect text/binary detection.
-- Limit rendered diff to configurable safety thresholds, e.g. 20,000 lines or 5 MiB of formatted text.
-- Show “Diff too large — open with external tool” rather than freezing.
-- Rename detection may be disabled initially if it causes blob-heavy latency; present add/delete until performance is proven.
+- Virtualize all text rows with no default size cap. Explicit bounded callers
+  may still request a summary through `DiffLimits`.
+- Carry old and new paths separately so renames and copies read the correct
+  blob from each tree.
 - Normalize line endings only for display, never mutate content.
 
-The diff view should virtualize lines if large diffs are common. A simple scroll container is acceptable for the initial milestone with the safety cap.
+The reader provides unified and aligned split projections, collapsed context,
+previous/next file and hunk navigation, a searchable file switcher, selectable
+source lines, whitespace markers, synchronized horizontal scrolling, and an
+optional variable-height wrapped layout. Rich media and Markdown previews use
+the same file navigation but retain their specialized renderers.
 
 ### 6.12 Fetch operation
 
@@ -1630,4 +1638,3 @@ Primary references:
 - gix-traverse topological walker: https://docs.rs/gix-traverse/latest/gix_traverse/commit/
 - Git worktree manual: https://git-scm.com/docs/git-worktree
 - Git fetch manual: https://git-scm.com/docs/git-fetch
-

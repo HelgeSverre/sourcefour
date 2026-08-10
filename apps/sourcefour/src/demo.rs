@@ -434,11 +434,26 @@ impl Scene {
             Self::Preview => (PREVIEW_MARKDOWN_OLD, PREVIEW_MARKDOWN),
             _ => (SIDEBAR_BEFORE, SIDEBAR_AFTER),
         };
-        sourcefour_git::unified(
-            before.as_bytes(),
-            after.as_bytes(),
-            sourcefour_git::DiffLimits::default(),
-        )
+        let stress = std::env::var("SOURCEFOUR_DIFF_STRESS")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .filter(|repetitions| *repetitions > 1);
+        match stress {
+            Some(repetitions) if matches!(self, Self::Diff | Self::Split) => {
+                let before = before.repeat(repetitions);
+                let after = after.repeat(repetitions);
+                sourcefour_git::unified(
+                    before.as_bytes(),
+                    after.as_bytes(),
+                    sourcefour_git::DiffLimits::default(),
+                )
+            }
+            _ => sourcefour_git::unified(
+                before.as_bytes(),
+                after.as_bytes(),
+                sourcefour_git::DiffLimits::default(),
+            ),
+        }
     }
 }
 

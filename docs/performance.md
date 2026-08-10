@@ -91,6 +91,12 @@ top-level block). Same machine, toolchain, and warm-cache conditions as the
 release build, interactive session (not a quiet machine). Raw:
 `fixtures/stress/2026-08-05-preview-scroll.txt`.
 
+The text diff reader follows the same progressive rule: blob decoding and the
+Histogram line diff run off the UI thread, immutable source text is stored once,
+and unified/split rows contain only source indices. Syntax and intraline styles
+arrive as a second generation-checked result. Files above the enrichment
+thresholds remain fully readable as virtualized plain text.
+
 Exact command, per sample — `SOURCEFOUR_PREVIEW_STRESS=N` repeats the demo
 document N times on the new side, and the app quits itself in the first
 frame's callback, so one run is one process:
@@ -138,6 +144,22 @@ Raw samples: `fixtures/stress/2026-08-04-startup.txt`.
 The first frame paints the loading shell, so repository size does not move
 this number; the cost is window creation and the first GPUI/Metal frame.
 Improving p50 needs profiling inside that path, not app-level changes.
+
+## Run record — 2026-08-10 diff rendering
+
+The text-diff overlay was profiled with a deterministic repeated demo diff and
+opt-in probes around synchronous row projection and per-frame element
+construction. Release-mode raw samples and the exact command are recorded in
+`fixtures/stress/2026-08-10-diff-render.txt`.
+
+At 7,401 unified rows and 401 hunks, projection took 0.138 ms and measured
+element construction took 0.047–0.088 ms. Smaller 38-row and 1,851-row cases
+were correspondingly cheaper. Both paths remain far below the 16.7 ms frame
+budget, so proposed caches for hunk and widest-row scans were rejected: their
+invalidation state would cost more complexity than the measurements justify.
+
+The `SOURCEFOUR_DIFF_STRESS` fixture and `diff-project-ms` / `diff-build-ms`
+probes remain available under `SOURCEFOUR_FRAME_LOG=1` for future regressions.
 
 Frame instrumentation (`SOURCEFOUR_FRAME_LOG=1`) logs element-construction
 time over 16.7 ms per frame; it measures the app's share only — layout,

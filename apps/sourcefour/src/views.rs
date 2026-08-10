@@ -49,9 +49,15 @@ mod preview;
 mod sidebar;
 
 use branch_dialog::BranchDialog;
-use diff::{DiffMode, DiffOrigin, DiffView};
+use diff::{DiffMode, DiffView};
 use github::{Cached, GithubChecks};
 use sidebar::{SidebarSections, head_label};
+
+struct DiffCacheEntry {
+    request: sourcefour_model::FileDiffRequest,
+    diff: Arc<sourcefour_model::TextDiff>,
+    bytes: usize,
+}
 
 #[expect(
     clippy::struct_excessive_bools,
@@ -76,6 +82,8 @@ pub(crate) struct SourcefourWindow {
     cursor: Option<GixHistoryCursor>,
     theme: Theme,
     sections: SidebarSections,
+    /// Collapsed slash-delimited folders in the local branch tree.
+    collapsed_branch_folders: std::collections::HashSet<String>,
     panels: PanelSizes,
     /// The splitter a mouse drag is currently moving.
     /// The one drag a held mouse button performs; splitters and the diff
@@ -92,7 +100,9 @@ pub(crate) struct SourcefourWindow {
     /// The working tree's uncommitted state, when read (§6.14 limits how
     /// fresh it can be: reloads, activation, and operations refresh it).
     working_tree_status: Option<sourcefour_model::WorkingTreeStatus>,
-    /// The commit summary line being written.
+    /// Whether the first successful status read may choose the dirty tree.
+    initial_selection_pending: bool,
+    /// The commit message being written.
     commit_input: gpui::Entity<crate::text_input::TextInput>,
     /// Whether a commit is running; the button disables while one is.
     committing: bool,
@@ -104,8 +114,14 @@ pub(crate) struct SourcefourWindow {
     diff_view: Option<DiffView>,
     /// Token for the newest diff request.
     diff_request: u64,
+    /// Small session LRU for immutable commit text diffs.
+    diff_cache: std::collections::VecDeque<DiffCacheEntry>,
     /// Focus target while the diff overlay is open, so Escape closes it.
     diff_focus: FocusHandle,
+    /// Search field shown by the diff overlay's file switcher.
+    diff_file_input: gpui::Entity<crate::text_input::TextInput>,
+    diff_switcher_open: bool,
+    diff_switcher_selection: usize,
     /// Scroll position of the diff overlay's line list.
     diff_scroll: UniformListScrollHandle,
     /// The text one block of the rendered preview has selected, if any.
@@ -145,12 +161,19 @@ pub(crate) struct SourcefourWindow {
     actions: actions::ActionsState,
     /// Focus target while the Actions overlay is open, so Escape closes it.
     actions_focus: FocusHandle,
+    /// Scroll position of the overlay's virtualized job rail.
+    actions_jobs_scroll: UniformListScrollHandle,
     /// Scroll position of the overlay's log list.
     actions_log_scroll: UniformListScrollHandle,
+    /// Labels and bars share this scroll position in the expanded timeline.
+    actions_timeline_scroll: gpui::ScrollHandle,
+    actions_timeline_expanded: bool,
     /// Recent Actions workflow runs with their fetch time.
     github_runs: Option<Cached<Vec<sourcefour_model::WorkflowRun>>>,
     /// Token for the newest workflow-run load, so stale results drop.
     github_runs_request: u64,
+    /// Retires pending-only GitHub status polling loops.
+    github_status_poll: u64,
     /// Juxtapose area bounds captured at paint, for mapping mouse X.
     juxtapose_bounds: std::rc::Rc<std::cell::Cell<gpui::Bounds<gpui::Pixels>>>,
     /// The last chosen diff layout, persisted across launches.
@@ -189,6 +212,17 @@ actions!(
         FilterEnter,
         CloseDiff,
         CopyPreviewSelection,
+        NextDiffHunk,
+        PrevDiffHunk,
+        NextDiffFile,
+        PrevDiffFile,
+        ShowUnifiedDiff,
+        ShowSplitDiff,
+        ToggleDiffWhitespace,
+        ToggleDiffWrap,
+        OpenDiffFileSwitcher,
+        NextDiffSwitcherResult,
+        PrevDiffSwitcherResult,
         ToggleDetails,
         FocusDetails,
         OpenSettings,
@@ -323,6 +357,10 @@ fn usize_from_f32(value: f32) -> usize {
 }
 
 impl SourcefourWindow {
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the window constructor initializes one explicit field per view state"
+    )]
     pub(crate) fn new(
         launch: WindowLaunch,
         ui_state: &UiState,
@@ -346,6 +384,7 @@ impl SourcefourWindow {
             cursor: None,
             theme: Theme::dark(),
             sections: SidebarSections::default(),
+            collapsed_branch_folders: std::collections::HashSet::new(),
             panels: PanelSizes::default(),
             drag: None,
             startup_reported: false,
@@ -353,13 +392,21 @@ impl SourcefourWindow {
             files: None,
             files_for: None,
             working_tree_status: None,
-            commit_input: Self::plain_input("Summary of the change", cx),
+            initial_selection_pending: !launch.demo,
+            commit_input: cx.new(|cx| {
+                crate::text_input::TextInput::new("Describe the change", &Theme::dark(), cx)
+                    .multiline(4)
+            }),
             committing: false,
             status_request: 0,
             files_request: 0,
             diff_view: None,
             diff_request: 0,
+            diff_cache: std::collections::VecDeque::new(),
             diff_focus: cx.focus_handle(),
+            diff_file_input: Self::plain_input("Switch file…", cx),
+            diff_switcher_open: false,
+            diff_switcher_selection: 0,
             diff_scroll: UniformListScrollHandle::new(),
             preview_selection: None,
             preview_layouts: preview::PreviewLayouts::default(),
@@ -377,9 +424,13 @@ impl SourcefourWindow {
             github_states_request: 0,
             actions: actions::ActionsState::default(),
             actions_focus: cx.focus_handle(),
+            actions_jobs_scroll: UniformListScrollHandle::new(),
             actions_log_scroll: UniformListScrollHandle::new(),
+            actions_timeline_scroll: gpui::ScrollHandle::new(),
+            actions_timeline_expanded: false,
             github_runs: None,
             github_runs_request: 0,
+            github_status_poll: 0,
             token_input: Self::masked_token_input(cx),
             juxtapose_bounds: std::rc::Rc::default(),
             preferred_diff_mode: DiffMode::Unified,
@@ -395,6 +446,11 @@ impl SourcefourWindow {
             filter_input: Self::plain_input("Filter commits", cx),
         };
         Self::watch_filter(&window.filter_input, cx);
+        cx.observe(&window.diff_file_input, |this, _, cx| {
+            this.diff_switcher_selection = 0;
+            cx.notify();
+        })
+        .detach();
         window.apply_ui_state(ui_state);
         Self::watch_window_bounds(gpui_window, cx);
         // §4.6: relative dates refresh once a minute, never per frame.
@@ -419,6 +475,7 @@ impl SourcefourWindow {
             window.load_metadata(location.clone(), cx);
             Self::watch_metadata(location, cx);
         }
+        window.focus.focus(gpui_window);
         window
     }
 
@@ -727,6 +784,7 @@ impl SourcefourWindow {
 
     /// Moves the selection and keeps it visible.
     fn move_selection(&mut self, delta: isize, cx: &mut gpui::Context<Self>) {
+        self.initial_selection_pending = false;
         if let Some(index) = self.history.move_selection(delta) {
             self.list_scroll
                 .scroll_to_item(index, gpui::ScrollStrategy::Top);
@@ -737,6 +795,7 @@ impl SourcefourWindow {
 
     /// Selects one loaded row by index and keeps it visible.
     fn select_row(&mut self, index: usize, cx: &mut gpui::Context<Self>) {
+        self.initial_selection_pending = false;
         if let Some(index) = self.history.select_index(index) {
             self.list_scroll
                 .scroll_to_item(index, gpui::ScrollStrategy::Top);
@@ -765,7 +824,11 @@ impl SourcefourWindow {
                     return;
                 }
                 match status {
-                    Ok(status) => this.apply_working_tree_status(status),
+                    Ok(status) => {
+                        if this.apply_working_tree_status(status) {
+                            this.load_selected_files(cx);
+                        }
+                    }
                     Err(failure) => {
                         tracing::error!(%failure, "working tree status could not load");
                     }
@@ -777,22 +840,18 @@ impl SourcefourWindow {
         .detach();
     }
 
-    fn apply_working_tree_status(&mut self, status: sourcefour_model::WorkingTreeStatus) {
-        self.history.working_tree = (!status.is_clean()).then(|| status.summary());
-        // A tree that went clean under a working-tree selection falls back
-        // to the newest commit rather than pointing at a vanished row.
-        if self.history.selected == Some(crate::history::Selection::WorkingTree)
-            && self.history.working_tree.is_none()
-        {
-            self.history.selected = self
-                .history
-                .row_at(0)
-                .map(|row| crate::history::Selection::Commit(row.oid));
-        }
+    fn apply_working_tree_status(&mut self, status: sourcefour_model::WorkingTreeStatus) -> bool {
+        let select_when_dirty = self.initial_selection_pending;
+        self.initial_selection_pending = false;
+        let selection_changed = self.history.apply_working_tree(
+            (!status.is_clean()).then(|| status.summary()),
+            select_when_dirty,
+        );
         self.working_tree_status = Some(status);
+        selection_changed
     }
 
-    /// Runs `git commit` with the summary line, through the §10 runner:
+    /// Runs `git commit` with the message, through the §10 runner:
     /// hooks and signing apply, and a failure lands in the status bar with
     /// the hook's own words.
     pub(super) fn start_commit(&mut self, cx: &mut gpui::Context<Self>) {
@@ -882,6 +941,7 @@ impl SourcefourWindow {
 
     /// Selects the pinned working-tree row.
     pub(super) fn select_working_tree(&mut self, cx: &mut gpui::Context<Self>) {
+        self.initial_selection_pending = false;
         self.history.selected = Some(crate::history::Selection::WorkingTree);
         self.load_selected_files(cx);
         self.load_working_tree_status(cx);
@@ -1030,11 +1090,15 @@ impl SourcefourWindow {
         if self.demo {
             return;
         }
+        let mut collapsed_branch_folders: Vec<_> =
+            self.collapsed_branch_folders.iter().cloned().collect();
+        collapsed_branch_folders.sort();
         let state = crate::ui_state::UiState {
             window: self.window_state,
             sidebar_width: Some(self.panels.sidebar),
             graph_width: Some(self.panels.graph),
             details_height: Some(self.panels.details),
+            actions_timeline_height: Some(self.panels.actions_timeline),
             section_order: Some(
                 self.sections
                     .ordered()
@@ -1043,8 +1107,10 @@ impl SourcefourWindow {
                     .collect(),
             ),
             collapsed_sections: self.sections.collapsed_names(),
+            collapsed_branch_folders,
             diff_mode: Some(self.preferred_diff_mode.name().to_owned()),
             details_collapsed: self.details_collapsed,
+            actions_timeline_expanded: self.actions_timeline_expanded,
         };
         cx.background_executor()
             .spawn(async move { state.save() })
@@ -1072,42 +1138,50 @@ impl SourcefourWindow {
             }
             demo::Scene::Actions => {
                 self.actions.view = Some(actions::demo_view());
+                if std::env::var_os("SOURCEFOUR_ACTIONS_STRESS").is_some() {
+                    self.actions_timeline_expanded = true;
+                }
                 return;
             }
             demo::Scene::Split => DiffMode::Split,
             _ => DiffMode::Unified,
         };
         let preview = scene == demo::Scene::Preview;
-        let mut view = DiffView {
-            title: scene.file().to_owned(),
+        let path = sourcefour_model::RepoPath(scene.file().as_bytes().to_vec());
+        let files = Arc::from([sourcefour_model::ChangedFile {
+            old_path: Some(sourcefour_model::RepoPath(scene.file().as_bytes().to_vec())),
+            new_path: Some(sourcefour_model::RepoPath(scene.file().as_bytes().to_vec())),
             status: ChangeKind::Modified,
-            // The scenes have no repository behind them; the origin exists so
-            // the header can tell a document from a source file.
-            origin: DiffOrigin::WorkingTree {
-                path: sourcefour_model::RepoPath(scene.file().as_bytes().to_vec()),
-                staged: false,
-            },
-            content: Some(scene.content()),
+            additions: None,
+            deletions: None,
+            is_binary: false,
+        }]);
+        // The scenes have no repository behind them; the origin exists so the
+        // header can tell a document from a source file.
+        let mut view = DiffView::for_working_tree(
+            sourcefour_model::DiffPaths::same(path),
+            false,
+            ChangeKind::Modified,
+            files,
+            0,
             mode,
-            show_preview: preview,
-            // Seeded rather than loaded: a capture cannot wait on an async read.
-            preview: preview.then(|| preview::demo_state(cx)),
-            split: None,
-            before_image: None,
-            after_image: None,
-            slider: 0.5,
-        };
-        view.ensure_split();
-        view.ensure_images();
+        );
+        view.replace_content(scene.content());
+        view.show_preview = preview;
+        // Seeded rather than loaded: a capture cannot wait on an async read.
+        view.preview = preview.then(|| preview::demo_state(cx));
         self.diff_view = Some(view);
+        self.reset_diff_wrap_list(cx);
     }
 
     /// Applies everything the persisted interface state remembers.
     fn apply_ui_state(&mut self, state: &crate::ui_state::UiState) {
         self.sections.apply(state);
+        self.collapsed_branch_folders = state.collapsed_branch_folders.iter().cloned().collect();
         self.panels.apply(state);
         self.preferred_diff_mode = DiffMode::from_name(state.diff_mode.as_deref());
         self.details_collapsed = state.details_collapsed;
+        self.actions_timeline_expanded = state.actions_timeline_expanded;
     }
 
     /// One themed text input with a placeholder.
@@ -1205,6 +1279,10 @@ impl SourcefourWindow {
 
 impl SourcefourWindow {
     /// Registers every window-level action and drag handler on the root.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "all window action routing stays centralized and auditable"
+    )]
     fn root_actions(root: Div, cx: &mut gpui::Context<Self>) -> Div {
         root.on_action(cx.listener(|this, _: &SelectNextCommit, _, cx| {
             this.move_selection(1, cx);
@@ -1234,7 +1312,9 @@ impl SourcefourWindow {
             cx.notify();
         }))
         .on_action(cx.listener(|this, _: &FilterEscape, window, cx| {
-            if this.branch_dialog.is_some() {
+            if this.diff_switcher_open {
+                this.close_diff_file_switcher(window, cx);
+            } else if this.branch_dialog.is_some() {
                 this.branch_dialog = None;
                 this.focus.focus(window);
             } else if this.history.filter.is_empty() {
@@ -1247,7 +1327,9 @@ impl SourcefourWindow {
             cx.notify();
         }))
         .on_action(cx.listener(|this, _: &FilterEnter, window, cx| {
-            if this.branch_dialog.is_some() {
+            if this.diff_switcher_open {
+                this.open_selected_diff_file(window, cx);
+            } else if this.branch_dialog.is_some() {
                 this.submit_branch_dialog(window, cx);
             } else {
                 this.focus.focus(window);
@@ -1257,14 +1339,60 @@ impl SourcefourWindow {
         .on_action(cx.listener(|this, _: &CloseDiff, window, cx| {
             // Escape gives back the preview's selection first; the overlay
             // closes on the next one.
-            if this.clear_preview_selection() {
+            if this.clear_diff_selection() || this.clear_preview_selection() {
                 cx.notify();
             } else {
                 this.close_diff(window, cx);
             }
         }))
         .on_action(cx.listener(|this, _: &CopyPreviewSelection, _, cx| {
-            this.copy_preview_selection(cx);
+            if !this.copy_diff_selection(cx) {
+                this.copy_preview_selection(cx);
+            }
+        }))
+        .on_action(cx.listener(|this, _: &NextDiffHunk, _, cx| {
+            this.navigate_diff_hunk(1, cx);
+        }))
+        .on_action(cx.listener(|this, _: &PrevDiffHunk, _, cx| {
+            this.navigate_diff_hunk(-1, cx);
+        }))
+        .on_action(cx.listener(|this, _: &NextDiffFile, window, cx| {
+            this.navigate_diff_file(1, window, cx);
+        }))
+        .on_action(cx.listener(|this, _: &PrevDiffFile, window, cx| {
+            this.navigate_diff_file(-1, window, cx);
+        }))
+        .on_action(cx.listener(|this, _: &ShowUnifiedDiff, _, cx| {
+            this.set_diff_mode(DiffMode::Unified, cx);
+        }))
+        .on_action(cx.listener(|this, _: &ShowSplitDiff, _, cx| {
+            this.set_diff_mode(DiffMode::Split, cx);
+        }))
+        .on_action(cx.listener(|this, _: &ToggleDiffWhitespace, _, cx| {
+            let enabled = !this.settings.diff.show_whitespace;
+            this.update_settings(cx, |settings| settings.diff.show_whitespace = enabled);
+        }))
+        .on_action(cx.listener(|this, _: &ToggleDiffWrap, _, cx| {
+            let enabled = !this.settings.diff.wrap;
+            this.update_settings(cx, |settings| settings.diff.wrap = enabled);
+            this.reset_diff_wrap_list(cx);
+        }))
+        .on_action(cx.listener(|this, _: &OpenDiffFileSwitcher, window, cx| {
+            this.open_diff_file_switcher(window, cx);
+        }))
+        .on_action(cx.listener(|this, _: &NextDiffSwitcherResult, _, cx| {
+            if this.diff_switcher_open {
+                this.move_diff_switcher_selection(1, cx);
+            } else {
+                this.move_selection(1, cx);
+            }
+        }))
+        .on_action(cx.listener(|this, _: &PrevDiffSwitcherResult, _, cx| {
+            if this.diff_switcher_open {
+                this.move_diff_switcher_selection(-1, cx);
+            } else {
+                this.move_selection(-1, cx);
+            }
         }))
         .on_action(cx.listener(|this, _: &ToggleDetails, _, cx| {
             this.details_collapsed = !this.details_collapsed;
@@ -1393,6 +1521,7 @@ impl Render for SourcefourWindow {
             }
         }
         let frame_started = std::time::Instant::now();
+        self.apply_responsive_diff_mode(window.viewport_size().width.0, cx);
         let columns = ColumnVisibility::for_available_width(
             window.viewport_size().width.0 - self.panels.sidebar,
         );
@@ -1434,7 +1563,7 @@ impl Render for SourcefourWindow {
             .children(self.diff_overlay(cx))
             .children(self.branch_overlay(cx))
             .children(self.settings_overlay(cx))
-            .children(self.actions_overlay(cx));
+            .children(self.actions_overlay(window.viewport_size().height.0, cx));
         // §12.5 frame instrumentation: element construction only — layout,
         // paint, and GPU time happen inside gpui after this returns.
         if std::env::var_os("SOURCEFOUR_FRAME_LOG").is_some() {

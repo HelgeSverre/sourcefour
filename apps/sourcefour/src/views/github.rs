@@ -30,6 +30,13 @@ impl<T> Cached<T> {
 /// A commit's check runs, or the words for why they could not load.
 pub(super) type GithubChecks = Result<Vec<sourcefour_model::CheckRun>, String>;
 
+fn status_is_pending(status: sourcefour_model::CheckStatus) -> bool {
+    matches!(
+        status,
+        sourcefour_model::CheckStatus::Queued | sourcefour_model::CheckStatus::InProgress
+    )
+}
+
 /// The 0600 token file, next to the other per-user files.
 pub(super) fn credentials_path() -> Option<std::path::PathBuf> {
     crate::persist::support_file("credentials.json")
@@ -75,6 +82,54 @@ pub(super) fn resolve_github_token(
 }
 
 impl SourcefourWindow {
+    fn github_has_pending_status(&self) -> bool {
+        self.github_runs
+            .as_ref()
+            .is_some_and(|cache| cache.value.iter().any(|run| status_is_pending(run.status)))
+            || self
+                .github_states
+                .as_ref()
+                .is_some_and(|cache| cache.value.values().copied().any(status_is_pending))
+            || self.github_checks.as_ref().is_some_and(|cache| {
+                cache
+                    .value
+                    .1
+                    .as_ref()
+                    .is_ok_and(|checks| checks.iter().any(|check| status_is_pending(check.status)))
+            })
+    }
+
+    /// Polls only while a visible GitHub status can still change.
+    fn ensure_github_status_poll(&mut self, cx: &mut gpui::Context<Self>) {
+        self.github_status_poll = self.github_status_poll.wrapping_add(1);
+        if !self.github_has_pending_status() {
+            return;
+        }
+        let poll = self.github_status_poll;
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_secs(15))
+                    .await;
+                let keep_going = this
+                    .update(cx, |this, cx| {
+                        if this.github_status_poll != poll || !this.github_has_pending_status() {
+                            return false;
+                        }
+                        this.load_runs(true, cx);
+                        this.load_commit_states(true, cx);
+                        this.load_selected_checks(true, cx);
+                        true
+                    })
+                    .unwrap_or(false);
+                if !keep_going {
+                    break;
+                }
+            }
+        })
+        .detach();
+    }
+
     /// One Actions run: status glyph, workflow and number, branch; clicking
     /// opens the run on github.com.
     pub(super) fn workflow_run_row(
@@ -350,6 +405,9 @@ impl SourcefourWindow {
     /// Re-resolves which GitHub repository the remotes point at and refreshes
     /// the read surfaces; origin wins when several remotes are GitHub.
     pub(super) fn refresh_github(&mut self, cx: &mut gpui::Context<Self>) {
+        // A refresh can switch repositories. Retire a loop tied to the old
+        // caches; successful pending results below will start a fresh one.
+        self.github_status_poll = self.github_status_poll.wrapping_add(1);
         self.github_remote = None;
         if !self.settings.github.enabled {
             self.github_pulls = None;
@@ -412,6 +470,7 @@ impl SourcefourWindow {
             |this, outcome, cx| match outcome {
                 Ok(states) => {
                     this.github_states = Some(Cached::now(states));
+                    this.ensure_github_status_poll(cx);
                     cx.notify();
                 }
                 // Stale dots beat rows that flicker on every hiccup.
@@ -450,6 +509,7 @@ impl SourcefourWindow {
             |this, outcome, cx| match outcome {
                 Ok(runs) => {
                     this.github_runs = Some(Cached::now(runs));
+                    this.ensure_github_status_poll(cx);
                     cx.notify();
                 }
                 // A stale list beats a section that flickers empty.
@@ -515,6 +575,7 @@ impl SourcefourWindow {
             move |this, outcome, cx| {
                 // Failures render in the block, so they cache like results.
                 this.github_checks = Some(Cached::now((oid, outcome)));
+                this.ensure_github_status_poll(cx);
                 cx.notify();
             },
             cx,
@@ -529,6 +590,7 @@ impl SourcefourWindow {
         self.token_input
             .update(cx, |input, cx| input.set_text("", cx));
         self.github_request += 1;
+        self.github_status_poll = self.github_status_poll.wrapping_add(1);
         self.github_connection = crate::settings_ui::GithubConnection::Idle;
         cx.notify();
     }
@@ -580,5 +642,19 @@ mod tests {
         assert_eq!(glyph(CheckStatus::InProgress), "●");
         assert_eq!(glyph(CheckStatus::Queued), "○");
         assert_eq!(glyph(CheckStatus::Completed(CheckConclusion::Skipped)), "−");
+    }
+
+    #[test]
+    fn only_nonterminal_statuses_keep_github_polling() {
+        use sourcefour_model::{CheckConclusion, CheckStatus};
+
+        assert!(super::status_is_pending(CheckStatus::Queued));
+        assert!(super::status_is_pending(CheckStatus::InProgress));
+        assert!(!super::status_is_pending(CheckStatus::Completed(
+            CheckConclusion::Success
+        )));
+        assert!(!super::status_is_pending(CheckStatus::Completed(
+            CheckConclusion::Failure
+        )));
     }
 }

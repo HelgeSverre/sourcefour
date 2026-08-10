@@ -14,6 +14,8 @@ pub(crate) enum Splitter {
     Graph,
     /// Between the history list and the details panel.
     Details,
+    /// Above the optional Actions timeline footer.
+    ActionsTimeline,
 }
 
 /// Current, user-adjusted panel sizes in pixels.
@@ -22,6 +24,7 @@ pub(crate) struct PanelSizes {
     pub(crate) sidebar: f32,
     pub(crate) graph: f32,
     pub(crate) details: f32,
+    pub(crate) actions_timeline: f32,
 }
 
 impl Default for PanelSizes {
@@ -30,11 +33,17 @@ impl Default for PanelSizes {
             sidebar: SIDEBAR_WIDTH,
             graph: GRAPH_WIDTH,
             details: DETAILS_HEIGHT,
+            actions_timeline: 180.0,
         }
     }
 }
 
 impl PanelSizes {
+    pub(crate) fn actions_timeline_for(self, window_height: f32) -> f32 {
+        self.actions_timeline
+            .min((window_height * 0.45).clamp(96.0, 480.0))
+    }
+
     /// Applies persisted sizes, clamped exactly like a live drag so a stale
     /// or hand-edited state file cannot produce an unusable layout.
     pub(crate) fn apply(&mut self, state: &crate::ui_state::UiState) {
@@ -46,6 +55,9 @@ impl PanelSizes {
         }
         if let Some(details) = state.details_height {
             self.details = details.clamp(100.0, 560.0);
+        }
+        if let Some(height) = state.actions_timeline_height {
+            self.actions_timeline = height.clamp(96.0, 480.0);
         }
     }
 
@@ -62,6 +74,10 @@ impl PanelSizes {
             }
             Splitter::Details => {
                 self.details = (window_height - STATUS_HEIGHT - y).clamp(100.0, 560.0);
+            }
+            Splitter::ActionsTimeline => {
+                let maximum = (window_height * 0.45).clamp(96.0, 480.0);
+                self.actions_timeline = (window_height - 26.0 - y).clamp(96.0, maximum);
             }
         }
     }
@@ -82,8 +98,13 @@ mod tests {
         let sizes = PanelSizes::default();
 
         assert_eq!(
-            (sizes.sidebar, sizes.graph, sizes.details),
-            (SIDEBAR_WIDTH, GRAPH_WIDTH, DETAILS_HEIGHT)
+            (
+                sizes.sidebar,
+                sizes.graph,
+                sizes.details,
+                sizes.actions_timeline,
+            ),
+            (SIDEBAR_WIDTH, GRAPH_WIDTH, DETAILS_HEIGHT, 180.0)
         );
     }
 
@@ -146,5 +167,19 @@ mod tests {
 
         sizes.drag(Splitter::Details, 0.0, 0.0, 800.0);
         assert!(sizes.details <= 560.0, "details cannot swallow the history");
+    }
+
+    #[test]
+    fn the_actions_timeline_resizes_without_swallowing_the_overlay() {
+        let mut sizes = PanelSizes::default();
+
+        sizes.drag(Splitter::ActionsTimeline, 0.0, 600.0, 900.0);
+        assert_eq!(sizes.actions_timeline, 274.0);
+
+        sizes.drag(Splitter::ActionsTimeline, 0.0, 890.0, 900.0);
+        assert_eq!(sizes.actions_timeline, 96.0);
+
+        sizes.drag(Splitter::ActionsTimeline, 0.0, 0.0, 900.0);
+        assert_eq!(sizes.actions_timeline, 405.0);
     }
 }

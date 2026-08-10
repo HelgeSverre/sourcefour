@@ -12,6 +12,7 @@ use gpui::{
 use sourcefour_model::{CheckConclusion, CheckStatus, WorkflowJob, WorkflowRun};
 
 use super::{SourcefourWindow, github::check_glyph, row_count_as_f32};
+use crate::panels::Splitter;
 
 /// Row height of one virtualized log line.
 const LOG_ROW_HEIGHT: f32 = 16.0;
@@ -63,6 +64,7 @@ enum ActionsEvent {
 enum ActionsEffect {
     FetchJobs(u64),
     LoadLogs,
+    ScrollJobs,
     ScrollLog,
 }
 
@@ -131,7 +133,7 @@ impl ActionsState {
                                 .map(|step| step.min(job.steps.len().saturating_sub(1)));
                         }
                     }
-                    vec![ActionsEffect::LoadLogs]
+                    vec![ActionsEffect::LoadLogs, ActionsEffect::ScrollJobs]
                 } else if let Some(warm) = &mut self.prefetch
                     && warm.run_id == run_id
                 {
@@ -152,7 +154,7 @@ impl ActionsState {
                 view.selected_step = None;
                 view.collapsed = false;
                 view.full_log = false;
-                vec![ActionsEffect::ScrollLog]
+                vec![ActionsEffect::ScrollJobs, ActionsEffect::ScrollLog]
             }
             ActionsEvent::SelectJobDelta(delta) => {
                 let Some(view) = &self.view else {
@@ -469,9 +471,23 @@ fn unstyled(run: &sourcefour_github::AnsiRun) -> bool {
 /// The §12.4 capture fixture: the mockup's failed Windows run, seeded so
 /// the overlay renders without a repository or network.
 pub(super) fn demo_view() -> ActionsView {
+    let mut jobs = demo_jobs();
+    let requested = std::env::var("SOURCEFOUR_ACTIONS_STRESS")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(jobs.len());
+    if requested > jobs.len() {
+        let templates = jobs.clone();
+        for index in jobs.len()..requested {
+            let mut job = templates[index % templates.len()].clone();
+            job.id = 1_000 + index as u64;
+            job.name = format!("{} · shard {}", job.name, index + 1);
+            jobs.push(job);
+        }
+    }
     ActionsView {
         run: demo_run(),
-        jobs: Some(Ok(demo_jobs())),
+        jobs: Some(Ok(jobs)),
         focus_job: None,
         selected_job: 1,
         selected_step: None,
@@ -632,6 +648,7 @@ impl SourcefourWindow {
             match effect {
                 ActionsEffect::FetchJobs(run_id) => self.fetch_actions_jobs(run_id, cx),
                 ActionsEffect::LoadLogs => self.load_actions_logs(cx),
+                ActionsEffect::ScrollJobs => self.scroll_actions_job_to_selection(),
                 ActionsEffect::ScrollLog => self.scroll_actions_log_to_slice(),
             }
         }
@@ -653,6 +670,7 @@ impl SourcefourWindow {
         cx: &mut gpui::Context<Self>,
     ) {
         self.actions_focus.focus(window);
+        self.actions_jobs_scroll = UniformListScrollHandle::new();
         self.actions_log_scroll = UniformListScrollHandle::new();
         let view = ActionsView {
             run,
@@ -937,9 +955,19 @@ impl SourcefourWindow {
             .scroll_to_item(target, ScrollStrategy::Top);
     }
 
+    /// Keeps keyboard and programmatic job selection visible in the rail.
+    fn scroll_actions_job_to_selection(&self) {
+        let Some(view) = &self.actions.view else {
+            return;
+        };
+        self.actions_jobs_scroll
+            .scroll_to_item(view.selected_job, ScrollStrategy::Center);
+    }
+
     /// The overlay, while a run is open.
     pub(super) fn actions_overlay(
         &self,
+        window_height: f32,
         cx: &mut gpui::Context<Self>,
     ) -> Option<impl IntoElement + use<>> {
         let view = self.actions.view.as_ref()?;
@@ -968,9 +996,23 @@ impl SourcefourWindow {
                                 .child(self.actions_jobs_rail(view, cx))
                                 .child(self.actions_steps_pane(view, cx)),
                         )
-                        .child(self.actions_waterfall(view)),
+                        .children(
+                            self.actions_timeline_expanded
+                                .then(|| self.splitter(Splitter::ActionsTimeline, cx)),
+                        )
+                        .child(self.actions_waterfall(
+                            view,
+                            self.panels.actions_timeline_for(window_height),
+                            cx,
+                        )),
                 ),
         )
+    }
+
+    fn toggle_actions_timeline(&mut self, cx: &mut gpui::Context<Self>) {
+        self.actions_timeline_expanded = !self.actions_timeline_expanded;
+        self.persist_ui_state(cx);
+        cx.notify();
     }
 
     /// Title row and chip row, per the mockup's header.
@@ -1166,77 +1208,112 @@ impl SourcefourWindow {
                         Some(Ok(jobs)) => format!("JOBS · {}", jobs.len()),
                     }),
             )
-            .children(match &view.jobs {
-                Some(Err(message)) => vec![
-                    div()
-                        .px(px(14.0))
-                        .text_size(px(10.5))
-                        .text_color(self.theme.text_faint)
-                        .child(message.clone()),
-                ],
-                _ => Vec::new(),
-            })
-            .children(view.jobs_ok().iter().enumerate().map(|(index, job)| {
-                let (glyph, color) = check_glyph(&self.theme, job.status);
-                let selected = index == view.selected_job;
-                div()
-                    .id(("actions-job", index))
-                    .h(px(34.0))
-                    .flex()
-                    .items_center()
-                    .gap(px(8.0))
+            .child(match &view.jobs {
+                Some(Err(message)) => div()
+                    .flex_1()
+                    .min_h(px(1.0))
                     .px(px(14.0))
-                    .cursor_pointer()
-                    .border_l_2()
-                    .border_color(if selected {
-                        self.theme.accent
-                    } else {
-                        gpui::transparent_black()
-                    })
-                    .bg(if selected {
-                        self.theme.bg_selected
-                    } else {
-                        self.theme.bg_panel
-                    })
-                    .hover(|style| style.bg(self.theme.bg_hover))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.set_actions_job(index, cx);
-                    }))
-                    .child(
-                        div()
-                            .flex_none()
-                            .font_weight(FontWeight::BOLD)
-                            .text_size(px(11.0))
-                            .text_color(color)
-                            .child(glyph),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w(px(1.0))
-                            .overflow_hidden()
-                            .text_ellipsis()
-                            .whitespace_nowrap()
-                            .text_size(px(12.0))
-                            .text_color(if selected {
-                                self.theme.text_primary
-                            } else {
-                                self.theme.text_secondary
+                    .text_size(px(10.5))
+                    .text_color(self.theme.text_faint)
+                    .child(message.clone())
+                    .into_any_element(),
+                _ => uniform_list(
+                    cx.entity(),
+                    "actions-jobs",
+                    view.jobs_ok().len(),
+                    move |this, range, _window, cx| {
+                        range
+                            .filter_map(|index| {
+                                this.actions
+                                    .view
+                                    .as_ref()?
+                                    .jobs_ok()
+                                    .get(index)
+                                    .cloned()
+                                    .map(|job| (index, job))
                             })
-                            .child(job.name.clone()),
-                    )
-                    .child(
-                        div()
-                            .flex_none()
-                            .text_size(px(10.0))
-                            .text_color(self.theme.text_faint)
-                            .child(fmt_duration(elapsed_of(
-                                job.started_at,
-                                job.completed_at,
-                                self.now_seconds(),
-                            ))),
-                    )
+                            .map(|(index, job)| this.actions_job_row(index, &job, cx))
+                            .collect()
+                    },
+                )
+                .track_scroll(self.actions_jobs_scroll.clone())
+                .flex_1()
+                .min_h(px(1.0))
+                .w_full()
+                .into_any_element(),
+            })
+    }
+
+    fn actions_job_row(
+        &self,
+        index: usize,
+        job: &WorkflowJob,
+        cx: &mut gpui::Context<Self>,
+    ) -> gpui::AnyElement {
+        let (glyph, color) = check_glyph(&self.theme, job.status);
+        let selected = self
+            .actions
+            .view
+            .as_ref()
+            .is_some_and(|view| index == view.selected_job);
+        div()
+            .id(("actions-job", index))
+            .h(px(34.0))
+            .flex()
+            .items_center()
+            .gap(px(8.0))
+            .px(px(14.0))
+            .cursor_pointer()
+            .border_l_2()
+            .border_color(if selected {
+                self.theme.accent
+            } else {
+                gpui::transparent_black()
+            })
+            .bg(if selected {
+                self.theme.bg_selected
+            } else {
+                self.theme.bg_panel
+            })
+            .hover(|style| style.bg(self.theme.bg_hover))
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.set_actions_job(index, cx);
             }))
+            .child(
+                div()
+                    .flex_none()
+                    .font_weight(FontWeight::BOLD)
+                    .text_size(px(11.0))
+                    .text_color(color)
+                    .child(glyph),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(1.0))
+                    .overflow_hidden()
+                    .text_ellipsis()
+                    .whitespace_nowrap()
+                    .text_size(px(12.0))
+                    .text_color(if selected {
+                        self.theme.text_primary
+                    } else {
+                        self.theme.text_secondary
+                    })
+                    .child(job.name.clone()),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .text_size(px(10.0))
+                    .text_color(self.theme.text_faint)
+                    .child(fmt_duration(elapsed_of(
+                        job.started_at,
+                        job.completed_at,
+                        self.now_seconds(),
+                    ))),
+            )
+            .into_any_element()
     }
 
     /// The selected job's steps, with the focused step's log slice.
@@ -1639,8 +1716,13 @@ impl SourcefourWindow {
             .into_any_element()
     }
 
-    /// The wall-clock strip: every job as a bar on the run's time axis.
-    fn actions_waterfall(&self, view: &ActionsView) -> Div {
+    /// The optional wall-clock panel: every job as a bar on one time axis.
+    fn actions_waterfall(
+        &self,
+        view: &ActionsView,
+        expanded_height: f32,
+        cx: &mut gpui::Context<Self>,
+    ) -> Div {
         let jobs = view.jobs_ok();
         let run_start = view
             .run
@@ -1654,25 +1736,68 @@ impl SourcefourWindow {
             // A live run measures to now, so bars grow as it works.
             .or(Some(now));
         let wall = duration_of(run_start, run_end).unwrap_or(0).max(1);
-        div()
+        let expanded = self.actions_timeline_expanded;
+        let header = div()
+            .id("actions-timeline-toggle")
+            .h(px(32.0))
             .flex_none()
             .flex()
-            .flex_col()
-            .gap(px(4.0))
+            .items_center()
+            .gap(px(8.0))
             .px(px(16.0))
-            .py(px(9.0))
-            .border_t_1()
-            .border_color(self.theme.border)
+            .cursor_pointer()
+            .hover(|style| style.bg(self.theme.bg_hover))
+            .on_click(cx.listener(|this, _, _, cx| this.toggle_actions_timeline(cx)))
+            .child(
+                div()
+                    .w(px(10.0))
+                    .flex_none()
+                    .text_size(px(9.0))
+                    .text_color(self.theme.text_faint)
+                    .child(if expanded { "▾" } else { "▸" }),
+            )
             .child(
                 div()
                     .text_size(px(10.0))
                     .font_weight(FontWeight::BOLD)
                     .text_color(self.theme.text_faint)
                     .child(format!(
-                        "TIMELINE · WALL TIME {}",
+                        "TIMELINE · {} JOBS · WALL TIME {}",
+                        jobs.len(),
                         fmt_duration(duration_of(run_start, run_end)).to_uppercase()
                     )),
-            )
+            );
+        let panel = div()
+            .flex_none()
+            .flex()
+            .flex_col()
+            .overflow_hidden()
+            .when(!expanded, |panel| {
+                panel.border_t_1().border_color(self.theme.border)
+            })
+            .when(expanded, |panel| panel.h(px(expanded_height)))
+            .child(header);
+        if !expanded {
+            return panel;
+        }
+        panel.child(self.actions_timeline_content(jobs, run_start, wall, now))
+    }
+
+    fn actions_timeline_content(
+        &self,
+        jobs: &[WorkflowJob],
+        run_start: Option<i64>,
+        wall: i64,
+        now: i64,
+    ) -> gpui::Stateful<Div> {
+        div()
+            .id("actions-timeline-scroll")
+            .flex_1()
+            .min_h(px(1.0))
+            .overflow_y_scroll()
+            .track_scroll(&self.actions_timeline_scroll)
+            .px(px(16.0))
+            .pb(px(9.0))
             .child(
                 div()
                     .flex()
@@ -1692,8 +1817,6 @@ impl SourcefourWindow {
                         }),
                     ))
                     .child(
-                        // The plot itself: a slightly darker ruled surface,
-                        // so the time axis reads as its own area.
                         div()
                             .flex_1()
                             .relative()
@@ -1851,9 +1974,23 @@ mod tests {
                 run_id,
                 outcome: Ok(replacement),
             }),
-            vec![ActionsEffect::LoadLogs]
+            vec![ActionsEffect::LoadLogs, ActionsEffect::ScrollJobs]
         );
         assert_eq!(state.view.expect("open view").selected_job, 0);
+    }
+
+    #[test]
+    fn selecting_a_job_reveals_it_and_resets_the_log() {
+        let mut state = ActionsState {
+            view: Some(demo_view()),
+            ..ActionsState::default()
+        };
+
+        assert_eq!(
+            state.reduce(ActionsEvent::SelectJob(2)),
+            vec![ActionsEffect::ScrollJobs, ActionsEffect::ScrollLog]
+        );
+        assert_eq!(state.view.expect("open view").selected_job, 2);
     }
 
     fn job(name: &str, status: CheckStatus, started: i64, completed: i64) -> WorkflowJob {
