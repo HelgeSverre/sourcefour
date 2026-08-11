@@ -20,7 +20,10 @@ use gpui::{
     Div, Font, FontWeight, Hsla, IntoElement, StatefulInteractiveElement, StyledText, TextRun,
     Window, div, prelude::*, px,
 };
-use sourcefour_doc::{CellAlignment, DocBlock, DocBlockKind, DocSpan, DocumentKind};
+use sourcefour_doc::{
+    CellAlignment, DocBlock, DocBlockKind, DocColor, DocSpan, DocumentKind, EmbeddedImageFormat,
+    EmbeddedMedia, ParagraphAlignment, ParagraphStyle,
+};
 use sourcefour_git::{DocSource, ImageResolution};
 use sourcefour_model::{DiffContent, RepoLocation, RepoPath};
 
@@ -524,10 +527,15 @@ fn span_run(
     if span.italic {
         font.style = gpui::FontStyle::Italic;
     }
+    if let Some(family) = &span.font_family {
+        font.family = family.clone().into();
+    }
     let color = if span.link.is_some() {
         theme.accent
     } else if span.code {
         theme.text_primary
+    } else if let Some(document_color) = span.foreground {
+        theme_adapted_foreground(document_color, theme)
     } else {
         color
     };
@@ -535,7 +543,10 @@ fn span_run(
         len: span.text.len(),
         font,
         color,
-        background_color: span.code.then_some(theme.bg_list),
+        background_color: span
+            .highlight
+            .map(|color| theme_adapted_highlight(color, theme))
+            .or_else(|| span.code.then_some(theme.bg_list)),
         underline: (span.underline || span.link.is_some()).then(|| gpui::UnderlineStyle {
             thickness: px(1.0),
             color: None,
@@ -545,6 +556,29 @@ fn span_run(
             thickness: px(1.0),
             color: None,
         }),
+    }
+}
+
+fn document_color(color: DocColor) -> Hsla {
+    gpui::rgb((u32::from(color.red) << 16) | (u32::from(color.green) << 8) | u32::from(color.blue))
+        .into()
+}
+
+fn theme_adapted_foreground(color: DocColor, theme: &Theme) -> Hsla {
+    let color = document_color(color);
+    if (color.l - theme.bg_list.l).abs() >= 0.28 {
+        color
+    } else {
+        theme.text_secondary
+    }
+}
+
+fn theme_adapted_highlight(color: DocColor, theme: &Theme) -> Hsla {
+    let color = document_color(color);
+    if (color.l - theme.bg_list.l).abs() >= 0.18 {
+        color.opacity(0.38)
+    } else {
+        theme.accent.opacity(0.24)
     }
 }
 
@@ -874,6 +908,9 @@ impl SourcefourWindow {
                 .mt(px(8.0))
                 .text_size(px(12.5))
                 .child(self.selectable_text(spans, font, self.theme.text_secondary, preview, id)),
+            DocBlockKind::RichParagraph { spans, style } => {
+                self.preview_rich_paragraph(spans, *style, font, preview, id)
+            }
             DocBlockKind::Code { text, .. } => self.preview_code(text, id),
             DocBlockKind::Quote { blocks } => div()
                 .mt(px(10.0))
@@ -893,6 +930,35 @@ impl SourcefourWindow {
                 .mb(px(4.0))
                 .h(px(1.0))
                 .bg(self.theme.border),
+            DocBlockKind::PageBreak => div()
+                .mt(px(16.0))
+                .mb(px(6.0))
+                .border_t_1()
+                .border_color(self.theme.border)
+                .pt(px(4.0))
+                .text_size(px(9.0))
+                .text_color(self.theme.text_faint)
+                .child("page break"),
+            DocBlockKind::Aside { label, blocks } => div()
+                .mt(px(10.0))
+                .p(px(10.0))
+                .rounded(px(5.0))
+                .border_1()
+                .border_color(self.theme.border)
+                .bg(self.theme.bg_chrome)
+                .child(
+                    div()
+                        .mb(px(4.0))
+                        .text_size(px(9.5))
+                        .text_color(self.theme.text_faint)
+                        .child(label.clone()),
+                )
+                .children(blocks.iter().enumerate().map(|(ordinal, block)| {
+                    self.preview_block(block, preview, font, id.child(ordinal))
+                })),
+            DocBlockKind::EmbeddedMedia { media, alt } => {
+                self.preview_embedded_media(media, alt, id)
+            }
             DocBlockKind::Image { src, alt } => self.preview_image(src, alt, preview, id),
             DocBlockKind::Table {
                 alignments,
@@ -900,6 +966,47 @@ impl SourcefourWindow {
                 rows,
             } => self.preview_table(alignments, header, rows, font, preview, id),
         }
+    }
+
+    fn preview_rich_paragraph(
+        &self,
+        spans: &[DocSpan],
+        style: ParagraphStyle,
+        font: &Font,
+        preview: &PreviewDoc,
+        id: BlockId,
+    ) -> Div {
+        let twips = |value: i32| {
+            let bounded = i16::try_from(value.clamp(0, 1080)).unwrap_or_default();
+            px(f32::from(bounded) / 15.0)
+        };
+        let dominant_size = spans
+            .iter()
+            .filter_map(|span| {
+                span.font_size_half_points
+                    .map(|size| (size, span.text.len()))
+            })
+            .fold(HashMap::<u16, usize>::new(), |mut counts, (size, len)| {
+                *counts.entry(size).or_default() += len;
+                counts
+            })
+            .into_iter()
+            .max_by_key(|(_, count)| *count)
+            .map_or(12.5, |(size, _)| (f32::from(size) / 2.0).clamp(9.0, 24.0));
+        div()
+            .mt(twips(style.space_before_twips.max(120)))
+            .mb(twips(style.space_after_twips))
+            .pl(twips(
+                style.left_indent_twips + style.first_line_indent_twips.max(0),
+            ))
+            .pr(twips(style.right_indent_twips))
+            .text_size(px(dominant_size))
+            .map(|paragraph| match style.alignment {
+                ParagraphAlignment::Center => paragraph.text_center(),
+                ParagraphAlignment::Right => paragraph.text_right(),
+                ParagraphAlignment::Left | ParagraphAlignment::Justify => paragraph.text_left(),
+            })
+            .child(self.selectable_text(spans, font, self.theme.text_secondary, preview, id))
     }
 
     /// A heading, sized by its level; the whole line carries the weight so a
@@ -1194,6 +1301,50 @@ impl SourcefourWindow {
                 .into_any_element(),
             _ => self
                 .preview_placeholder(format!("image not found · {src}"))
+                .into_any_element(),
+        };
+        div()
+            .mt(px(12.0))
+            .flex()
+            .flex_col()
+            .items_start()
+            .gap(px(4.0))
+            .child(body)
+            .children((!alt.is_empty()).then(|| {
+                div()
+                    .text_size(px(10.5))
+                    .text_color(self.theme.text_faint)
+                    .child(alt.to_owned())
+            }))
+    }
+
+    fn preview_embedded_media(&self, media: &EmbeddedMedia, alt: &str, id: BlockId) -> Div {
+        let body = match media {
+            EmbeddedMedia::Image { format, bytes } => {
+                let format = match format {
+                    EmbeddedImageFormat::Png => "png",
+                    EmbeddedImageFormat::Jpeg => "jpeg",
+                };
+                render_image(Some(bytes), format).map_or_else(
+                    || {
+                        self.preview_placeholder(String::from(
+                            "embedded image could not be decoded",
+                        ))
+                        .into_any_element()
+                    },
+                    |image| {
+                        gpui::img(image)
+                            .id(id.element("preview-embedded-image"))
+                            .max_w(px(CONTENT_WIDTH - 2.0 * CONTENT_PADDING))
+                            .max_h(px(IMAGE_HEIGHT))
+                            .object_fit(gpui::ObjectFit::Contain)
+                            .rounded(px(5.0))
+                            .into_any_element()
+                    },
+                )
+            }
+            EmbeddedMedia::Unsupported { label } => self
+                .preview_placeholder(format!("unsupported embedded content · {label}"))
                 .into_any_element(),
         };
         div()
@@ -1540,8 +1691,8 @@ mod tests {
         let blocks =
             document_blocks(DocumentKind::Rtf, Some(br"{\rtf1\ansi Plain {\b bold}.}")).unwrap();
 
-        let DocBlockKind::Paragraph { spans } = &blocks[0].kind else {
-            panic!("RTF prose should become a paragraph");
+        let DocBlockKind::RichParagraph { spans, .. } = &blocks[0].kind else {
+            panic!("RTF prose should become a rich paragraph");
         };
         assert_eq!(
             spans

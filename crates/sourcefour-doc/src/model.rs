@@ -29,6 +29,13 @@ pub enum DocBlockKind {
         /// Paragraph text, split by style.
         spans: Vec<DocSpan>,
     },
+    /// A paragraph carrying layout metadata supplied by a rich-text format.
+    RichParagraph {
+        /// Paragraph text, split by style.
+        spans: Vec<DocSpan>,
+        /// Layout hints normalized for the preview renderer.
+        style: ParagraphStyle,
+    },
     /// Preformatted text, verbatim except for a stripped trailing newline.
     Code {
         /// Info-string language tag, `None` when untagged or indented.
@@ -50,6 +57,22 @@ pub enum DocBlockKind {
     },
     /// A thematic break.
     Rule,
+    /// A page or section boundary in a paginated source document.
+    PageBreak,
+    /// Secondary document content such as a header, footer, or footnote.
+    Aside {
+        /// Human-readable role of the content.
+        label: String,
+        /// Captured content in source order.
+        blocks: Vec<DocBlock>,
+    },
+    /// Media stored inside the document rather than referenced by path.
+    EmbeddedMedia {
+        /// Media payload, or a reason it cannot be displayed.
+        media: EmbeddedMedia,
+        /// Accessible fallback text.
+        alt: String,
+    },
     /// An image, always its own block even when written inside a paragraph.
     Image {
         /// Destination as written, already resolved for reference-style images.
@@ -70,6 +93,86 @@ pub enum DocBlockKind {
         /// may be shorter than `alignments`; the source decides.
         rows: Vec<Vec<Vec<DocSpan>>>,
     },
+}
+
+/// Paragraph layout retained from rich-text documents.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ParagraphStyle {
+    /// Horizontal text alignment.
+    pub alignment: ParagraphAlignment,
+    /// Left indentation in twips (1/1440 inch).
+    pub left_indent_twips: i32,
+    /// Right indentation in twips.
+    pub right_indent_twips: i32,
+    /// First-line indentation in twips; negative values are hanging indents.
+    pub first_line_indent_twips: i32,
+    /// Space before the paragraph in twips.
+    pub space_before_twips: i32,
+    /// Space after the paragraph in twips.
+    pub space_after_twips: i32,
+}
+
+/// Horizontal alignment requested by a rich-text paragraph.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum ParagraphAlignment {
+    /// Leading-edge alignment.
+    #[default]
+    Left,
+    /// Centered text.
+    Center,
+    /// Trailing-edge alignment.
+    Right,
+    /// Justified text; renderers may normalize this to leading-edge alignment.
+    Justify,
+}
+
+/// An RGB color declared by a document.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DocColor {
+    /// Red channel.
+    pub red: u8,
+    /// Green channel.
+    pub green: u8,
+    /// Blue channel.
+    pub blue: u8,
+}
+
+/// Baseline semantics retained even when the renderer normalizes their size.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum VerticalPosition {
+    /// Ordinary baseline.
+    #[default]
+    Normal,
+    /// Superscript text.
+    Superscript,
+    /// Subscript text.
+    Subscript,
+}
+
+/// Media embedded in a rich-text document.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum EmbeddedMedia {
+    /// A PNG or JPEG payload the renderer can draw.
+    Image {
+        /// Encoded image format.
+        format: EmbeddedImageFormat,
+        /// Encoded image bytes.
+        bytes: Vec<u8>,
+    },
+    /// An object that is valid RTF but unsupported by the preview.
+    Unsupported {
+        /// Short format or failure description.
+        label: String,
+    },
+}
+
+/// Embedded raster formats GPUI can decode directly.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum EmbeddedImageFormat {
+    /// Portable Network Graphics.
+    Png,
+    /// JPEG image.
+    Jpeg,
 }
 
 /// One table column's alignment, from the delimiter row.
@@ -111,6 +214,18 @@ pub struct DocSpan {
     pub underline: bool,
     /// Link destination when the run is part of a link.
     pub link: Option<String>,
+    /// Document foreground color, adapted for contrast by the renderer.
+    pub foreground: Option<DocColor>,
+    /// Document highlight color, adapted for contrast by the renderer.
+    pub highlight: Option<DocColor>,
+    /// Font family declared by the document.
+    pub font_family: Option<String>,
+    /// Source font size in half-points; used to choose a paragraph's dominant size.
+    pub font_size_half_points: Option<u16>,
+    /// Small-caps semantics.
+    pub small_caps: bool,
+    /// Superscript/subscript semantics.
+    pub vertical: VerticalPosition,
 }
 
 /// A markup language Sourcefour recognises by file extension.
@@ -159,7 +274,9 @@ fn collect_image_sources<'a>(blocks: &'a [DocBlock], sources: &mut Vec<&'a str>)
     for block in blocks {
         match &block.kind {
             DocBlockKind::Image { src, .. } => sources.push(src),
-            DocBlockKind::Quote { blocks } => collect_image_sources(blocks, sources),
+            DocBlockKind::Quote { blocks } | DocBlockKind::Aside { blocks, .. } => {
+                collect_image_sources(blocks, sources);
+            }
             DocBlockKind::List { items, .. } => {
                 for item in items {
                     collect_image_sources(item, sources);
@@ -168,9 +285,12 @@ fn collect_image_sources<'a>(blocks: &'a [DocBlock], sources: &mut Vec<&'a str>)
             // A table cell holds spans, and a span cannot be an image.
             DocBlockKind::Heading { .. }
             | DocBlockKind::Paragraph { .. }
+            | DocBlockKind::RichParagraph { .. }
             | DocBlockKind::Code { .. }
             | DocBlockKind::Table { .. }
-            | DocBlockKind::Rule => {}
+            | DocBlockKind::Rule
+            | DocBlockKind::PageBreak
+            | DocBlockKind::EmbeddedMedia { .. } => {}
         }
     }
 }

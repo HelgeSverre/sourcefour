@@ -7,6 +7,9 @@ mod model;
 mod parse;
 mod rtf;
 
-pub use model::{CellAlignment, DocBlock, DocBlockKind, DocSpan, DocumentKind, image_sources};
+pub use model::{
+    CellAlignment, DocBlock, DocBlockKind, DocColor, DocSpan, DocumentKind, EmbeddedImageFormat,
+    EmbeddedMedia, ParagraphAlignment, ParagraphStyle, VerticalPosition, image_sources,
+};
 pub use parse::parse_markdown;
 pub use rtf::{DocumentParseError, parse_document, parse_rtf};

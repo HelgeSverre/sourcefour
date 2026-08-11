@@ -339,6 +339,7 @@ impl Builder {
             strike: style.strike,
             underline: false,
             link: style.link,
+            ..DocSpan::default()
         });
     }
 
@@ -461,7 +462,9 @@ mod tests {
     /// Concatenates a block's text, ignoring style.
     fn plain(block: &DocBlock) -> String {
         match &block.kind {
-            DocBlockKind::Heading { spans, .. } | DocBlockKind::Paragraph { spans } => {
+            DocBlockKind::Heading { spans, .. }
+            | DocBlockKind::Paragraph { spans }
+            | DocBlockKind::RichParagraph { spans, .. } => {
                 spans.iter().map(|span| span.text.as_str()).collect()
             }
             DocBlockKind::Code { text, .. } => text.clone(),
@@ -469,6 +472,9 @@ mod tests {
             | DocBlockKind::List { .. }
             | DocBlockKind::Table { .. }
             | DocBlockKind::Rule
+            | DocBlockKind::PageBreak
+            | DocBlockKind::Aside { .. }
+            | DocBlockKind::EmbeddedMedia { .. }
             | DocBlockKind::Image { .. } => String::new(),
         }
     }
