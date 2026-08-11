@@ -20,7 +20,10 @@ use gpui::{
     Div, FocusHandle, FontWeight, IntoElement, Render, UniformListScrollHandle, Window, actions,
     div, prelude::*, px,
 };
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
+};
 
 use sourcefour_git::{GixHistoryCursor, HistoryCursor as _};
 use sourcefour_model::{
@@ -47,11 +50,13 @@ mod github;
 mod history_pane;
 mod preview;
 mod sidebar;
+mod worktree_dialog;
 
 use branch_dialog::BranchDialog;
 use diff::{DiffMode, DiffView};
 use github::{Cached, GithubChecks};
 use sidebar::{SidebarSections, head_label};
+use worktree_dialog::WorktreeDialog;
 
 struct DiffCacheEntry {
     request: sourcefour_model::FileDiffRequest,
@@ -74,6 +79,8 @@ pub(crate) struct SourcefourWindow {
     /// Identity every background result must match to be applied.
     session: RepoSessionId,
     generation: Generation,
+    /// Cancels metadata polling for a worktree that is no longer active.
+    metadata_watch_generation: Arc<AtomicU64>,
     /// Kept so a refresh can re-read without re-discovering.
     location: Option<RepoLocation>,
     repo: LoadState<RepoSnapshot>,
@@ -190,6 +197,12 @@ pub(crate) struct SourcefourWindow {
     branch_dialog: Option<BranchDialog>,
     /// Name field of the create-branch dialog.
     branch_input: gpui::Entity<crate::text_input::TextInput>,
+    /// Worktree creation dialog, when open.
+    worktree_dialog: Option<WorktreeDialog>,
+    /// Editable target path for a new linked worktree.
+    worktree_path_input: gpui::Entity<crate::text_input::TextInput>,
+    /// Retires an earlier worktree activation whose discovery finishes late.
+    worktree_activation_request: u64,
     /// Focus target of the details pane (§4.6: Enter focuses it).
     details_focus: FocusHandle,
     list_scroll: UniformListScrollHandle,
@@ -378,6 +391,7 @@ impl SourcefourWindow {
             window_save_generation: 0,
             session,
             generation,
+            metadata_watch_generation: Arc::new(AtomicU64::new(0)),
             location: None,
             repo: LoadState::Idle,
             history: HistoryState::default(),
@@ -450,6 +464,13 @@ impl SourcefourWindow {
                 crate::text_input::InputRole::BranchName,
                 cx,
             ),
+            worktree_dialog: None,
+            worktree_path_input: Self::input(
+                "worktree-path",
+                crate::text_input::InputRole::WorktreePath,
+                cx,
+            ),
+            worktree_activation_request: 0,
             list_scroll: UniformListScrollHandle::new(),
             focus: cx.focus_handle(),
             filter_input: Self::input(
@@ -486,7 +507,12 @@ impl SourcefourWindow {
             };
             window.location = Some(location.clone());
             window.load_metadata(location.clone(), cx);
-            Self::watch_metadata(location, cx);
+            Self::watch_metadata(
+                location,
+                Arc::clone(&window.metadata_watch_generation),
+                0,
+                cx,
+            );
         }
         window.focus.focus(gpui_window);
         window
@@ -575,11 +601,22 @@ impl SourcefourWindow {
     /// Polling at the §6.14 coalescing interval costs one stat pass over the
     /// metadata paths, which is far cheaper than a recursive worktree watcher
     /// and behaves identically on every platform.
-    fn watch_metadata(location: RepoLocation, cx: &mut gpui::Context<Self>) {
+    fn watch_metadata(
+        location: RepoLocation,
+        watch_generation: Arc<AtomicU64>,
+        generation: u64,
+        cx: &mut gpui::Context<Self>,
+    ) {
         cx.spawn(async move |this, cx| {
             let mut watcher = sourcefour_git::MetadataWatcher::new(&location);
             loop {
+                if watch_generation.load(Ordering::Acquire) != generation {
+                    return;
+                }
                 cx.background_executor().timer(METADATA_POLL).await;
+                if watch_generation.load(Ordering::Acquire) != generation {
+                    return;
+                }
                 // The watcher moves to the background thread and back rather
                 // than being cloned, so polling costs no allocation per tick.
                 let (change, returned) = cx
@@ -613,6 +650,90 @@ impl SourcefourWindow {
         self.snapshot()
             .and_then(|snapshot| snapshot.active_worktree.clone())
             .unwrap_or_else(|| sourcefour_model::WorktreeId(String::from("active")))
+    }
+
+    /// Changes every repository-scoped operation to an existing worktree.
+    pub(super) fn activate_worktree_path(
+        &mut self,
+        path: std::path::PathBuf,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self
+            .location
+            .as_ref()
+            .and_then(|location| location.active_worktree_path.as_ref())
+            == Some(&path)
+        {
+            return;
+        }
+        self.worktree_activation_request = self.worktree_activation_request.wrapping_add(1);
+        let request = self.worktree_activation_request;
+        cx.spawn(async move |this, cx| {
+            let discovered = cx
+                .background_executor()
+                .spawn(async move { sourcefour_git::discover(&path) })
+                .await;
+            this.update(cx, |this, cx| {
+                if this.worktree_activation_request != request {
+                    return;
+                }
+                match discovered {
+                    Ok(location) => {
+                        let selected = this.history.selected;
+                        let scope = this.history.scope.clone();
+                        let filter = this.history.filter.clone();
+                        this.session = RepoSessionId::new();
+                        this.generation = Generation(0);
+                        this.name = sourcefour_git::display_name(&location);
+                        this.path = crate::app::display_path(
+                            location
+                                .active_worktree_path
+                                .as_deref()
+                                .unwrap_or(&location.common_dir),
+                        );
+                        this.location = Some(location.clone());
+                        this.repo = LoadState::Loading {
+                            started_at: std::time::Instant::now(),
+                        };
+                        this.cursor = None;
+                        this.history = HistoryState::default();
+                        this.history.scope = scope;
+                        this.history.selected = selected;
+                        this.history.filter = filter;
+                        this.detail = None;
+                        this.files = None;
+                        this.files_for = None;
+                        this.working_tree_status = None;
+                        this.diff_view = None;
+                        this.initial_selection_pending = selected.is_none();
+                        this.status_request = this.status_request.wrapping_add(1);
+                        this.files_request = this.files_request.wrapping_add(1);
+                        this.diff_request = this.diff_request.wrapping_add(1);
+                        this.branch_dialog = None;
+                        this.worktree_dialog = None;
+                        this.network_operation.cancel_and_retire();
+                        this.load_metadata(location.clone(), cx);
+                        let watcher_generation = this
+                            .metadata_watch_generation
+                            .fetch_add(1, Ordering::AcqRel)
+                            .wrapping_add(1);
+                        Self::watch_metadata(
+                            location,
+                            Arc::clone(&this.metadata_watch_generation),
+                            watcher_generation,
+                            cx,
+                        );
+                        cx.notify();
+                    }
+                    Err(error) => {
+                        this.op_status = Some((false, error.user.message));
+                        cx.notify();
+                    }
+                }
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// Starts a metadata reload of the current location: a new generation
@@ -649,6 +770,10 @@ impl SourcefourWindow {
                 .as_ref()
                 .map(|snapshot| snapshot.local_branches.clone())
                 .unwrap_or_default();
+            let remotes = payload
+                .as_ref()
+                .map(|snapshot| snapshot.remotes.clone())
+                .unwrap_or_default();
             let applied = this
                 .update(cx, |this, cx| {
                     let applied = this.apply_snapshot(&RepoEnvelope {
@@ -665,7 +790,8 @@ impl SourcefourWindow {
                         // context: the scope survives with a re-resolved tip and
                         // the selection re-attaches when its commit reloads
                         // (§6.12).
-                        let scope = refreshed_scope(this.history.scope.as_ref(), &branches);
+                        let scope =
+                            refreshed_scope(this.history.scope.as_ref(), &branches, &remotes);
                         let selected = this.history.selected;
                         this.start_history(scope, cx);
                         this.history.selected = selected;
@@ -1326,6 +1452,8 @@ impl SourcefourWindow {
         .on_action(cx.listener(|this, _: &FilterEscape, window, cx| {
             if this.diff_switcher_open {
                 this.close_diff_file_switcher(window, cx);
+            } else if this.worktree_dialog.is_some() {
+                this.close_worktree_dialog(window, cx);
             } else if this.branch_dialog.is_some() {
                 this.branch_dialog = None;
                 this.focus.focus(window);
@@ -1341,6 +1469,8 @@ impl SourcefourWindow {
         .on_action(cx.listener(|this, _: &FilterEnter, window, cx| {
             if this.diff_switcher_open {
                 this.open_selected_diff_file(window, cx);
+            } else if this.worktree_dialog.is_some() {
+                this.submit_worktree_dialog(window, cx);
             } else if this.branch_dialog.is_some() {
                 this.submit_branch_dialog(window, cx);
             } else {
@@ -1574,6 +1704,7 @@ impl Render for SourcefourWindow {
             .child(self.status())
             .children(self.diff_overlay(cx))
             .children(self.branch_overlay(cx))
+            .children(self.worktree_overlay(cx))
             .children(self.settings_overlay(cx))
             .children(self.actions_overlay(window.viewport_size().height.0, cx));
         // §12.5 frame instrumentation: element construction only — layout,

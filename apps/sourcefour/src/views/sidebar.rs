@@ -2,17 +2,19 @@
 //! branches, remotes, and Actions runs.
 
 use gpui::{
-    Div, FontWeight, IntoElement, Render, StatefulInteractiveElement, Window, div, prelude::*, px,
-    svg,
+    AnyView, App, Div, FontWeight, Hsla, IntoElement, Render, SharedString,
+    StatefulInteractiveElement, Window, div, prelude::*, px, svg,
 };
 use sourcefour_model::{
-    AheadBehindState, BranchSnapshot, HeadSnapshot, RepoSnapshot, WorktreeAccessibility,
+    AheadBehindState, BranchSnapshot, HeadSnapshot, RemoteBranchSnapshot, RepoSnapshot,
+    WorktreeAccessibility,
 };
 
 use std::collections::BTreeMap;
 
 use crate::{
     history::{is_scoped_to, toggled_scope},
+    icons::Icon,
     theme::Theme,
 };
 
@@ -67,30 +69,93 @@ struct SectionDragPreview {
     theme: Theme,
 }
 
-#[derive(Debug, Default)]
-struct BranchTree<'a> {
-    branch: Option<&'a BranchSnapshot>,
-    children: BTreeMap<&'a str, BranchTree<'a>>,
+struct SidebarTooltip {
+    text: SharedString,
+    palette: TooltipPalette,
+}
+
+#[derive(Clone, Copy)]
+struct TooltipPalette {
+    background: Hsla,
+    border: Hsla,
+    text: Hsla,
+}
+
+impl From<&Theme> for TooltipPalette {
+    fn from(theme: &Theme) -> Self {
+        Self {
+            background: theme.bg_chrome,
+            border: theme.border_strong,
+            text: theme.text_primary,
+        }
+    }
+}
+
+impl Render for SidebarTooltip {
+    fn render(&mut self, _window: &mut Window, _cx: &mut gpui::Context<Self>) -> impl IntoElement {
+        div()
+            .px(px(8.0))
+            .py(px(5.0))
+            .rounded(px(5.0))
+            .border_1()
+            .border_color(self.palette.border)
+            .bg(self.palette.background)
+            .text_size(px(11.0))
+            .text_color(self.palette.text)
+            .shadow_md()
+            .child(self.text.clone())
+    }
+}
+
+fn sidebar_tooltip(
+    text: impl Into<SharedString>,
+    palette: TooltipPalette,
+    cx: &mut App,
+) -> AnyView {
+    let text = text.into();
+    cx.new(|_| SidebarTooltip { text, palette }).into()
+}
+
+#[derive(Debug)]
+struct RefTree<'a, T> {
+    item: Option<&'a T>,
+    children: BTreeMap<&'a str, RefTree<'a, T>>,
     path: String,
 }
 
-impl<'a> BranchTree<'a> {
+impl<T> Default for RefTree<'_, T> {
+    fn default() -> Self {
+        Self {
+            item: None,
+            children: BTreeMap::new(),
+            path: String::new(),
+        }
+    }
+}
+
+impl<'a, T> RefTree<'a, T> {
+    fn insert(&mut self, name: &'a str, item: &'a T) {
+        let mut node = self;
+        let mut path = String::new();
+        for segment in name.split('/') {
+            if !path.is_empty() {
+                path.push('/');
+            }
+            path.push_str(segment);
+            node = node.children.entry(segment).or_insert_with(|| Self {
+                path: path.clone(),
+                ..Self::default()
+            });
+        }
+        node.item = Some(item);
+    }
+}
+
+impl<'a> RefTree<'a, BranchSnapshot> {
     fn from_branches(branches: &'a [BranchSnapshot]) -> Self {
         let mut root = Self::default();
         for branch in branches {
-            let mut node = &mut root;
-            let mut path = String::new();
-            for segment in branch.short_name.split('/') {
-                if !path.is_empty() {
-                    path.push('/');
-                }
-                path.push_str(segment);
-                node = node.children.entry(segment).or_insert_with(|| Self {
-                    path: path.clone(),
-                    ..Self::default()
-                });
-            }
-            node.branch = Some(branch);
+            root.insert(&branch.short_name, branch);
         }
         root
     }
@@ -237,9 +302,9 @@ pub(super) fn head_label(head: &HeadSnapshot) -> String {
 
 fn disclosure(theme: &Theme, expanded: bool) -> Div {
     let path = if expanded {
-        "icons/chevron-down.svg"
+        Icon::ChevronDown
     } else {
-        "icons/chevron-right.svg"
+        Icon::ChevronRight
     };
     div()
         .size(px(12.0))
@@ -247,12 +312,17 @@ fn disclosure(theme: &Theme, expanded: bool) -> Div {
         .flex()
         .items_center()
         .justify_center()
-        .child(svg().path(path).size(px(10.0)).text_color(theme.text_faint))
+        .child(
+            svg()
+                .path(path.path())
+                .size(px(10.0))
+                .text_color(theme.text_faint),
+        )
 }
 
 fn branch_marker(theme: &Theme) -> gpui::Svg {
     svg()
-        .path("icons/git-branch.svg")
+        .path(Icon::GitBranch.path())
         .size(px(12.0))
         .flex_none()
         .text_color(theme.text_faint)
@@ -260,7 +330,7 @@ fn branch_marker(theme: &Theme) -> gpui::Svg {
 
 fn folder_marker(theme: &Theme) -> gpui::Svg {
     svg()
-        .path("icons/folder.svg")
+        .path(Icon::Folder.path())
         .size(px(12.0))
         .flex_none()
         .text_color(theme.text_faint)
@@ -270,10 +340,21 @@ fn branch_indent(depth: usize) -> f32 {
     15.0 + f32::from(u16::try_from(depth).unwrap_or(u16::MAX)) * 16.0
 }
 
+fn truncating_label(label: impl Into<SharedString>) -> Div {
+    div()
+        .flex_1()
+        .min_w(px(1.0))
+        .overflow_hidden()
+        .text_ellipsis()
+        .whitespace_nowrap()
+        .child(label.into())
+}
+
 fn remote_marker(theme: &Theme) -> gpui::Svg {
     svg()
-        .path("icons/globe.svg")
+        .path(Icon::Globe.path())
         .size(px(12.0))
+        .flex_none()
         .text_color(theme.orange)
 }
 
@@ -347,7 +428,7 @@ impl SourcefourWindow {
         snapshot: &RepoSnapshot,
         cx: &mut gpui::Context<Self>,
     ) -> gpui::Stateful<Div> {
-        let branch_tree = BranchTree::from_branches(&snapshot.local_branches);
+        let branch_tree = RefTree::from_branches(&snapshot.local_branches);
         let mut root = div()
             .w(px(self.panels.sidebar))
             .flex_none()
@@ -370,7 +451,7 @@ impl SourcefourWindow {
                             snapshot
                                 .worktrees
                                 .iter()
-                                .map(|tree| self.worktree_row(tree)),
+                                .map(|tree| self.worktree_row(tree, cx)),
                         )
                     }),
                 SidebarSection::Branches => root
@@ -383,17 +464,33 @@ impl SourcefourWindow {
                     .when(self.sections.expanded(section), |this| {
                         this.children(self.branch_tree_rows(&branch_tree, 0, cx))
                     }),
-                // The prototype counts remotes here, not their branches.
                 SidebarSection::Remotes => root
-                    .child(self.section("REMOTES", snapshot.remotes.len().to_string(), section, cx))
+                    .child(
+                        self.section(
+                            "REMOTES",
+                            snapshot
+                                .remotes
+                                .iter()
+                                .map(|remote| remote.branches.len())
+                                .sum::<usize>()
+                                .to_string(),
+                            section,
+                            cx,
+                        ),
+                    )
                     .when(self.sections.expanded(section), |this| {
                         this.children(snapshot.remotes.iter().flat_map(|remote| {
-                            std::iter::once(self.remote_row(remote)).chain(
-                                remote
-                                    .branches
-                                    .iter()
-                                    .map(|branch| self.remote_branch_row(&branch.short_name)),
-                            )
+                            let mut tree = RefTree::default();
+                            for branch in &remote.branches {
+                                let relative = branch
+                                    .short_name
+                                    .strip_prefix(&format!("{}/", remote.name))
+                                    .unwrap_or(&branch.short_name);
+                                tree.insert(relative, branch);
+                            }
+                            std::iter::once(self.remote_row(remote, cx).into_any_element())
+                                .chain(self.remote_tree_rows(&tree, &remote.name, 0, cx))
+                                .collect::<Vec<_>>()
                         }))
                     }),
                 // Only a GitHub repository has Actions to show.
@@ -417,14 +514,22 @@ impl SourcefourWindow {
         root
     }
 
-    pub(super) fn worktree_row(&self, tree: &sourcefour_model::WorktreeSnapshot) -> Div {
+    pub(super) fn worktree_row(
+        &self,
+        tree: &sourcefour_model::WorktreeSnapshot,
+        cx: &mut gpui::Context<Self>,
+    ) -> gpui::Stateful<Div> {
         let marker = match (&tree.accessibility, tree.is_current) {
             (WorktreeAccessibility::Inaccessible { .. }, _) => self.theme.red,
             (WorktreeAccessibility::Prunable { .. }, _) => self.theme.orange,
             (WorktreeAccessibility::Accessible, true) => self.theme.green,
             (WorktreeAccessibility::Accessible, false) => self.theme.text_faint,
         };
+        let path = tree.path.clone();
+        let activatable =
+            matches!(tree.accessibility, WorktreeAccessibility::Accessible) && !tree.is_current;
         div()
+            .id(gpui::SharedString::from(format!("worktree:{}", tree.id.0)))
             .h(px(47.0))
             .flex_none()
             .flex()
@@ -437,6 +542,13 @@ impl SourcefourWindow {
                 self.theme.bg_panel
             })
             .text_color(self.theme.text_primary)
+            .when(activatable, |row| {
+                row.cursor_pointer()
+                    .hover(|style| style.bg(self.theme.bg_hover))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.activate_worktree_path(path.clone(), cx);
+                    }))
+            })
             .child(
                 div()
                     .flex()
@@ -449,7 +561,7 @@ impl SourcefourWindow {
                             .flex()
                             .items_center()
                             .gap(px(6.0))
-                            .child(div().size(px(7.0)).rounded_full().bg(marker))
+                            .child(div().size(px(7.0)).flex_none().rounded_full().bg(marker))
                             .child(tree.display_name.clone())
                             .when(tree.is_locked, |this| {
                                 this.child(
@@ -501,6 +613,11 @@ impl SourcefourWindow {
     ) -> gpui::Stateful<Div> {
         let scoped = is_scoped_to(self.history.scope.as_ref(), &branch.full_name);
         let full_name = branch.full_name.clone();
+        let worktree_full_name = branch.full_name.clone();
+        let worktree_short_name = branch.short_name.clone();
+        let worktree_tooltip = format!("Create worktree from {}", branch.short_name);
+        let tooltip_palette = TooltipPalette::from(&self.theme);
+        let label = label.into();
         let tip = branch.tip;
         div()
             .id(gpui::SharedString::from(branch.full_name.clone()))
@@ -530,27 +647,62 @@ impl SourcefourWindow {
                 self.theme.text_secondary
             })
             .child(branch_marker(&self.theme))
-            .child(label.into())
+            .child(truncating_label(label))
             .children(self.pr_chip(&branch.short_name))
-            .child(div().flex_grow())
             .children(ahead_behind_text(branch.ahead_behind).map(|text| {
                 div()
+                    .flex_none()
                     .text_size(px(10.5))
                     .text_color(self.theme.accent)
                     .child(text)
             }))
+            .child(
+                div()
+                    .id(gpui::SharedString::from(format!(
+                        "add-worktree:{}",
+                        branch.full_name
+                    )))
+                    .size(px(20.0))
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(4.0))
+                    .cursor_pointer()
+                    .hover(|style| style.bg(self.theme.bg_hover))
+                    .tooltip(move |_, cx| {
+                        sidebar_tooltip(worktree_tooltip.clone(), tooltip_palette, cx)
+                    })
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        cx.stop_propagation();
+                        this.open_worktree_dialog(
+                            super::worktree_dialog::WorktreeDialogSource::Local {
+                                full_name: worktree_full_name.clone(),
+                                short_name: worktree_short_name.clone(),
+                            },
+                            window,
+                            cx,
+                        );
+                    }))
+                    .child(
+                        svg()
+                            .path(Icon::FolderPlus.path())
+                            .size(px(12.0))
+                            .text_color(self.theme.text_faint),
+                    ),
+            )
     }
 
     fn branch_tree_rows(
         &self,
-        tree: &BranchTree<'_>,
+        tree: &RefTree<'_, BranchSnapshot>,
         depth: usize,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<gpui::AnyElement> {
         let mut rows = Vec::new();
         for (&segment, node) in &tree.children {
             if node.children.is_empty() {
-                if let Some(branch) = node.branch {
+                if let Some(branch) = node.item {
                     rows.push(
                         self.branch_row(branch, segment.to_owned(), depth, cx)
                             .into_any_element(),
@@ -567,7 +719,7 @@ impl SourcefourWindow {
             if !expanded {
                 continue;
             }
-            if let Some(branch) = node.branch {
+            if let Some(branch) = node.item {
                 rows.push(
                     self.branch_row(branch, branch.short_name.clone(), depth + 1, cx)
                         .into_any_element(),
@@ -603,7 +755,7 @@ impl SourcefourWindow {
             .text_color(self.theme.text_secondary)
             .child(disclosure(&self.theme, expanded))
             .child(folder_marker(&self.theme))
-            .child(label.to_owned())
+            .child(truncating_label(label.to_owned()))
             .on_click(cx.listener(move |this, _, _, cx| {
                 if !this.collapsed_branch_folders.remove(&path) {
                     this.collapsed_branch_folders.insert(path.clone());
@@ -613,8 +765,16 @@ impl SourcefourWindow {
             }))
     }
 
-    pub(super) fn remote_row(&self, remote: &sourcefour_model::RemoteSnapshot) -> Div {
+    pub(super) fn remote_row(
+        &self,
+        remote: &sourcefour_model::RemoteSnapshot,
+        cx: &mut gpui::Context<Self>,
+    ) -> gpui::Stateful<Div> {
+        let remote_name = remote.name.clone();
+        let tooltip = format!("Fetch {}", remote.name);
+        let tooltip_palette = TooltipPalette::from(&self.theme);
         div()
+            .id(gpui::SharedString::from(format!("remote:{}", remote.name)))
             .h(px(29.0))
             .flex_none()
             .flex()
@@ -625,26 +785,180 @@ impl SourcefourWindow {
             .font_weight(FontWeight::MEDIUM)
             .text_color(self.theme.orange)
             .child(remote_marker(&self.theme))
-            .child(remote.name.clone())
-            .child(div().flex_grow())
+            .child(truncating_label(remote.name.clone()).flex_initial())
             .children(remote.fetch_url.clone().map(|url| {
-                div()
+                truncating_label(url)
                     .text_size(px(10.0))
                     .text_color(self.theme.text_faint)
-                    .child(url)
             }))
+            .child(
+                div()
+                    .id(gpui::SharedString::from(format!("fetch:{}", remote.name)))
+                    .size(px(20.0))
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(4.0))
+                    .cursor_pointer()
+                    .hover(|style| style.bg(self.theme.bg_hover))
+                    .tooltip(move |_, cx| sidebar_tooltip(tooltip.clone(), tooltip_palette, cx))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.fetch_remote(remote_name.clone(), cx);
+                    }))
+                    .child(
+                        svg()
+                            .path(Icon::CloudDownload.path())
+                            .size(px(12.0))
+                            .text_color(self.theme.orange),
+                    ),
+            )
     }
 
-    pub(super) fn remote_branch_row(&self, short_name: &str) -> Div {
+    fn remote_tree_rows(
+        &self,
+        tree: &RefTree<'_, RemoteBranchSnapshot>,
+        remote: &str,
+        depth: usize,
+        cx: &mut gpui::Context<Self>,
+    ) -> Vec<gpui::AnyElement> {
+        let mut rows = Vec::new();
+        for (&segment, node) in &tree.children {
+            if node.children.is_empty() {
+                if let Some(branch) = node.item {
+                    rows.push(
+                        self.remote_branch_row(branch, segment, depth, cx)
+                            .into_any_element(),
+                    );
+                }
+                continue;
+            }
+            let key = format!("remote:{remote}:{}", node.path);
+            let expanded = !self.collapsed_branch_folders.contains(&key);
+            rows.push(
+                self.branch_folder_row(segment, &key, depth + 1, expanded, cx)
+                    .into_any_element(),
+            );
+            if !expanded {
+                continue;
+            }
+            if let Some(branch) = node.item {
+                rows.push(
+                    self.remote_branch_row(branch, &node.path, depth + 1, cx)
+                        .into_any_element(),
+                );
+            }
+            rows.extend(self.remote_tree_rows(node, remote, depth + 1, cx));
+        }
+        rows
+    }
+
+    pub(super) fn remote_branch_row(
+        &self,
+        branch: &RemoteBranchSnapshot,
+        label: &str,
+        depth: usize,
+        cx: &mut gpui::Context<Self>,
+    ) -> gpui::Stateful<Div> {
+        let scoped = is_scoped_to(self.history.scope.as_ref(), &branch.full_name);
+        let full_name = branch.full_name.clone();
+        let action_full_name = branch.full_name.clone();
+        let action_short_name = branch.short_name.clone();
+        let worktree_full_name = branch.full_name.clone();
+        let worktree_short_name = branch.short_name.clone();
+        let tracking_tip = format!("Use {} locally", branch.full_name);
+        let worktree_tip = format!("Create worktree from {}", branch.full_name);
+        let palette = TooltipPalette::from(&self.theme);
+        let tip = branch.tip;
         div()
+            .id(gpui::SharedString::from(branch.full_name.clone()))
             .h(px(24.0))
             .flex_none()
             .flex()
             .items_center()
-            .pl(px(34.0))
+            .pl(px(branch_indent(depth + 1)))
+            .pr(px(15.0))
+            .gap(px(7.0))
+            .cursor_pointer()
+            .hover(|style| style.bg(self.theme.bg_hover))
+            .on_click(cx.listener(move |this, _, _, cx| {
+                let scope = toggled_scope(this.history.scope.as_ref(), &full_name, tip);
+                this.start_history(scope, cx);
+                cx.notify();
+            }))
+            .bg(if scoped {
+                self.theme.bg_selected
+            } else {
+                self.theme.bg_panel
+            })
             .text_size(px(12.0))
             .text_color(self.theme.purple)
-            .child(short_name.to_owned())
+            .child(branch_marker(&self.theme))
+            .child(truncating_label(label.to_owned()))
+            .child(
+                div()
+                    .id(gpui::SharedString::from(format!(
+                        "track:{}",
+                        branch.full_name
+                    )))
+                    .size(px(20.0))
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(4.0))
+                    .cursor_pointer()
+                    .hover(|style| style.bg(self.theme.bg_hover))
+                    .tooltip(move |_, cx| sidebar_tooltip(tracking_tip.clone(), palette, cx))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        cx.stop_propagation();
+                        this.use_remote_branch(
+                            action_full_name.clone(),
+                            action_short_name.clone(),
+                            window,
+                            cx,
+                        );
+                    }))
+                    .child(
+                        svg()
+                            .path(Icon::CloudDownload.path())
+                            .size(px(12.0))
+                            .text_color(self.theme.purple),
+                    ),
+            )
+            .child(
+                div()
+                    .id(gpui::SharedString::from(format!(
+                        "remote-worktree:{}",
+                        branch.full_name
+                    )))
+                    .size(px(20.0))
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(4.0))
+                    .cursor_pointer()
+                    .hover(|style| style.bg(self.theme.bg_hover))
+                    .tooltip(move |_, cx| sidebar_tooltip(worktree_tip.clone(), palette, cx))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        cx.stop_propagation();
+                        this.open_worktree_dialog(
+                            super::worktree_dialog::WorktreeDialogSource::Remote {
+                                full_name: worktree_full_name.clone(),
+                                short_name: worktree_short_name.clone(),
+                            },
+                            window,
+                            cx,
+                        );
+                    }))
+                    .child(
+                        svg()
+                            .path(Icon::FolderPlus.path())
+                            .size(px(12.0))
+                            .text_color(self.theme.text_faint),
+                    ),
+            )
     }
 
     pub(super) fn loading_sidebar(&self, cx: &mut gpui::Context<Self>) -> Div {
@@ -711,7 +1025,7 @@ mod tests {
             branch("fix/crash"),
         ];
 
-        let tree = BranchTree::from_branches(&branches);
+        let tree = RefTree::from_branches(&branches);
         assert_eq!(
             tree.children.keys().copied().collect::<Vec<_>>(),
             ["feature", "fix", "main"]
@@ -732,18 +1046,49 @@ mod tests {
     fn a_branch_can_also_be_a_folder_prefix() {
         let branches = [branch("feature"), branch("feature/login")];
 
-        let tree = BranchTree::from_branches(&branches);
+        let tree = RefTree::from_branches(&branches);
         let feature = &tree.children["feature"];
 
         assert_eq!(
-            feature.branch.map(|branch| branch.short_name.as_str()),
+            feature.item.map(|branch| branch.short_name.as_str()),
             Some("feature")
         );
         assert_eq!(
             feature.children["login"]
-                .branch
+                .item
                 .map(|branch| branch.short_name.as_str()),
             Some("feature/login")
+        );
+    }
+
+    #[test]
+    fn remote_names_form_the_same_recursive_tree_without_the_remote_prefix() {
+        let branches = [
+            sourcefour_model::RemoteBranchSnapshot {
+                full_name: String::from("refs/remotes/origin/feature/auth/login"),
+                short_name: String::from("origin/feature/auth/login"),
+                tip: Oid::sha1([0; 20]),
+            },
+            sourcefour_model::RemoteBranchSnapshot {
+                full_name: String::from("refs/remotes/origin/fix/crash"),
+                short_name: String::from("origin/fix/crash"),
+                tip: Oid::sha1([1; 20]),
+            },
+        ];
+        let mut tree = RefTree::default();
+        for branch in &branches {
+            tree.insert(branch.short_name.strip_prefix("origin/").unwrap(), branch);
+        }
+        assert_eq!(
+            tree.children.keys().copied().collect::<Vec<_>>(),
+            ["feature", "fix"]
+        );
+        assert_eq!(
+            tree.children["feature"].children["auth"].children["login"]
+                .item
+                .unwrap()
+                .full_name,
+            "refs/remotes/origin/feature/auth/login"
         );
     }
 

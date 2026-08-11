@@ -8,6 +8,7 @@ use sourcefour_git::OperationSink;
 use sourcefour_model::{FetchRequest, OperationOutcome, OperationProgress, RepoSnapshot};
 
 use crate::{
+    icons::Icon,
     panels::Splitter,
     theme::{SPLITTER_WIDTH, STATUS_HEIGHT, TITLEBAR_HEIGHT, TOOLBAR_HEIGHT, Theme},
 };
@@ -22,7 +23,7 @@ pub(super) enum NetworkOperationState {
         generation: u64,
         op: NetworkOp,
         progress: Arc<Mutex<Option<OperationProgress>>>,
-        _cancel: Arc<AtomicBool>,
+        cancel: Arc<AtomicBool>,
     },
 }
 
@@ -33,6 +34,15 @@ impl Default for NetworkOperationState {
 }
 
 impl NetworkOperationState {
+    pub(super) fn cancel_and_retire(&mut self) {
+        if let Self::Running { cancel, .. } = self {
+            cancel.store(true, std::sync::atomic::Ordering::Release);
+        }
+        *self = Self::Idle {
+            generation: self.generation().wrapping_add(1),
+        };
+    }
+
     fn running_op(&self) -> Option<NetworkOp> {
         match self {
             Self::Idle { .. } => None,
@@ -94,11 +104,11 @@ impl NetworkOp {
         }
     }
 
-    fn icon(self) -> &'static str {
+    fn icon(self) -> Icon {
         match self {
-            Self::Fetch => "icons/cloud-download.svg",
-            Self::Push => "icons/arrow-up-from-line.svg",
-            Self::Pull => "icons/arrow-down-to-line.svg",
+            Self::Fetch => Icon::CloudDownload,
+            Self::Push => Icon::ArrowUpFromLine,
+            Self::Pull => Icon::ArrowDownToLine,
         }
     }
 }
@@ -133,7 +143,7 @@ fn status_summary(snapshot: &RepoSnapshot) -> String {
 
 fn filter_icon(theme: &Theme) -> gpui::Svg {
     svg()
-        .path("icons/search.svg")
+        .path(Icon::Search.path())
         .size(px(13.0))
         .text_color(theme.text_faint)
 }
@@ -178,9 +188,9 @@ impl SourcefourWindow {
             .child(self.operation_button(NetworkOp::Fetch, cx))
             .child(self.operation_button(NetworkOp::Pull, cx))
             .child(self.operation_button(NetworkOp::Push, cx))
-            .child(action("Commit", "icons/git-commit-horizontal.svg"))
+            .child(action("Commit", Icon::GitCommitHorizontal))
             .child(
-                self.toolbar_column("Branch", "icons/git-branch.svg", true)
+                self.toolbar_column("Branch", Icon::GitBranch, true)
                     .id("branch-action")
                     .cursor_pointer()
                     .hover(|style| style.bg(self.theme.bg_hover))
@@ -188,8 +198,8 @@ impl SourcefourWindow {
                         this.open_branch_dialog(window, cx);
                     })),
             )
-            .child(action("Merge", "icons/git-merge.svg"))
-            .child(action("Stash", "icons/archive.svg"))
+            .child(action("Merge", Icon::GitMerge))
+            .child(action("Stash", Icon::Archive))
             .child(div().flex_grow())
             .child(self.filter_box(window, cx))
             .child(crate::settings_ui::toolbar_button(&self.theme, cx))
@@ -197,7 +207,7 @@ impl SourcefourWindow {
 
     /// One toolbar column: icon above label, lit when active. Callers add
     /// identity and click behavior; planned actions stay inert and faint.
-    fn toolbar_column(&self, label: &'static str, icon: &'static str, active: bool) -> Div {
+    fn toolbar_column(&self, label: &'static str, icon: Icon, active: bool) -> Div {
         div()
             .h_full()
             .flex()
@@ -212,11 +222,16 @@ impl SourcefourWindow {
             } else {
                 self.theme.text_faint
             })
-            .child(svg().path(icon).size(px(15.0)).text_color(if active {
-                self.theme.accent
-            } else {
-                self.theme.text_faint
-            }))
+            .child(
+                svg()
+                    .path(icon.path())
+                    .size(px(15.0))
+                    .text_color(if active {
+                        self.theme.accent
+                    } else {
+                        self.theme.text_faint
+                    }),
+            )
             .child(label)
     }
 
@@ -300,6 +315,20 @@ impl SourcefourWindow {
     /// A second operation while one runs is a no-op: the buttons disable,
     /// and this guard holds even if a keybinding races the render.
     pub(super) fn start_operation(&mut self, op: NetworkOp, cx: &mut gpui::Context<Self>) {
+        self.start_operation_with_remote(op, None, cx);
+    }
+
+    /// Fetches one named remote from its sidebar header.
+    pub(super) fn fetch_remote(&mut self, remote: String, cx: &mut gpui::Context<Self>) {
+        self.start_operation_with_remote(NetworkOp::Fetch, Some(remote), cx);
+    }
+
+    fn start_operation_with_remote(
+        &mut self,
+        op: NetworkOp,
+        remote: Option<String>,
+        cx: &mut gpui::Context<Self>,
+    ) {
         if self.network_operation.running_op().is_some() {
             return;
         }
@@ -308,7 +337,7 @@ impl SourcefourWindow {
         };
         let request = FetchRequest {
             worktree: self.active_worktree_id(),
-            remote: None,
+            remote,
             prune: self.settings.git.fetch_prune,
         };
         let latest = Arc::new(Mutex::new(None));
@@ -318,7 +347,7 @@ impl SourcefourWindow {
             generation,
             op,
             progress: Arc::clone(&latest),
-            _cancel: Arc::clone(&cancel),
+            cancel: Arc::clone(&cancel),
         };
         self.op_status = None;
         cx.spawn(async move |this, cx| {
@@ -484,7 +513,7 @@ mod tests {
             generation,
             op,
             progress: Arc::new(Mutex::new(None)),
-            _cancel: Arc::new(AtomicBool::new(false)),
+            cancel: Arc::new(AtomicBool::new(false)),
         }
     }
 

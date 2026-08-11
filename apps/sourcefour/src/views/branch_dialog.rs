@@ -7,21 +7,137 @@ use super::SourcefourWindow;
 
 /// The §6.13 create-branch dialog's state; the name lives in its input.
 pub(super) struct BranchDialog {
+    source: BranchDialogSource,
     checkout: bool,
     running: bool,
     error: Option<String>,
 }
 
+#[derive(Clone)]
+enum BranchDialogSource {
+    Commit,
+    Remote {
+        full_name: String,
+        short_name: String,
+    },
+}
+
 impl SourcefourWindow {
+    /// Creates, checks out, or activates the local counterpart of a remote branch.
+    pub(super) fn use_remote_branch(
+        &mut self,
+        full_name: String,
+        short_name: String,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let local_name = short_name
+            .split_once('/')
+            .map_or(short_name.as_str(), |(_, branch)| branch);
+        let existing = self.snapshot().and_then(|snapshot| {
+            snapshot
+                .local_branches
+                .iter()
+                .find(|branch| branch.short_name == local_name)
+                .cloned()
+        });
+        let Some(branch) = existing else {
+            self.open_tracking_dialog(full_name, short_name, window, cx);
+            return;
+        };
+        if branch
+            .upstream
+            .as_ref()
+            .map(|upstream| upstream.full_name.as_str())
+            != Some(full_name.as_str())
+        {
+            self.open_tracking_dialog(full_name, short_name, window, cx);
+            return;
+        }
+        if branch.is_current {
+            return;
+        }
+        if let Some(worktree) = branch.checked_out_in.and_then(|id| {
+            self.snapshot()?
+                .worktrees
+                .iter()
+                .find(|tree| tree.id == id)
+                .cloned()
+        }) {
+            self.activate_worktree_path(worktree.path, cx);
+            return;
+        }
+        let Some(location) = self.location.clone() else {
+            return;
+        };
+        let request = sourcefour_model::CheckoutBranchRequest {
+            worktree: self.active_worktree_id(),
+            full_name: branch.full_name,
+        };
+        cx.spawn(async move |this, cx| {
+            let outcome = cx
+                .background_executor()
+                .spawn(async move { sourcefour_git::checkout_branch(&location, &request) })
+                .await;
+            this.update(cx, |this, cx| {
+                match outcome {
+                    Ok(OperationOutcome::Succeeded { summary, .. }) => {
+                        this.op_status = Some((true, summary));
+                        this.begin_reload(cx);
+                    }
+                    Ok(OperationOutcome::Failed { error, .. }) | Err(error) => {
+                        this.op_status = Some((false, error.user.message));
+                    }
+                    Ok(OperationOutcome::Cancelled { .. }) => {}
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     /// Opens the §6.13 create-branch dialog seeded from the selection.
     pub(super) fn open_branch_dialog(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) {
         self.branch_dialog = Some(BranchDialog {
+            source: BranchDialogSource::Commit,
             checkout: false,
             running: false,
             error: None,
         });
         self.branch_input
             .update(cx, |input, cx| input.set_text("", cx));
+        self.branch_input
+            .read(cx)
+            .focus_handle
+            .clone()
+            .focus(window);
+        cx.notify();
+    }
+
+    /// Opens branch creation preconfigured to track a remote branch.
+    pub(super) fn open_tracking_dialog(
+        &mut self,
+        full_name: String,
+        short_name: String,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let local_name = short_name
+            .split_once('/')
+            .map_or(short_name.as_str(), |(_, branch)| branch)
+            .to_owned();
+        self.branch_dialog = Some(BranchDialog {
+            source: BranchDialogSource::Remote {
+                full_name,
+                short_name,
+            },
+            checkout: true,
+            running: false,
+            error: None,
+        });
+        self.branch_input
+            .update(cx, |input, cx| input.set_text(&local_name, cx));
         self.branch_input
             .read(cx)
             .focus_handle
@@ -47,9 +163,10 @@ impl SourcefourWindow {
         cx: &mut gpui::Context<Self>,
     ) {
         let name = self.branch_input.read(cx).text().to_string();
-        let (Some(start), Some(location)) = (self.branch_start(), self.location.clone()) else {
+        let Some(location) = self.location.clone() else {
             return;
         };
+        let start = self.branch_start();
         let Some(dialog) = &mut self.branch_dialog else {
             return;
         };
@@ -57,19 +174,41 @@ impl SourcefourWindow {
             return;
         }
         let checkout = dialog.checkout;
+        let source = dialog.source.clone();
+        if matches!(source, BranchDialogSource::Commit) && start.is_none() {
+            return;
+        }
         dialog.running = true;
         dialog.error = None;
-        let request = sourcefour_model::CreateBranchRequest {
-            worktree: self.active_worktree_id(),
-            name,
-            start,
-            checkout,
-        };
+        let worktree = self.active_worktree_id();
         self.focus.focus(window);
         cx.spawn(async move |this, cx| {
             let outcome = cx
                 .background_executor()
-                .spawn(async move { sourcefour_git::create_branch(&location, &request) })
+                .spawn(async move {
+                    match source {
+                        BranchDialogSource::Commit => sourcefour_git::create_branch(
+                            &location,
+                            &sourcefour_model::CreateBranchRequest {
+                                worktree,
+                                name,
+                                start: start.expect("commit source was validated"),
+                                checkout,
+                            },
+                        ),
+                        BranchDialogSource::Remote { full_name, .. } => {
+                            sourcefour_git::track_remote_branch(
+                                &location,
+                                &sourcefour_model::TrackRemoteBranchRequest {
+                                    worktree,
+                                    remote_ref: full_name,
+                                    local_name: name,
+                                    checkout,
+                                },
+                            )
+                        }
+                    }
+                })
                 .await;
             this.update(cx, |this, cx| {
                 match outcome {
@@ -116,9 +255,16 @@ impl SourcefourWindow {
         let name = self.branch_input.read(cx).text().to_string();
         let creatable = !dialog.running && sourcefour_git::is_valid_branch_name(&name);
         let invalid = !name.is_empty() && !sourcefour_git::is_valid_branch_name(&name);
-        let start = self
-            .branch_start()
-            .map_or_else(|| String::from("HEAD"), |oid| oid.abbreviated(9));
+        let (title, start) = match &dialog.source {
+            BranchDialogSource::Commit => (
+                "Create branch",
+                self.branch_start()
+                    .map_or_else(|| String::from("HEAD"), |oid| oid.abbreviated(9)),
+            ),
+            BranchDialogSource::Remote { short_name, .. } => {
+                ("Track remote branch", short_name.clone())
+            }
+        };
         Some(
             super::modal_backdrop("branch-overlay", &self.theme)
                 .items_center()
@@ -141,7 +287,7 @@ impl SourcefourWindow {
                                 .text_size(px(13.0))
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .text_color(self.theme.text_primary)
-                                .child("Create branch")
+                                .child(title)
                                 .child(
                                     div()
                                         .font_family(self.mono_font())

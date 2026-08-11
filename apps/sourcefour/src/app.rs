@@ -362,45 +362,9 @@ impl SourcefourAssets {
     }
 }
 
-/// Every asset the interface can ask for, compiled into the binary.
-///
-/// Reading these from disk would mean a different layout per install channel —
-/// a macOS bundle's Resources, an installer's program directory, a bare
-/// `cargo install`ed binary with no directory at all. Embedding them means the
-/// binary is the whole app wherever it lands. Add a file here when you add one
-/// to `assets/`.
-/// `include_bytes!` needs a literal path, so this names each file once and
-/// derives both the lookup key and the bytes from it.
-macro_rules! asset {
-    ($path:literal) => {
-        (
-            $path,
-            include_bytes!(concat!("../assets/", $path)).as_slice(),
-        )
-    };
-}
-
-const ASSETS: &[(&str, &[u8])] = &[
-    asset!("icons/archive.svg"),
-    asset!("icons/arrow-down-to-line.svg"),
-    asset!("icons/arrow-up-from-line.svg"),
-    asset!("icons/chevron-left.svg"),
-    asset!("icons/chevron-up.svg"),
-    asset!("icons/chevron-down.svg"),
-    asset!("icons/chevron-right.svg"),
-    asset!("icons/cloud-download.svg"),
-    asset!("icons/git-branch.svg"),
-    asset!("icons/git-commit-horizontal.svg"),
-    asset!("icons/git-merge.svg"),
-    asset!("icons/folder.svg"),
-    asset!("icons/globe.svg"),
-    asset!("icons/search.svg"),
-    asset!("icons/settings.svg"),
-];
-
 impl AssetSource for SourcefourAssets {
     fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {
-        Ok(ASSETS
+        Ok(crate::icons::ASSETS
             .iter()
             .find(|(name, _)| *name == path)
             .map(|(_, bytes)| Cow::Borrowed(*bytes)))
@@ -408,7 +372,7 @@ impl AssetSource for SourcefourAssets {
 
     fn list(&self, path: &str) -> Result<Vec<SharedString>> {
         let prefix = path.trim_end_matches('/');
-        Ok(ASSETS
+        Ok(crate::icons::ASSETS
             .iter()
             .filter_map(|(name, _)| name.strip_prefix(prefix)?.strip_prefix('/'))
             .map(SharedString::from)
@@ -432,7 +396,7 @@ mod tests {
         Launch, SourcefourAssets, clamped_window_size, display_path, history_keymap,
         launch_exit_code,
     };
-    use crate::LaunchRequest;
+    use crate::{LaunchRequest, icons::Icon};
 
     fn request(path: impl Into<PathBuf>, demo: bool) -> LaunchRequest {
         LaunchRequest {
@@ -542,6 +506,19 @@ mod tests {
                 loaded.is_some_and(|bytes| !bytes.is_empty()),
                 "{path} is on disk but not in ASSETS — an installed build would \
                  render it as a blank square"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn every_typed_icon_resolves_to_an_embedded_asset() -> Result<(), Box<dyn std::error::Error>> {
+        for icon in Icon::ALL {
+            let loaded = SourcefourAssets.load(icon.path())?;
+            assert!(
+                loaded.is_some_and(|bytes| !bytes.is_empty()),
+                "{} is in Icon::ALL but is not embedded",
+                icon.path()
             );
         }
         Ok(())

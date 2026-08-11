@@ -1005,6 +1005,14 @@ pub enum OperationKind {
     CreateBranch,
     /// Create and check out a branch.
     CreateAndCheckoutBranch,
+    /// Switch the active worktree to an existing local branch.
+    CheckoutBranch,
+    /// Create a local branch which tracks a remote-tracking branch.
+    TrackRemoteBranch,
+    /// Create and check out a local branch which tracks a remote branch.
+    TrackAndCheckoutRemoteBranch,
+    /// Create a linked worktree.
+    AddWorktree,
     /// Record the staged changes as a commit.
     Commit,
 }
@@ -1044,6 +1052,51 @@ pub struct CreateBranchRequest {
     pub start: Oid,
     /// Whether the new branch should become active.
     pub checkout: bool,
+}
+
+/// User-requested checkout of an existing local branch.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CheckoutBranchRequest {
+    /// Worktree used as the Git command context.
+    pub worktree: WorktreeId,
+    /// Fully qualified local branch ref.
+    pub full_name: String,
+}
+
+/// User-requested creation of a local branch tracking a remote branch.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TrackRemoteBranchRequest {
+    /// Worktree used as the Git command context.
+    pub worktree: WorktreeId,
+    /// Fully qualified remote-tracking ref.
+    pub remote_ref: String,
+    /// New local branch name.
+    pub local_name: String,
+    /// Whether the new branch should become active.
+    pub checkout: bool,
+}
+
+/// Branch source for a new linked worktree.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum WorktreeSource {
+    /// An existing local branch.
+    LocalBranch { full_name: String },
+    /// A remote-tracking branch which needs a new local tracking branch.
+    RemoteBranch {
+        full_name: String,
+        local_name: String,
+    },
+}
+
+/// User-requested linked worktree creation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AddWorktreeRequest {
+    /// Worktree used as the Git command context.
+    pub worktree: WorktreeId,
+    /// Branch to check out in the new worktree.
+    pub source: WorktreeSource,
+    /// New checkout directory.
+    pub path: PathBuf,
 }
 
 /// Result of an explicit Git operation.

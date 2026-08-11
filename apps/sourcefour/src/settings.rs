@@ -65,6 +65,20 @@ pub(crate) struct GitSettings {
     /// are gone from the remote. Off by default: deleting refs is not what
     /// someone who pressed Fetch asked for.
     pub(crate) fetch_prune: bool,
+    /// Where generated linked-worktree paths are placed.
+    pub(crate) worktree_location: WorktreeLocation,
+}
+
+/// Layout used when suggesting a path for a new linked worktree.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum WorktreeLocation {
+    /// Place the checkout below `.worktrees` in the main worktree.
+    InsideRepository,
+    /// Place the checkout beside the repository's main worktree.
+    #[default]
+    #[serde(other)]
+    Sibling,
 }
 
 /// The GitHub integration's configuration (§ post-v1 integrations).
@@ -211,7 +225,7 @@ impl AppSettings {
 mod tests {
     use super::{
         AppSettings, AppearanceSettings, AuthMethod, DateDisplay, Density, DiffSettings,
-        GitSettings, GithubSettings, HistorySettings, VideoSettings,
+        GitSettings, GithubSettings, HistorySettings, VideoSettings, WorktreeLocation,
     };
 
     #[test]
@@ -223,7 +237,10 @@ mod tests {
                 date_display: DateDisplay::Absolute,
                 mono_font: Some(String::from("JetBrains Mono")),
             },
-            git: GitSettings { fetch_prune: true },
+            git: GitSettings {
+                fetch_prune: true,
+                worktree_location: WorktreeLocation::InsideRepository,
+            },
             github: GithubSettings {
                 enabled: true,
                 auth_method: AuthMethod::Token,
@@ -418,6 +435,17 @@ mod tests {
             !GitSettings::default().fetch_prune,
             "a fetch that deletes local refs is never the unasked-for default"
         );
+        assert_eq!(
+            GitSettings::default().worktree_location,
+            WorktreeLocation::Sibling
+        );
+
+        std::fs::write(&path, r#"{"git": {"worktree_location": "future-layout"}}"#)?;
+        assert_eq!(
+            AppSettings::load_from(&path).git.worktree_location,
+            WorktreeLocation::Sibling,
+            "unknown layouts retain the safe default"
+        );
 
         std::fs::write(
             &path,
@@ -425,7 +453,10 @@ mod tests {
         )?;
         assert_eq!(
             AppSettings::load_from(&path).git,
-            GitSettings { fetch_prune: true },
+            GitSettings {
+                fetch_prune: true,
+                ..GitSettings::default()
+            },
             "a future key inside the section is ignored, not fatal"
         );
         Ok(())

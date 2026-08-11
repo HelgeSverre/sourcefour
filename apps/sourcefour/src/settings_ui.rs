@@ -8,7 +8,8 @@
 use gpui::{Div, FocusableWrapper, FontWeight, div, prelude::*, px, svg};
 
 use crate::{
-    settings::{AppSettings, AuthMethod, DateDisplay, Density},
+    icons::Icon,
+    settings::{AppSettings, AuthMethod, DateDisplay, Density, WorktreeLocation},
     theme::Theme,
     views::SourcefourWindow,
 };
@@ -273,6 +274,18 @@ fn general_cards(view: &SettingsView<'_>, cx: &mut gpui::Context<SourcefourWindo
                     choices: &[("Off", false), ("On", true)],
                     active: view.settings.git.fetch_prune,
                     apply: |settings, prune| settings.git.fetch_prune = prune,
+                }
+                .row(theme, cx),
+                Choice {
+                    id: "worktree-location",
+                    name: "New worktrees",
+                    description: "Where generated worktree paths are placed by default.",
+                    choices: &[
+                        ("Beside repository", WorktreeLocation::Sibling),
+                        ("Inside .worktrees", WorktreeLocation::InsideRepository),
+                    ],
+                    active: view.settings.git.worktree_location,
+                    apply: |settings, location| settings.git.worktree_location = location,
                 }
                 .row(theme, cx),
             ],
@@ -677,7 +690,7 @@ pub(crate) fn toolbar_button(theme: &Theme, cx: &mut gpui::Context<SourcefourWin
             }))
             .child(
                 svg()
-                    .path("icons/settings.svg")
+                    .path(Icon::Settings.path())
                     .size(px(14.0))
                     .text_color(theme.text_secondary),
             ),

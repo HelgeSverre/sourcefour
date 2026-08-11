@@ -6,7 +6,8 @@ use std::collections::HashSet;
 
 use sourcefour_graph::GraphState;
 use sourcefour_model::{
-    BranchSnapshot, CommitRow, GitTime, GraphRow, HistoryScope, Oid, WorkingTreeSummary,
+    BranchSnapshot, CommitRow, GitTime, GraphRow, HistoryScope, Oid, RemoteSnapshot,
+    WorkingTreeSummary,
 };
 
 use crate::settings::DateDisplay;
@@ -318,14 +319,22 @@ pub(crate) fn toggled_scope(
 pub(crate) fn refreshed_scope(
     current: Option<&HistoryScope>,
     branches: &[BranchSnapshot],
+    remotes: &[RemoteSnapshot],
 ) -> HistoryScope {
     match current {
         Some(HistoryScope::Ref { full_name, .. }) => branches
             .iter()
-            .find(|branch| branch.full_name == *full_name)
-            .map_or(HistoryScope::AllRefs, |branch| HistoryScope::Ref {
+            .map(|branch| (&branch.full_name, branch.tip))
+            .chain(
+                remotes
+                    .iter()
+                    .flat_map(|remote| &remote.branches)
+                    .map(|branch| (&branch.full_name, branch.tip)),
+            )
+            .find(|(name, _)| **name == *full_name)
+            .map_or(HistoryScope::AllRefs, |(_, tip)| HistoryScope::Ref {
                 full_name: full_name.clone(),
-                tip: branch.tip,
+                tip,
             }),
         _ => HistoryScope::AllRefs,
     }
@@ -463,12 +472,37 @@ mod tests {
         let branches = [branch_snapshot("refs/heads/main", oid(9))];
 
         assert_eq!(
-            refreshed_scope(Some(&scoped), &branches),
+            refreshed_scope(Some(&scoped), &branches, &[]),
             HistoryScope::Ref {
                 full_name: String::from("refs/heads/main"),
                 tip: oid(9),
             },
             "the restarted walk must see commits added since the last snapshot"
+        );
+    }
+
+    #[test]
+    fn a_refresh_keeps_a_remote_branch_scope() {
+        let scoped = HistoryScope::Ref {
+            full_name: String::from("refs/remotes/origin/feature/x"),
+            tip: oid(1),
+        };
+        let remotes = [sourcefour_model::RemoteSnapshot {
+            name: String::from("origin"),
+            fetch_url: None,
+            default_branch: None,
+            branches: vec![sourcefour_model::RemoteBranchSnapshot {
+                full_name: String::from("refs/remotes/origin/feature/x"),
+                short_name: String::from("origin/feature/x"),
+                tip: oid(8),
+            }],
+        }];
+        assert_eq!(
+            refreshed_scope(Some(&scoped), &[], &remotes),
+            HistoryScope::Ref {
+                full_name: String::from("refs/remotes/origin/feature/x"),
+                tip: oid(8),
+            }
         );
     }
 
@@ -481,14 +515,14 @@ mod tests {
         let branches = [branch_snapshot("refs/heads/main", oid(9))];
 
         assert_eq!(
-            refreshed_scope(Some(&scoped), &branches),
+            refreshed_scope(Some(&scoped), &branches, &[]),
             HistoryScope::AllRefs
         );
         assert_eq!(
-            refreshed_scope(Some(&HistoryScope::AllRefs), &branches),
+            refreshed_scope(Some(&HistoryScope::AllRefs), &branches, &[]),
             HistoryScope::AllRefs
         );
-        assert_eq!(refreshed_scope(None, &branches), HistoryScope::AllRefs);
+        assert_eq!(refreshed_scope(None, &branches, &[]), HistoryScope::AllRefs);
     }
 
     fn branch_snapshot(full_name: &str, tip: Oid) -> sourcefour_model::BranchSnapshot {

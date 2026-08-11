@@ -125,6 +125,7 @@ pub(crate) enum InputRole {
     HistoryFilter,
     DiffSwitcher,
     BranchName,
+    WorktreePath,
     GithubToken,
     CommitMessage,
 }

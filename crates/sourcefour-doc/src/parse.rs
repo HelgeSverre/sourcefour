@@ -337,6 +337,7 @@ impl Builder {
             italic: style.italic,
             code,
             strike: style.strike,
+            underline: false,
             link: style.link,
         });
     }

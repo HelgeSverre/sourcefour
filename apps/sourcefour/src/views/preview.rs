@@ -1,4 +1,4 @@
-//! The diff overlay's rendered-document pane: Markdown, not diff lines.
+//! The diff overlay's rendered-document pane: documents, not diff lines.
 //!
 //! A Markdown file is two things at once — a patch and a document — and the
 //! header's Source/Preview toggle picks which one is on screen. The preview
@@ -187,6 +187,8 @@ pub(super) struct PreviewParse {
     blocks: Vec<DocBlock>,
     /// One entry per distinct image reference in `blocks`.
     images: HashMap<String, PreviewImage>,
+    /// A parse failure shown in this side's pane instead of an empty document.
+    error: Option<String>,
 }
 
 /// One side's document: its blocks, the images they resolved to, and the
@@ -196,6 +198,8 @@ pub(super) struct PreviewDoc {
     pub(super) blocks: Vec<DocBlock>,
     /// One entry per distinct image reference in `blocks`.
     pub(super) images: HashMap<String, PreviewImage>,
+    /// A format parser failure for this side.
+    error: Option<String>,
     /// One list item per top-level block, so a frame builds the blocks on
     /// screen instead of the document. Holds the scroll position, so it is
     /// built once per loaded document and never per frame.
@@ -237,6 +241,7 @@ impl PreviewDoc {
             ),
             blocks: parse.blocks,
             images: parse.images,
+            error: parse.error,
             side,
             view,
         }
@@ -254,11 +259,13 @@ pub(super) enum PreviewImage {
     Missing,
 }
 
-/// Whether the open diff could be previewed: a Markdown path whose diff came
-/// back as text. Nothing else has a renderer yet.
+/// Whether the open text diff has a document parser and can be previewed.
 pub(super) fn applies(view: &DiffView) -> bool {
     matches!(view.content, Some(DiffContent::Text(_)))
-        && DocumentKind::detect(&view.origin.path().0) == Some(DocumentKind::Markdown)
+        && matches!(
+            DocumentKind::detect(&view.origin.path().0),
+            Some(DocumentKind::Markdown | DocumentKind::Rtf)
+        )
 }
 
 /// Whether the preview is what the body should draw right now.
@@ -326,9 +333,12 @@ fn old_doc_source(
 ///
 /// A side without the document — the new side of a deletion, the old side of
 /// an addition — renders one notice rather than an empty pane.
-fn document_blocks(bytes: Option<&[u8]>) -> Vec<DocBlock> {
+fn document_blocks(
+    kind: DocumentKind,
+    bytes: Option<&[u8]>,
+) -> Result<Vec<DocBlock>, sourcefour_doc::DocumentParseError> {
     let Some(bytes) = bytes else {
-        return vec![DocBlock {
+        return Ok(vec![DocBlock {
             kind: DocBlockKind::Paragraph {
                 spans: vec![DocSpan {
                     text: String::from(ABSENT_NOTICE),
@@ -336,9 +346,9 @@ fn document_blocks(bytes: Option<&[u8]>) -> Vec<DocBlock> {
                 }],
             },
             source_range: 0..0,
-        }];
+        }]);
     };
-    sourcefour_doc::parse_markdown(&String::from_utf8_lossy(bytes))
+    sourcefour_doc::parse_document(kind, bytes)
 }
 
 /// Reads, parses, and resolves both sides, old first. Runs off the main
@@ -349,21 +359,32 @@ fn load(
     head: Option<sourcefour_model::Oid>,
 ) -> (PreviewParse, PreviewParse) {
     let path = origin.path().clone();
+    let kind = DocumentKind::detect(&path.0).unwrap_or(DocumentKind::Markdown);
     (
         load_side(
             location,
             old_doc_source(location, origin, head).as_ref(),
             &path,
+            kind,
         ),
-        load_side(location, doc_source(origin).as_ref(), &path),
+        load_side(location, doc_source(origin).as_ref(), &path, kind),
     )
 }
 
 /// One side's document, parsed and with every image reference resolved
 /// against that side's own tree.
-fn load_side(location: &RepoLocation, source: Option<&DocSource>, path: &RepoPath) -> PreviewParse {
+fn load_side(
+    location: &RepoLocation,
+    source: Option<&DocSource>,
+    path: &RepoPath,
+    kind: DocumentKind,
+) -> PreviewParse {
     let bytes = source.and_then(|source| sourcefour_git::document_bytes(location, source));
-    let blocks = document_blocks(bytes.as_deref());
+    let parsed = document_blocks(kind, bytes.as_deref());
+    let (blocks, error) = match parsed {
+        Ok(blocks) => (blocks, None),
+        Err(error) => (Vec::new(), Some(error.to_string())),
+    };
     let mut images = HashMap::new();
     if let Some(source) = source {
         for reference in sourcefour_doc::image_sources(&blocks) {
@@ -377,7 +398,11 @@ fn load_side(location: &RepoLocation, source: Option<&DocSource>, path: &RepoPat
             });
         }
     }
-    PreviewParse { blocks, images }
+    PreviewParse {
+        blocks,
+        images,
+        error,
+    }
 }
 
 /// §12.5 preview probe; prints only under `SOURCEFOUR_FRAME_LOG`.
@@ -447,10 +472,12 @@ fn demo_parse() -> (PreviewParse, PreviewParse) {
         PreviewParse {
             blocks: sourcefour_doc::parse_markdown(crate::demo::PREVIEW_MARKDOWN_OLD),
             images: images.clone(),
+            error: None,
         },
         PreviewParse {
             blocks: sourcefour_doc::parse_markdown(&stress_body()),
             images,
+            error: None,
         },
     )
 }
@@ -509,7 +536,7 @@ fn span_run(
         font,
         color,
         background_color: span.code.then_some(theme.bg_list),
-        underline: span.link.is_some().then(|| gpui::UnderlineStyle {
+        underline: (span.underline || span.link.is_some()).then(|| gpui::UnderlineStyle {
             thickness: px(1.0),
             color: None,
             wavy: false,
@@ -601,11 +628,19 @@ fn index_at(layout: &gpui::TextLayout, text: &str, position: gpui::Point<gpui::P
 /// costs what is on screen rather than what the document holds.
 ///
 /// The pane's own id scopes every element id the blocks under it build.
-pub(super) fn pane(preview: &PreviewDoc, side: PreviewSide) -> gpui::Stateful<Div> {
-    div()
-        .id(side.pane_id())
-        .size_full()
-        .child(gpui::list(preview.list.clone()).size_full())
+pub(super) fn pane(preview: &PreviewDoc, side: PreviewSide, theme: &Theme) -> gpui::Stateful<Div> {
+    let pane = div().id(side.pane_id()).size_full();
+    if let Some(error) = &preview.error {
+        pane.flex()
+            .items_center()
+            .justify_center()
+            .p(px(24.0))
+            .text_size(px(12.0))
+            .text_color(theme.text_faint)
+            .child(format!("Unable to preview this RTF: {error}"))
+    } else {
+        pane.child(gpui::list(preview.list.clone()).size_full())
+    }
 }
 
 impl SourcefourWindow {
@@ -627,8 +662,10 @@ impl SourcefourWindow {
             // No repository to read from — the demo seeds its own preview, so
             // this only happens before discovery finishes.
             let absent = || PreviewParse {
-                blocks: document_blocks(None),
+                blocks: document_blocks(DocumentKind::Markdown, None)
+                    .expect("an absent side does not parse bytes"),
                 images: HashMap::new(),
+                error: None,
             };
             view.preview = Some(PreviewState {
                 old: PreviewDoc::new(absent(), PreviewSide::Old, cx),
@@ -1192,7 +1229,7 @@ impl SourcefourWindow {
 #[cfg(test)]
 mod tests {
     use gpui::{FontWeight, Hsla, TextRun};
-    use sourcefour_doc::{DocBlockKind, DocSpan};
+    use sourcefour_doc::{DocBlockKind, DocSpan, DocumentKind};
     use sourcefour_model::{DiffParent, DiffPaths, FileDiffRequest, Oid, RepoPath};
 
     use crate::theme::Theme;
@@ -1390,6 +1427,11 @@ mod tests {
                     strike: true,
                     ..DocSpan::default()
                 },
+                DocSpan {
+                    text: String::from("under"),
+                    underline: true,
+                    ..DocSpan::default()
+                },
             ],
             &gpui::font("Helvetica"),
             &MONO.into(),
@@ -1407,6 +1449,7 @@ mod tests {
         assert_eq!(runs[2].font.weight, FontWeight::SEMIBOLD);
         assert_eq!(runs[3].font.style, gpui::FontStyle::Italic);
         assert!(runs[3].strikethrough.is_some());
+        assert!(runs[4].underline.is_some());
     }
 
     #[test]
@@ -1467,7 +1510,7 @@ mod tests {
 
     #[test]
     fn a_side_without_the_document_renders_a_notice_rather_than_nothing() {
-        let blocks = document_blocks(None);
+        let blocks = document_blocks(DocumentKind::Markdown, None).unwrap();
 
         assert_eq!(blocks.len(), 1);
         assert_eq!(
@@ -1483,13 +1526,36 @@ mod tests {
 
     #[test]
     fn present_bytes_parse_as_the_document_they_are() {
-        let blocks = document_blocks(Some(b"# Title\n\ntext\n"));
+        let blocks = document_blocks(DocumentKind::Markdown, Some(b"# Title\n\ntext\n")).unwrap();
 
         assert_eq!(blocks.len(), 2);
         assert!(matches!(
             blocks[0].kind,
             DocBlockKind::Heading { level: 1, .. }
         ));
+    }
+
+    #[test]
+    fn rtf_bytes_use_the_rtf_parser() {
+        let blocks =
+            document_blocks(DocumentKind::Rtf, Some(br"{\rtf1\ansi Plain {\b bold}.}")).unwrap();
+
+        let DocBlockKind::Paragraph { spans } = &blocks[0].kind else {
+            panic!("RTF prose should become a paragraph");
+        };
+        assert_eq!(
+            spans
+                .iter()
+                .map(|span| span.text.as_str())
+                .collect::<String>(),
+            "Plain bold."
+        );
+        assert!(spans.iter().any(|span| span.bold && span.text == "bold"));
+    }
+
+    #[test]
+    fn malformed_rtf_is_a_parse_error() {
+        assert!(document_blocks(DocumentKind::Rtf, Some(br"{\rtf1 broken")).is_err());
     }
 
     #[test]

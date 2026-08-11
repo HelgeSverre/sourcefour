@@ -3,8 +3,8 @@
 use std::process::Command;
 
 use sourcefour_model::{
-    CreateBranchRequest, OperationKind, OperationOutcome, RepoFailure, RepoFailureKind,
-    RepoLocation,
+    CheckoutBranchRequest, CreateBranchRequest, OperationKind, OperationOutcome, RepoFailure,
+    RepoFailureKind, RepoLocation, TrackRemoteBranchRequest,
 };
 
 /// The exact §6.13 argv; arguments are passed discretely, never joined into
@@ -20,6 +20,25 @@ fn branch_argv(request: &CreateBranchRequest) -> Vec<String> {
         ]
     } else {
         vec![String::from("branch"), request.name.clone(), start]
+    }
+}
+
+fn tracking_argv(request: &TrackRemoteBranchRequest) -> Vec<String> {
+    if request.checkout {
+        vec![
+            String::from("switch"),
+            String::from("-c"),
+            request.local_name.clone(),
+            String::from("--track"),
+            request.remote_ref.clone(),
+        ]
+    } else {
+        vec![
+            String::from("branch"),
+            String::from("--track"),
+            request.local_name.clone(),
+            request.remote_ref.clone(),
+        ]
     }
 }
 
@@ -121,13 +140,136 @@ pub fn create_branch(
     }
 }
 
+/// Creates a local branch with an explicit remote-tracking upstream.
+///
+/// # Errors
+///
+/// Returns a typed failure when Git cannot be started. Git command failures
+/// are returned as operation outcomes so the UI can keep its dialog open.
+pub fn track_remote_branch(
+    location: &RepoLocation,
+    request: &TrackRemoteBranchRequest,
+) -> Result<OperationOutcome, RepoFailure> {
+    let kind = if request.checkout {
+        OperationKind::TrackAndCheckoutRemoteBranch
+    } else {
+        OperationKind::TrackRemoteBranch
+    };
+    if !is_valid_branch_name(&request.local_name)
+        || !request.remote_ref.starts_with("refs/remotes/")
+    {
+        return Ok(OperationOutcome::Failed {
+            kind,
+            error: RepoFailure::new(
+                RepoFailureKind::Internal,
+                "Invalid tracking branch",
+                "The local or remote branch name is not valid.",
+            ),
+        });
+    }
+    let workdir = location
+        .active_worktree_path
+        .as_deref()
+        .unwrap_or(&location.common_dir);
+    let output = Command::new("git")
+        .args(tracking_argv(request))
+        .current_dir(workdir)
+        .output()
+        .map_err(|error| {
+            RepoFailure::new(
+                RepoFailureKind::Internal,
+                "Git could not be started",
+                "The installed git executable could not be run.",
+            )
+            .with_details(error.to_string())
+        })?;
+    if output.status.success() {
+        Ok(OperationOutcome::Succeeded {
+            kind,
+            summary: if request.checkout {
+                format!("Created and switched to {}", request.local_name)
+            } else {
+                format!("Created {}", request.local_name)
+            },
+        })
+    } else {
+        Ok(OperationOutcome::Failed {
+            kind,
+            error: RepoFailure::new(
+                RepoFailureKind::OperationConflict,
+                "Tracking branch could not be created",
+                String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+            ),
+        })
+    }
+}
+
+/// Switches the active worktree to an existing local branch.
+///
+/// # Errors
+///
+/// Returns a typed failure when Git cannot be started.
+pub fn checkout_branch(
+    location: &RepoLocation,
+    request: &CheckoutBranchRequest,
+) -> Result<OperationOutcome, RepoFailure> {
+    if !request.full_name.starts_with("refs/heads/") {
+        return Ok(OperationOutcome::Failed {
+            kind: OperationKind::CheckoutBranch,
+            error: RepoFailure::new(
+                RepoFailureKind::Internal,
+                "Invalid branch",
+                "Only a local branch can be checked out.",
+            ),
+        });
+    }
+    let workdir = location
+        .active_worktree_path
+        .as_deref()
+        .unwrap_or(&location.common_dir);
+    let short_name = request.full_name.trim_start_matches("refs/heads/");
+    let output = Command::new("git")
+        .args(["switch", short_name])
+        .current_dir(workdir)
+        .output()
+        .map_err(|error| {
+            RepoFailure::new(
+                RepoFailureKind::Internal,
+                "Git could not be started",
+                "The installed git executable could not be run.",
+            )
+            .with_details(error.to_string())
+        })?;
+    if output.status.success() {
+        Ok(OperationOutcome::Succeeded {
+            kind: OperationKind::CheckoutBranch,
+            summary: format!("Switched to {short_name}"),
+        })
+    } else {
+        Ok(OperationOutcome::Failed {
+            kind: OperationKind::CheckoutBranch,
+            error: RepoFailure::new(
+                RepoFailureKind::OperationConflict,
+                "Branch could not be checked out",
+                String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+            ),
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use sourcefour_model::{CreateBranchRequest, Oid, OperationOutcome, WorktreeId};
+    use sourcefour_model::{
+        CheckoutBranchRequest, CreateBranchRequest, Oid, OperationOutcome,
+        TrackRemoteBranchRequest, WorktreeId,
+    };
     use sourcefour_test_support::TempRepo;
 
-    use super::{branch_argv, create_branch, is_valid_branch_name};
-    use crate::discover;
+    use super::{
+        branch_argv, checkout_branch, create_branch, is_valid_branch_name, track_remote_branch,
+        tracking_argv,
+    };
+    use crate::{discover, references};
 
     fn request(name: &str, start: Oid, checkout: bool) -> CreateBranchRequest {
         CreateBranchRequest {
@@ -155,6 +297,93 @@ mod tests {
             branch_argv(&request("feature/x", start, true)),
             ["switch", "-c", "feature/x", hex.as_str()]
         );
+    }
+
+    #[test]
+    fn tracking_argv_is_explicit() {
+        let request = TrackRemoteBranchRequest {
+            worktree: WorktreeId(String::from("test")),
+            remote_ref: String::from("refs/remotes/origin/feature/x"),
+            local_name: String::from("feature/x"),
+            checkout: true,
+        };
+        assert_eq!(
+            tracking_argv(&request),
+            [
+                "switch",
+                "-c",
+                "feature/x",
+                "--track",
+                "refs/remotes/origin/feature/x"
+            ]
+        );
+    }
+
+    #[test]
+    fn tracking_branch_records_its_upstream() -> Result<(), Box<dyn std::error::Error>> {
+        let origin = TempRepo::init();
+        origin.git(&["branch", "feature/remote"]);
+        let repository = TempRepo::clone_of(&origin);
+        let location = discover(repository.path())?;
+        let outcome = track_remote_branch(
+            &location,
+            &TrackRemoteBranchRequest {
+                worktree: WorktreeId(String::from("test")),
+                remote_ref: String::from("refs/remotes/origin/feature/remote"),
+                local_name: String::from("feature/remote"),
+                checkout: false,
+            },
+        )?;
+        assert!(matches!(outcome, OperationOutcome::Succeeded { .. }));
+        let branch = references(&location, &crate::worktrees(&location)?)?
+            .local_branches
+            .into_iter()
+            .find(|branch| branch.short_name == "feature/remote")
+            .expect("branch exists");
+        assert_eq!(branch.upstream.unwrap().short_name, "origin/feature/remote");
+        Ok(())
+    }
+
+    #[test]
+    fn a_tracking_branch_can_be_created_and_checked_out() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let origin = TempRepo::init();
+        origin.git(&["branch", "feature/checkout"]);
+        let repository = TempRepo::clone_of(&origin);
+        let outcome = track_remote_branch(
+            &discover(repository.path())?,
+            &TrackRemoteBranchRequest {
+                worktree: WorktreeId(String::from("test")),
+                remote_ref: String::from("refs/remotes/origin/feature/checkout"),
+                local_name: String::from("feature/checkout"),
+                checkout: true,
+            },
+        )?;
+        assert!(matches!(outcome, OperationOutcome::Succeeded { .. }));
+        assert_eq!(
+            repository.git(&["branch", "--show-current"]),
+            "feature/checkout"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn an_existing_local_branch_can_be_checked_out() -> Result<(), Box<dyn std::error::Error>> {
+        let repository = TempRepo::init();
+        repository.git(&["branch", "feature/existing"]);
+        let outcome = checkout_branch(
+            &discover(repository.path())?,
+            &CheckoutBranchRequest {
+                worktree: WorktreeId(String::from("test")),
+                full_name: String::from("refs/heads/feature/existing"),
+            },
+        )?;
+        assert!(matches!(outcome, OperationOutcome::Succeeded { .. }));
+        assert_eq!(
+            repository.git(&["branch", "--show-current"]),
+            "feature/existing"
+        );
+        Ok(())
     }
 
     #[test]

@@ -26,6 +26,8 @@ fn fetch_argv(request: &FetchRequest) -> Vec<String> {
     }
     if let Some(remote) = &request.remote {
         argv.push(remote.clone());
+    } else {
+        argv.push(String::from("--all"));
     }
     argv
 }
@@ -106,8 +108,8 @@ mod tests {
     fn the_exact_argv_is_stable() {
         assert_eq!(
             fetch_argv(&request(None, false)),
-            ["fetch", "--progress", "--porcelain"],
-            "no remote means all-remotes default"
+            ["fetch", "--progress", "--porcelain", "--all"],
+            "no remote fetches every configured remote"
         );
         assert_eq!(
             fetch_argv(&request(Some("origin"), true)),
@@ -167,6 +169,36 @@ mod tests {
             clone.git(&["rev-parse", "origin/main"]),
             origin.git(&["rev-parse", "main"]),
             "the tracking ref moved to the upstream tip"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn an_all_remote_fetch_discovers_a_non_default_remote_branch()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let origin = TempRepo::init();
+        let upstream = TempRepo::init();
+        upstream.git(&["branch", "feature/upstream-only"]);
+        let clone = TempRepo::clone_of(&origin);
+        clone.git(&[
+            "remote",
+            "add",
+            "upstream",
+            &upstream.path().to_string_lossy(),
+        ]);
+        let sink = CollectingSink(Mutex::new(Vec::new()));
+
+        let outcome = fetch(
+            &discover(clone.path())?,
+            &request(None, false),
+            &sink,
+            &AtomicBool::new(false),
+        )?;
+
+        assert!(matches!(outcome, OperationOutcome::Succeeded { .. }));
+        assert_eq!(
+            clone.git(&["rev-parse", "upstream/feature/upstream-only"]),
+            upstream.git(&["rev-parse", "feature/upstream-only"])
         );
         Ok(())
     }

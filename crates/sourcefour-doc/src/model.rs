@@ -89,7 +89,7 @@ pub enum CellAlignment {
 /// One styled text run inside a block.
 ///
 /// Runs are maximal: adjacent text sharing every attribute is one span.
-// Four flags mirror the four inline marks Markdown carries; a bitflag set would
+// Five flags mirror the inline marks the supported formats carry; a bitflag set would
 // only move the cost to the renderer.
 #[expect(
     clippy::struct_excessive_bools,
@@ -107,6 +107,8 @@ pub struct DocSpan {
     pub code: bool,
     /// Strikethrough.
     pub strike: bool,
+    /// Underline, independent of link decoration.
+    pub underline: bool,
     /// Link destination when the run is part of a link.
     pub link: Option<String>,
 }
@@ -116,6 +118,8 @@ pub struct DocSpan {
 pub enum DocumentKind {
     /// `CommonMark` plus strikethrough and tables.
     Markdown,
+    /// Rich Text Format.
+    Rtf,
     /// `AsciiDoc`, detected but not yet rendered.
     AsciiDoc,
     /// `LaTeX`, detected but not yet rendered.
@@ -135,6 +139,7 @@ impl DocumentKind {
         let dot = name.iter().rposition(|byte| *byte == b'.')?;
         match name.get(dot + 1..)?.to_ascii_lowercase().as_slice() {
             b"md" | b"markdown" | b"mdown" => Some(Self::Markdown),
+            b"rtf" => Some(Self::Rtf),
             b"adoc" | b"asciidoc" => Some(Self::AsciiDoc),
             b"tex" => Some(Self::Latex),
             _ => None,
@@ -189,10 +194,13 @@ mod tests {
 
     #[test]
     fn detect_reads_the_extension_case_insensitively() {
-        let cases: [(&[u8], Option<DocumentKind>); 11] = [
+        let cases: [(&[u8], Option<DocumentKind>); 14] = [
             (b"README.md", Some(DocumentKind::Markdown)),
             (b"docs/GUIDE.MARKDOWN", Some(DocumentKind::Markdown)),
             (b"notes.mdown", Some(DocumentKind::Markdown)),
+            (b"notes.rtf", Some(DocumentKind::Rtf)),
+            (b"NOTES.RTF", Some(DocumentKind::Rtf)),
+            (b"notes.rtfd", None),
             (b"book.AdOc", Some(DocumentKind::AsciiDoc)),
             (b"book.asciidoc", Some(DocumentKind::AsciiDoc)),
             (b"paper.TeX", Some(DocumentKind::Latex)),

@@ -6,6 +6,7 @@ mod diff_highlight;
 mod diff_split;
 mod graph_paint;
 mod history;
+mod icons;
 mod panels;
 mod persist;
 mod settings;

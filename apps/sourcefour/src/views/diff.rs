@@ -17,6 +17,8 @@ use sourcefour_model::{
     RepoPath, TextDiff, VideoInfo,
 };
 
+use crate::icons::Icon;
+
 use super::{
     Drag, SourcefourWindow, change_color, change_letter, counted,
     preview::{self, PreviewSide, PreviewState},
@@ -1137,19 +1139,17 @@ impl SourcefourWindow {
                     let panes = div()
                         .size_full()
                         .flex()
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w(px(1.0))
-                                .child(preview::pane(&preview.old, PreviewSide::Old)),
-                        )
+                        .child(div().flex_1().min_w(px(1.0)).child(preview::pane(
+                            &preview.old,
+                            PreviewSide::Old,
+                            &self.theme,
+                        )))
                         .child(div().w(px(1.0)).flex_none().bg(self.theme.border))
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w(px(1.0))
-                                .child(preview::pane(&preview.new, PreviewSide::New)),
-                        )
+                        .child(div().flex_1().min_w(px(1.0)).child(preview::pane(
+                            &preview.new,
+                            PreviewSide::New,
+                            &self.theme,
+                        )))
                         .into_any_element();
                     preview::build_probe(
                         started,
@@ -1326,7 +1326,7 @@ impl SourcefourWindow {
                     .child(
                         self.icon_segment_button(
                             "previous-diff-file",
-                            "icons/chevron-left.svg",
+                            Icon::ChevronLeft,
                             previous_file_enabled,
                         )
                         .on_click(cx.listener(|this, _, window, cx| {
@@ -1336,7 +1336,7 @@ impl SourcefourWindow {
                     .child(
                         self.icon_segment_button(
                             "next-diff-file",
-                            "icons/chevron-right.svg",
+                            Icon::ChevronRight,
                             next_file_enabled,
                         )
                         .on_click(cx.listener(|this, _, window, cx| {
@@ -1361,7 +1361,7 @@ impl SourcefourWindow {
                     .child(
                         self.icon_segment_button(
                             "previous-diff-hunk",
-                            "icons/chevron-up.svg",
+                            Icon::ChevronUp,
                             previous_hunk_enabled,
                         )
                         .on_click(cx.listener(|this, _, _, cx| this.navigate_diff_hunk(-1, cx))),
@@ -1369,7 +1369,7 @@ impl SourcefourWindow {
                     .child(
                         self.icon_segment_button(
                             "next-diff-hunk",
-                            "icons/chevron-down.svg",
+                            Icon::ChevronDown,
                             next_hunk_enabled,
                         )
                         .on_click(cx.listener(|this, _, _, cx| this.navigate_diff_hunk(1, cx))),
@@ -1516,7 +1516,7 @@ impl SourcefourWindow {
     fn icon_segment_button(
         &self,
         id: &'static str,
-        path: &'static str,
+        icon: Icon,
         enabled: bool,
     ) -> gpui::Stateful<Div> {
         div()
@@ -1536,7 +1536,7 @@ impl SourcefourWindow {
             .when(!enabled, |button| button.opacity(0.4))
             .child(
                 svg()
-                    .path(path)
+                    .path(icon.path())
                     .size(px(14.0))
                     .text_color(self.theme.text_secondary),
             )

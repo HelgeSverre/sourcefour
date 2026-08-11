@@ -23,13 +23,14 @@ mod session;
 mod stage;
 mod status;
 mod watch;
+mod worktree_add;
 mod worktrees;
 
 use std::sync::atomic::AtomicBool;
 
 pub use crate::{
     ahead_behind::{AheadBehindCache, apply as apply_ahead_behind},
-    branch::{create_branch, is_valid_branch_name},
+    branch::{checkout_branch, create_branch, is_valid_branch_name, track_remote_branch},
     commit::commit,
     detail::commit_detail,
     diff::{DiffLimits, file_diff, file_diff_with_limits, unified, worktree_file_diff},
@@ -46,6 +47,7 @@ pub use crate::{
     stage::{stage_paths, unstage_paths},
     status::working_tree_status,
     watch::{MetadataChange, MetadataWatcher},
+    worktree_add::{add_worktree, ensure_internal_worktrees_excluded},
     worktrees::worktrees,
 };
 

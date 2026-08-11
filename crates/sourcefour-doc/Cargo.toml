@@ -8,7 +8,10 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
+encoding_rs.workspace = true
 pulldown-cmark.workspace = true
+rtf-grimoire.workspace = true
+thiserror.workspace = true
 
 [lints]
 workspace = true
