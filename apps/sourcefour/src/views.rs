@@ -201,6 +201,11 @@ pub(crate) struct SourcefourWindow {
 actions!(
     sourcefour,
     [
+        ActivatePickerControl,
+        ChooseRepositoryFolder,
+        FocusNextPickerControl,
+        FocusPreviousPickerControl,
+        OpenRepositoryPath,
         SelectNextCommit,
         SelectPreviousCommit,
         SelectFirstCommit,
@@ -1546,7 +1551,7 @@ impl Render for SourcefourWindow {
             .flex_col()
             .bg(self.theme.bg_page)
             .text_color(self.theme.text_primary)
-            .child(self.titlebar())
+            .child(self.titlebar(cx))
             .child(self.toolbar(window, cx))
             .child(
                 div()
@@ -1634,45 +1639,384 @@ pub(crate) fn modal_panel(id: &'static str, theme: &Theme) -> gpui::Stateful<Div
 }
 
 /// The window shown instead of the shell when discovery fails.
+///
+/// Not a dead end: a path can be pasted or typed into its input and opened,
+/// a separate zone opens the platform folder picker, and a folder from the
+/// file manager can be dropped anywhere on the window. A path that turns out
+/// not to be a repository updates the failure text in place — this window
+/// already is the failure surface — and one that resolves replaces this
+/// window with the shell.
 pub(crate) struct ErrorWindow {
     theme: Theme,
     title: String,
     message: String,
+    /// The pasted-or-typed path; submission reads it back out. Focused when
+    /// the window opens, so a copied path lands with one keystroke.
+    path_input: gpui::Entity<crate::text_input::TextInput>,
+    /// Tab stop for the Open button, so the keyboard can reach it.
+    open_focus: FocusHandle,
+    /// Tab stop for the choose-a-folder zone.
+    browse_focus: FocusHandle,
+    /// Flipped when a picked path opens, so the process exits clean even
+    /// though the launch itself failed.
+    recovered: Arc<std::sync::atomic::AtomicBool>,
+}
+
+/// The user-facing strings for a failure, shared by the initial window and
+/// every failed pick afterwards.
+fn failure_text(failure: &RepoFailure) -> (String, String) {
+    (failure.user.title.clone(), failure.user.message.clone())
+}
+
+/// `text` as a filesystem path, with a shell-style leading `~` expanded —
+/// paths arrive here copied from terminals and editors, which often print
+/// them shortened exactly the way [`crate::app::display_path`] does.
+fn pasted_path(text: &str) -> std::path::PathBuf {
+    let text = text.trim();
+    let home = crate::persist::home_directory();
+    match (text.strip_prefix('~'), home) {
+        (Some(""), Some(home)) => home,
+        (Some(rest), Some(home)) => match rest.strip_prefix(std::path::MAIN_SEPARATOR) {
+            Some(relative) => home.join(relative),
+            // "~something" is a literal file name, not a home reference.
+            None => std::path::PathBuf::from(text),
+        },
+        _ => std::path::PathBuf::from(text),
+    }
 }
 
 impl ErrorWindow {
-    pub(crate) fn new(failure: &RepoFailure) -> Self {
+    pub(crate) fn new(
+        failure: &RepoFailure,
+        recovered: Arc<std::sync::atomic::AtomicBool>,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> Self {
+        let theme = Theme::dark();
+        let (title, message) = failure_text(failure);
+        let path_input = cx.new(|cx| {
+            crate::text_input::TextInput::new("Paste or type a repository path…", &theme, cx)
+                .role(crate::text_input::InputRole::RepoPath)
+        });
+        // The Open button's enabled state follows what is typed.
+        cx.observe(&path_input, |_, _, cx| cx.notify()).detach();
+        path_input.read(cx).focus_handle.clone().focus(window);
         Self {
-            theme: Theme::dark(),
-            title: failure.user.title.clone(),
-            message: failure.user.message.clone(),
+            theme,
+            title,
+            message,
+            path_input,
+            open_focus: cx.focus_handle(),
+            browse_focus: cx.focus_handle(),
+            recovered,
         }
+    }
+
+    /// Opens whatever the input holds; an empty input opens nothing.
+    fn submit_path(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) {
+        let path = pasted_path(self.path_input.read(cx).text());
+        if path.as_os_str().is_empty() {
+            return;
+        }
+        Self::open_repository(path, window, cx);
+    }
+
+    /// Whether the input holds anything worth opening.
+    fn openable(&self, cx: &gpui::Context<Self>) -> bool {
+        !self.path_input.read(cx).text().trim().is_empty()
+    }
+
+    /// The tab stops, in visual order. A disabled Open button is skipped,
+    /// the way native dialogs skip inert controls.
+    fn focus_order(&self, cx: &gpui::Context<Self>) -> Vec<FocusHandle> {
+        let mut order = vec![self.path_input.read(cx).focus_handle.clone()];
+        if self.openable(cx) {
+            order.push(self.open_focus.clone());
+        }
+        order.push(self.browse_focus.clone());
+        order
+    }
+
+    /// Moves focus to the next or previous tab stop, wrapping at the ends.
+    fn cycle_focus(&mut self, backwards: bool, window: &mut Window, cx: &mut gpui::Context<Self>) {
+        let order = self.focus_order(cx);
+        let current = order
+            .iter()
+            .position(|handle| handle.is_focused(window))
+            .unwrap_or(0);
+        let step = if backwards { order.len() - 1 } else { 1 };
+        order[(current + step) % order.len()].focus(window);
+        cx.notify();
+    }
+
+    /// Enter or Space on a focused control. The input never routes here —
+    /// its own Enter binding is more specific and Space types into it.
+    fn activate_focused(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) {
+        if self.open_focus.is_focused(window) {
+            self.submit_path(window, cx);
+        } else if self.browse_focus.is_focused(window) {
+            Self::choose_folder(window, cx);
+        }
+    }
+
+    /// Opens the platform folder picker; a chosen folder goes through the
+    /// same discovery as a launch path.
+    fn choose_folder(window: &mut Window, cx: &mut gpui::Context<Self>) {
+        let paths = cx.prompt_for_paths(gpui::PathPromptOptions {
+            files: false,
+            directories: true,
+            multiple: false,
+        });
+        let handle = window.window_handle();
+        cx.spawn(async move |this, cx| {
+            if let Ok(Ok(Some(mut chosen))) = paths.await
+                && let Some(path) = chosen.pop()
+            {
+                Self::open_discovered(this, path, handle, cx).await;
+            }
+        })
+        .detach();
+    }
+
+    /// Discovers `path` off the main thread, then either swaps this window
+    /// for the shell or shows why the path did not resolve.
+    fn open_repository(
+        path: std::path::PathBuf,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let handle = window.window_handle();
+        cx.spawn(async move |this, cx| {
+            Self::open_discovered(this, path, handle, cx).await;
+        })
+        .detach();
+    }
+
+    async fn open_discovered(
+        this: gpui::WeakEntity<Self>,
+        path: std::path::PathBuf,
+        handle: gpui::AnyWindowHandle,
+        cx: &mut gpui::AsyncApp,
+    ) {
+        let discovered = cx
+            .background_executor()
+            .spawn(async move { sourcefour_git::discover(&path) })
+            .await;
+        this.update(cx, |this, cx| match discovered {
+            Ok(location) => {
+                let launch = WindowLaunch::for_repository(location);
+                match crate::app::open_repository_window(launch, UiState::load(), None, cx) {
+                    Ok(()) => {
+                        this.recovered
+                            .store(true, std::sync::atomic::Ordering::Release);
+                        // The shell is open; this window has done its job.
+                        // Deferred so the close never races the open within
+                        // this update, which would quit the app.
+                        cx.defer(move |cx| {
+                            handle
+                                .update(cx, |_, window, _| window.remove_window())
+                                .ok();
+                        });
+                    }
+                    Err(error) => {
+                        tracing::error!(%error, "could not open the picked repository");
+                    }
+                }
+            }
+            Err(failure) => {
+                (this.title, this.message) = failure_text(&failure);
+                cx.notify();
+            }
+        })
+        .ok();
     }
 }
 
 impl Render for ErrorWindow {
-    fn render(&mut self, _window: &mut Window, _cx: &mut gpui::Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+        let theme = self.theme;
+        let divider = || div().flex_1().h(px(1.0)).bg(theme.border);
         div()
+            .id("repo-picker")
+            .key_context("RepoPicker")
             .size_full()
             .flex()
             .flex_col()
             .justify_center()
-            .gap(px(8.0))
+            .gap(px(10.0))
             .px(px(24.0))
             .pt(px(TITLEBAR_HEIGHT))
-            .bg(self.theme.bg_page)
+            .bg(theme.bg_page)
+            // The border is the drop-target highlight; invisible until a
+            // folder is dragged over the window.
+            .border_2()
+            .border_color(theme.bg_page)
+            .drag_over::<gpui::ExternalPaths>(move |style, _, _, _| {
+                style.border_color(theme.accent)
+            })
+            .on_drop(cx.listener(|_, paths: &gpui::ExternalPaths, window, cx| {
+                if let Some(path) = paths.paths().first() {
+                    Self::open_repository(path.clone(), window, cx);
+                }
+            }))
+            .on_action(cx.listener(|_, _: &ChooseRepositoryFolder, window, cx| {
+                Self::choose_folder(window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &OpenRepositoryPath, window, cx| {
+                this.submit_path(window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &FocusNextPickerControl, window, cx| {
+                this.cycle_focus(false, window, cx);
+            }))
+            .on_action(
+                cx.listener(|this, _: &FocusPreviousPickerControl, window, cx| {
+                    this.cycle_focus(true, window, cx);
+                }),
+            )
+            .on_action(cx.listener(|this, _: &ActivatePickerControl, window, cx| {
+                this.activate_focused(window, cx);
+            }))
             .child(
                 div()
                     .text_size(px(14.0))
                     .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(self.theme.text_primary)
+                    .text_color(theme.text_primary)
                     .child(self.title.clone()),
             )
             .child(
                 div()
                     .text_size(px(12.0))
-                    .text_color(self.theme.text_secondary)
+                    .text_color(theme.text_secondary)
                     .child(self.message.clone()),
+            )
+            .child(self.path_row(window, cx))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.0))
+                    .child(divider())
+                    .child(
+                        div()
+                            .text_size(px(10.5))
+                            .text_color(theme.text_faint)
+                            .child("or"),
+                    )
+                    .child(divider()),
+            )
+            .child(self.browse_zone(window, cx))
+    }
+}
+
+impl ErrorWindow {
+    /// The paste-or-type section: a path input beside its Open button.
+    ///
+    /// The accent border tracks keyboard focus across the whole window: the
+    /// focused control carries it, everything else sits on quiet borders.
+    fn path_row(&self, window: &Window, cx: &mut gpui::Context<Self>) -> Div {
+        let theme = self.theme;
+        let openable = self.openable(cx);
+        let input_focused = self.path_input.read(cx).focus_handle.is_focused(window);
+        let open_focused = self.open_focus.is_focused(window);
+        div()
+            .mt(px(6.0))
+            .flex()
+            .items_center()
+            .gap(px(8.0))
+            .child(
+                div()
+                    .flex_1()
+                    .h(px(30.0))
+                    .flex()
+                    .items_center()
+                    .px(px(10.0))
+                    .rounded(px(6.0))
+                    .border_1()
+                    .border_color(if input_focused {
+                        theme.accent
+                    } else {
+                        theme.border_strong
+                    })
+                    .bg(theme.bg_list)
+                    .text_size(px(12.0))
+                    .text_color(theme.text_primary)
+                    .child(self.path_input.clone()),
+            )
+            .child(
+                div()
+                    .id("open-path")
+                    .px(px(14.0))
+                    .py(px(6.0))
+                    .rounded(px(6.0))
+                    .text_size(px(11.5))
+                    .when(openable, |button| {
+                        button
+                            .cursor_pointer()
+                            .bg(theme.accent)
+                            .text_color(theme.text_on_accent)
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.submit_path(window, cx);
+                            }))
+                    })
+                    .when(!openable, |button| {
+                        button.bg(theme.bg_hover).text_color(theme.text_faint)
+                    })
+                    .track_focus(&self.open_focus)
+                    .border_1()
+                    .border_color(if open_focused {
+                        theme.text_primary
+                    } else if openable {
+                        theme.accent
+                    } else {
+                        theme.bg_hover
+                    })
+                    .child("Open"),
+            )
+    }
+
+    /// The browse section: one framed zone that opens the folder picker.
+    fn browse_zone(
+        &self,
+        window: &Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> impl IntoElement + use<> {
+        let theme = self.theme;
+        let focused = self.browse_focus.is_focused(window);
+        div()
+            .id("choose-folder")
+            .track_focus(&self.browse_focus)
+            .h(px(44.0))
+            .rounded(px(6.0))
+            .border_1()
+            .border_color(if focused {
+                theme.accent
+            } else {
+                theme.border_strong
+            })
+            .flex()
+            .items_center()
+            .justify_center()
+            .gap(px(7.0))
+            .cursor_pointer()
+            .hover(move |style| style.bg(theme.bg_hover))
+            .on_click(cx.listener(|_, _, window, cx| Self::choose_folder(window, cx)))
+            .child(
+                gpui::svg()
+                    .path("icons/folder.svg")
+                    .size(px(13.0))
+                    .text_color(theme.accent),
+            )
+            .child(
+                div()
+                    .text_size(px(12.0))
+                    .text_color(theme.text_secondary)
+                    .child("Choose a folder…"),
+            )
+            .child(
+                div()
+                    .text_size(px(10.5))
+                    .text_color(theme.text_faint)
+                    .child("or drop one anywhere"),
             )
     }
 }
@@ -1683,7 +2027,9 @@ mod tests {
         Generation, RepoEnvelope, RepoFailure, RepoFailureKind, RepoSessionId, RequestId,
     };
 
-    use super::{ColumnVisibility, ErrorWindow, belongs_to, counted, drag_lost_its_button};
+    use std::path::Path;
+
+    use super::{ColumnVisibility, belongs_to, counted, drag_lost_its_button};
 
     #[test]
     fn a_drag_survives_only_a_held_left_button() {
@@ -1784,9 +2130,24 @@ mod tests {
         )
         .with_details("internal diagnostics");
 
-        let window = ErrorWindow::new(&failure);
+        let (title, message) = super::failure_text(&failure);
 
-        assert_eq!(window.title, "Not a Git repository");
-        assert_eq!(window.message, "No Git repository contains /opt.");
+        assert_eq!(title, "Not a Git repository");
+        assert_eq!(message, "No Git repository contains /opt.");
+    }
+
+    #[test]
+    fn a_pasted_path_is_trimmed_and_home_expanded() {
+        use super::pasted_path;
+        let home = crate::persist::home_directory().expect("every platform names a home");
+
+        assert_eq!(pasted_path(" /opt/repo\n"), Path::new("/opt/repo"));
+        assert_eq!(pasted_path("~"), home);
+        assert_eq!(
+            pasted_path(&format!("~{}code", std::path::MAIN_SEPARATOR)),
+            home.join("code")
+        );
+        // A file literally named "~backup" is not a home reference.
+        assert_eq!(pasted_path("~backup"), Path::new("~backup"));
     }
 }

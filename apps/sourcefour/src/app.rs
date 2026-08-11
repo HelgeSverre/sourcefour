@@ -52,6 +52,26 @@ pub(crate) enum Launch {
     Failed(RepoFailure),
 }
 
+impl WindowLaunch {
+    /// The launch a discovered repository resolves to, shared by the command
+    /// line and the error window's pick-a-folder recovery.
+    pub(crate) fn for_repository(location: RepoLocation) -> Self {
+        Self {
+            demo: false,
+            name: display_name(&location),
+            // A bare repository has no worktree, so show the repository itself.
+            path: display_path(
+                location
+                    .active_worktree_path
+                    .as_deref()
+                    .unwrap_or(&location.common_dir),
+            ),
+            location: Some(location),
+            scene: demo::Scene::Overview,
+        }
+    }
+}
+
 impl Launch {
     /// Resolves the request without touching GPUI, so the decision is testable.
     ///
@@ -68,19 +88,7 @@ impl Launch {
             });
         }
         match discover(&request.path) {
-            Ok(location) => Self::Window(WindowLaunch {
-                demo: false,
-                name: display_name(&location),
-                // A bare repository has no worktree, so show the repository itself.
-                path: display_path(
-                    location
-                        .active_worktree_path
-                        .as_deref()
-                        .unwrap_or(&location.common_dir),
-                ),
-                location: Some(location),
-                scene: demo::Scene::Overview,
-            }),
+            Ok(location) => Self::Window(WindowLaunch::for_repository(location)),
             Err(failure) => Self::Failed(failure),
         }
     }
@@ -91,6 +99,29 @@ fn startup_phase(name: &str) {
     if std::env::var_os("SOURCEFOUR_STARTUP_LOG").is_some() {
         eprintln!("phase {name} {}", crate::since_process_start());
     }
+}
+
+/// Opens the repository shell, sized from the persisted state unless the
+/// launch overrode it. Shared by startup and the error window's recovery.
+pub(crate) fn open_repository_window(
+    launch: WindowLaunch,
+    ui_state: UiState,
+    size_override: Option<(f32, f32)>,
+    cx: &mut App,
+) -> Result<()> {
+    let (width, height) = size_override.unwrap_or((INITIAL_WIDTH, INITIAL_HEIGHT));
+    let window_state = size_override.is_none().then_some(ui_state.window).flatten();
+    let options = window_options(
+        width,
+        height,
+        Some((MINIMUM_WIDTH, MINIMUM_HEIGHT)),
+        window_state,
+        cx,
+    );
+    cx.open_window(options, move |window, cx| {
+        cx.new(|cx| SourcefourWindow::new(launch, &ui_state, window, cx))
+    })
+    .map(|_| ())
 }
 
 pub(crate) fn run(request: &LaunchRequest) -> ExitCode {
@@ -104,6 +135,10 @@ pub(crate) fn run(request: &LaunchRequest) -> ExitCode {
     let failed = matches!(launch, Launch::Failed(_));
     let opened = Arc::new(AtomicBool::new(false));
     let opened_in_app = Arc::clone(&opened);
+    // Flipped when the error window's pick-a-folder recovery opens a
+    // repository after all, so the process exits clean.
+    let recovered = Arc::new(AtomicBool::new(false));
+    let recovered_in_app = Arc::clone(&recovered);
     Application::new()
         .with_assets(SourcefourAssets::new())
         .run(move |cx: &mut App| {
@@ -116,6 +151,7 @@ pub(crate) fn run(request: &LaunchRequest) -> ExitCode {
             })
             .detach();
             cx.bind_keys(history_keymap());
+            cx.bind_keys(repo_picker_keymap());
             cx.bind_keys(crate::text_input::keymap());
             // A bare process gets no quit shortcut from macOS: the standard
             // application menu is what makes Cmd+Q work.
@@ -128,24 +164,13 @@ pub(crate) fn run(request: &LaunchRequest) -> ExitCode {
             startup_phase("pre-window");
             let result = match launch {
                 Launch::Window(launch) => {
-                    let (width, height) = size_override.unwrap_or((INITIAL_WIDTH, INITIAL_HEIGHT));
-                    let window_state = size_override.is_none().then_some(ui_state.window).flatten();
-                    let options = window_options(
-                        width,
-                        height,
-                        Some((MINIMUM_WIDTH, MINIMUM_HEIGHT)),
-                        window_state,
-                        cx,
-                    );
-                    cx.open_window(options, move |window, cx| {
-                        cx.new(|cx| SourcefourWindow::new(launch, &ui_state, window, cx))
-                    })
-                    .map(|_| ())
+                    open_repository_window(launch, ui_state, size_override, cx)
                 }
                 Launch::Failed(failure) => {
                     let options = window_options(ERROR_WIDTH, ERROR_HEIGHT, None, None, cx);
-                    cx.open_window(options, move |_window, cx| {
-                        cx.new(|_| ErrorWindow::new(&failure))
+                    let recovered = Arc::clone(&recovered_in_app);
+                    cx.open_window(options, move |window, cx| {
+                        cx.new(|cx| ErrorWindow::new(&failure, recovered, window, cx))
                     })
                     .map(|_| ())
                 }
@@ -158,7 +183,35 @@ pub(crate) fn run(request: &LaunchRequest) -> ExitCode {
             }
             cx.activate(true);
         });
-    launch_exit_code(opened.load(Ordering::Acquire), failed)
+    launch_exit_code(
+        opened.load(Ordering::Acquire),
+        failed && !recovered.load(Ordering::Acquire),
+    )
+}
+
+/// The "not a repository" window's keys: Enter opens the typed path, Cmd+O
+/// browses for a folder, and Tab walks the input, its button, and the
+/// browse zone the way a native dialog would.
+fn repo_picker_keymap() -> Vec<gpui::KeyBinding> {
+    use crate::views::{
+        ActivatePickerControl, ChooseRepositoryFolder, FocusNextPickerControl,
+        FocusPreviousPickerControl, OpenRepositoryPath,
+    };
+    vec![
+        gpui::KeyBinding::new(
+            "enter",
+            OpenRepositoryPath,
+            Some("TextInput && role == repo_path"),
+        ),
+        gpui::KeyBinding::new("cmd-o", ChooseRepositoryFolder, Some("RepoPicker")),
+        gpui::KeyBinding::new("tab", FocusNextPickerControl, Some("RepoPicker")),
+        gpui::KeyBinding::new("shift-tab", FocusPreviousPickerControl, Some("RepoPicker")),
+        // Enter and Space on the button or the browse zone; the input never
+        // routes here — its own Enter binding is more specific, and Space
+        // types into it.
+        gpui::KeyBinding::new("enter", ActivatePickerControl, Some("RepoPicker")),
+        gpui::KeyBinding::new("space", ActivatePickerControl, Some("RepoPicker")),
+    ]
 }
 
 /// History navigation keys, declared once rather than matched ad hoc (§8.5).
@@ -446,6 +499,7 @@ mod tests {
     #[test]
     fn application_keybindings_are_valid() {
         history_keymap();
+        super::repo_picker_keymap();
     }
 
     #[test]

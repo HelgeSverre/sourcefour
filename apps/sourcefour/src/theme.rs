@@ -94,7 +94,7 @@ pub(crate) const MONO_FONT: &str = if cfg!(target_os = "macos") {
 /// Thickness of every draggable panel divider.
 pub(crate) const SPLITTER_WIDTH: f32 = 3.0;
 pub(crate) const ERROR_WIDTH: f32 = 460.0;
-pub(crate) const ERROR_HEIGHT: f32 = 180.0;
+pub(crate) const ERROR_HEIGHT: f32 = 264.0;
 
 #[derive(Clone, Copy)]
 pub(crate) struct Theme {

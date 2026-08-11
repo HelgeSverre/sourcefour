@@ -138,22 +138,49 @@ fn filter_icon(theme: &Theme) -> gpui::Svg {
         .text_color(theme.text_faint)
 }
 
+/// What the titlebar calls the window: the worktree path alone when its last
+/// component already is the repository's name, and `name - path` when they
+/// differ — a linked worktree's directory rarely matches, and the name is
+/// what ties it back to the repository.
+fn window_title(name: &str, path: &str) -> String {
+    let tail = path
+        .rsplit(['/', '\\'])
+        .next()
+        .expect("rsplit always yields at least one piece");
+    if tail == name {
+        path.to_owned()
+    } else {
+        format!("{name} - {path}")
+    }
+}
+
 impl SourcefourWindow {
-    pub(super) fn titlebar(&self) -> impl IntoElement {
-        let repository = &self.name;
-        let path = &self.path;
+    pub(super) fn titlebar(&self, cx: &mut gpui::Context<Self>) -> impl IntoElement {
         div()
+            .id("titlebar")
             .h(px(TITLEBAR_HEIGHT))
             .flex_none()
             .flex()
             .items_center()
-            .justify_center()
+            // Clear of the traffic lights, the way Zed starts its title.
+            .pl(px(76.0))
+            .pr(px(8.0))
+            .gap(px(8.0))
             .border_b_1()
             .border_color(self.theme.border)
             .bg(self.theme.bg_chrome)
             .text_size(px(12.5))
             .text_color(self.theme.text_secondary)
-            .child(format!("sourcefour - {repository} - {path}"))
+            // The native titlebar gesture: double-click zooms the window —
+            // macOS zoom, not fullscreen.
+            .on_click(|event: &gpui::ClickEvent, window, _| {
+                if event.up.click_count == 2 {
+                    window.zoom_window();
+                }
+            })
+            .child(window_title(&self.name, &self.path))
+            .child(div().flex_grow())
+            .child(crate::settings_ui::toolbar_button(&self.theme, cx))
     }
 
     pub(super) fn toolbar(
@@ -192,7 +219,6 @@ impl SourcefourWindow {
             .child(action("Stash", "icons/archive.svg"))
             .child(div().flex_grow())
             .child(self.filter_box(window, cx))
-            .child(crate::settings_ui::toolbar_button(&self.theme, cx))
     }
 
     /// One toolbar column: icon above label, lit when active. Callers add
@@ -505,5 +531,18 @@ mod tests {
         assert!(state.finish(7));
         assert_eq!(state.generation(), 7);
         assert_eq!(state.running_generation(), None);
+    }
+
+    #[test]
+    fn the_title_repeats_the_name_only_when_the_path_does_not_end_in_it() {
+        use super::window_title;
+
+        assert_eq!(window_title("glue", "~/code/glue"), "~/code/glue");
+        assert_eq!(
+            window_title("repository", "~/code/repository-side"),
+            "repository - ~/code/repository-side"
+        );
+        assert_eq!(window_title("repository", "~"), "repository - ~");
+        assert_eq!(window_title("glue", r"C:\code\glue"), r"C:\code\glue");
     }
 }

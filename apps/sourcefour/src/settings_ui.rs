@@ -673,6 +673,9 @@ pub(crate) fn toolbar_button(theme: &Theme, cx: &mut gpui::Context<SourcefourWin
                 move |style| style.bg(hover)
             })
             .on_click(cx.listener(|this, _, window, cx| {
+                // The titlebar behind this button zooms on double-click; a
+                // fast second click on the gear must not reach it.
+                cx.stop_propagation();
                 this.open_settings(window, cx);
             }))
             .child(

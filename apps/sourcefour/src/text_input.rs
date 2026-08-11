@@ -127,6 +127,7 @@ pub(crate) enum InputRole {
     BranchName,
     GithubToken,
     CommitMessage,
+    RepoPath,
 }
 
 #[derive(Default)]
@@ -201,6 +202,7 @@ impl TextInput {
             (_, InputRole::DiffSwitcher) => "TextInput mode = singleline role = diff_switcher",
             (_, InputRole::BranchName) => "TextInput mode = singleline role = branch_name",
             (_, InputRole::GithubToken) => "TextInput mode = singleline role = github_token",
+            (_, InputRole::RepoPath) => "TextInput mode = singleline role = repo_path",
             _ => "TextInput mode = singleline",
         }
     }
