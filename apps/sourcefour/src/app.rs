@@ -187,41 +187,53 @@ fn history_keymap() -> Vec<gpui::KeyBinding> {
         gpui::KeyBinding::new(
             "escape",
             FilterEscape,
-            Some("TextInput role = history_filter"),
+            Some("TextInput && role == history_filter"),
         ),
         gpui::KeyBinding::new(
             "enter",
             FilterEnter,
-            Some("TextInput role = history_filter"),
+            Some("TextInput && role == history_filter"),
         ),
         gpui::KeyBinding::new(
             "down",
             NextDiffSwitcherResult,
-            Some("TextInput role = history_filter"),
+            Some("TextInput && role == history_filter"),
         ),
         gpui::KeyBinding::new(
             "up",
             PrevDiffSwitcherResult,
-            Some("TextInput role = history_filter"),
+            Some("TextInput && role == history_filter"),
         ),
         gpui::KeyBinding::new(
             "escape",
             FilterEscape,
-            Some("TextInput role = diff_switcher"),
+            Some("TextInput && role == diff_switcher"),
         ),
-        gpui::KeyBinding::new("enter", FilterEnter, Some("TextInput role = diff_switcher")),
+        gpui::KeyBinding::new(
+            "enter",
+            FilterEnter,
+            Some("TextInput && role == diff_switcher"),
+        ),
         gpui::KeyBinding::new(
             "down",
             NextDiffSwitcherResult,
-            Some("TextInput role = diff_switcher"),
+            Some("TextInput && role == diff_switcher"),
         ),
         gpui::KeyBinding::new(
             "up",
             PrevDiffSwitcherResult,
-            Some("TextInput role = diff_switcher"),
+            Some("TextInput && role == diff_switcher"),
         ),
-        gpui::KeyBinding::new("escape", FilterEscape, Some("TextInput role = branch_name")),
-        gpui::KeyBinding::new("enter", FilterEnter, Some("TextInput role = branch_name")),
+        gpui::KeyBinding::new(
+            "escape",
+            FilterEscape,
+            Some("TextInput && role == branch_name"),
+        ),
+        gpui::KeyBinding::new(
+            "enter",
+            FilterEnter,
+            Some("TextInput && role == branch_name"),
+        ),
         // A "History"-context binding fires from any focused descendant,
         // filter input included, unless something more specific to
         // The focused TextInput role claims the same key first — escape and enter do that
@@ -415,7 +427,10 @@ mod tests {
 
     use gpui::AssetSource;
 
-    use super::{Launch, SourcefourAssets, clamped_window_size, display_path, launch_exit_code};
+    use super::{
+        Launch, SourcefourAssets, clamped_window_size, display_path, history_keymap,
+        launch_exit_code,
+    };
     use crate::LaunchRequest;
 
     fn request(path: impl Into<PathBuf>, demo: bool) -> LaunchRequest {
@@ -425,6 +440,16 @@ mod tests {
             window: None,
             scene: crate::demo::Scene::Overview,
         }
+    }
+
+    #[test]
+    fn application_keybindings_are_valid() {
+        history_keymap();
+    }
+
+    #[test]
+    fn text_input_keybindings_are_valid() {
+        crate::text_input::keymap();
     }
 
     #[test]

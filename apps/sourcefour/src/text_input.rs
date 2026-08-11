@@ -63,9 +63,13 @@ actions!(
 pub(crate) fn keymap() -> Vec<gpui::KeyBinding> {
     let mut bindings = editing_keymap(Some("TextInput"));
     bindings.extend([
-        gpui::KeyBinding::new("enter", InsertNewline, Some("TextInput mode = multiline")),
-        gpui::KeyBinding::new("up", Up, Some("TextInput mode = multiline")),
-        gpui::KeyBinding::new("down", Down, Some("TextInput mode = multiline")),
+        gpui::KeyBinding::new(
+            "enter",
+            InsertNewline,
+            Some("TextInput && mode == multiline"),
+        ),
+        gpui::KeyBinding::new("up", Up, Some("TextInput && mode == multiline")),
+        gpui::KeyBinding::new("down", Down, Some("TextInput && mode == multiline")),
     ]);
     bindings
 }
@@ -760,7 +764,7 @@ fn index_for_position(
     let line_height = line_height.max(px(1.0));
     for line in lines {
         let height = line.size(line_height).height;
-        if position.y <= origin_y + height {
+        if position.y < origin_y + height {
             let local = point(position.x, (position.y - origin_y).max(gpui::Pixels::ZERO));
             let index = line
                 .closest_index_for_position(local, line_height)
@@ -1199,10 +1203,75 @@ impl Focusable for TextInput {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        INPUT_LINE_HEIGHT, caret_geometry, line_range, next_word_boundary, previous_word_boundary,
-        range_from_utf16_in, smart_home_offset,
+    use gpui::{
+        AppContext, Entity, IntoElement, ParentElement, Render, Styled, TestAppContext, div, px,
     };
+
+    use super::{
+        Down, INPUT_LINE_HEIGHT, TextInput, Up, caret_geometry, line_range, next_word_boundary,
+        previous_word_boundary, range_from_utf16_in, smart_home_offset,
+    };
+    use crate::theme::Theme;
+
+    struct TextAreaFixture {
+        input: Entity<TextInput>,
+    }
+
+    impl Render for TextAreaFixture {
+        fn render(
+            &mut self,
+            _: &mut gpui::Window,
+            _: &mut gpui::Context<Self>,
+        ) -> impl IntoElement {
+            div().w(px(500.0)).child(self.input.clone())
+        }
+    }
+
+    fn text_area<'a>(
+        text: &'static str,
+        cursor: usize,
+        cx: &'a mut TestAppContext,
+    ) -> (Entity<TextInput>, &'a mut gpui::VisualTestContext) {
+        let (fixture, cx) = cx.add_window_view(|window, cx| {
+            let input = cx.new(|cx| {
+                let mut input = TextInput::new("", &Theme::dark(), cx).multiline(4);
+                input.editor.set_text(text);
+                input.editor.collapse(cursor);
+                input
+            });
+            window.focus(&input.read(cx).focus_handle);
+            TextAreaFixture { input }
+        });
+        let input = cx.update(|_, cx| fixture.read(cx).input.clone());
+        (input, cx)
+    }
+
+    #[gpui::test]
+    fn down_moves_to_the_same_column_on_the_next_logical_line(cx: &mut TestAppContext) {
+        let (input, cx) = text_area("abcd\nabcd", 2, cx);
+
+        cx.dispatch_action(Down);
+
+        assert_eq!(cx.update(|_, cx| input.read(cx).cursor_offset()), 7);
+    }
+
+    #[gpui::test]
+    fn down_can_enter_an_empty_logical_line(cx: &mut TestAppContext) {
+        let (input, cx) = text_area("abcd\n\nefgh", 2, cx);
+
+        cx.dispatch_action(Down);
+
+        assert_eq!(cx.update(|_, cx| input.read(cx).cursor_offset()), 5);
+    }
+
+    #[gpui::test]
+    fn up_moves_to_the_same_column_on_the_previous_logical_line(cx: &mut TestAppContext) {
+        let (input, cx) = text_area("abcd\nabcd\nabcd", 12, cx);
+
+        cx.dispatch_action(Up);
+
+        assert_eq!(cx.update(|_, cx| input.read(cx).cursor_offset()), 7);
+    }
 
     #[test]
     fn four_multiline_rows_have_a_seventy_two_pixel_viewport() {
