@@ -35,10 +35,9 @@ const ABSENT_NOTICE: &str = "This document is not present on this side.";
 
 /// Width of the rendered column, so prose stays readable in a wide window.
 ///
-/// Fixed rather than capped: a percentage width clamped by `max_w` never
-/// reaches the text measurement, and the paragraphs lay out against the whole
-/// panel instead of the column. The narrowest window the app allows still
-/// leaves room for this, so nothing is lost by pinning it.
+/// Applied as a cap on the list element itself and never inside an item,
+/// where it would measure text against two different widths and mis-size
+/// wrapped rows; see [`pane`].
 const CONTENT_WIDTH: f32 = 720.0;
 
 /// Padding inside the column, on every side.
@@ -600,12 +599,27 @@ fn index_at(layout: &gpui::TextLayout, text: &str, position: gpui::Point<gpui::P
 /// The rendered document: one list item per top-level block, so a frame
 /// costs what is on screen rather than what the document holds.
 ///
+/// The column cap sits on the list element, never inside an item: the list's
+/// own bounds are resolved before any item lays out, so every item sees one
+/// definite width. A cap inside the item — `max_w` over an auto width, or a
+/// percentage `max_w` over a fixed one — is resolved in a later layout pass
+/// than the text measurement, so text wraps against one width while rows keep
+/// heights from the other, and the blocks after a tall item paint over its
+/// tail.
+///
 /// The pane's own id scopes every element id the blocks under it build.
 pub(super) fn pane(preview: &PreviewDoc, side: PreviewSide) -> gpui::Stateful<Div> {
     div()
         .id(side.pane_id())
         .size_full()
-        .child(gpui::list(preview.list.clone()).size_full())
+        .flex()
+        .justify_center()
+        .child(
+            gpui::list(preview.list.clone())
+                .h_full()
+                .w_full()
+                .max_w(px(CONTENT_WIDTH)),
+        )
 }
 
 impl SourcefourWindow {
@@ -786,29 +800,18 @@ impl SourcefourWindow {
         div()
             // Scopes every element id the block below builds.
             .id(id.item_id())
-            // The list measures items with the pane's width available, but an
-            // auto-width flex container still sizes to its content — only
-            // long paragraphs coincidentally reached the cap.
+            // Full width of the already-capped list, so every text in the
+            // item wraps against one definite width; see [`pane`].
             .w_full()
+            .px(px(CONTENT_PADDING))
+            // The document's own top and bottom, not every block's.
+            .when(index == 0, |column| column.pt(px(COLUMN_PADDING_Y)))
+            .when(index + 1 == preview.blocks.len(), |column| {
+                column.pb(px(COLUMN_PADDING_Y))
+            })
             .flex()
             .flex_col()
-            .items_center()
-            .child(
-                div()
-                    // Capped, not fixed: beside the source the pane is
-                    // narrower than the cap, and clipping reads as a bug.
-                    .w_full()
-                    .max_w(px(CONTENT_WIDTH))
-                    .px(px(CONTENT_PADDING))
-                    // The document's own top and bottom, not every block's.
-                    .when(index == 0, |column| column.pt(px(COLUMN_PADDING_Y)))
-                    .when(index + 1 == preview.blocks.len(), |column| {
-                        column.pb(px(COLUMN_PADDING_Y))
-                    })
-                    .flex()
-                    .flex_col()
-                    .child(self.preview_block(block, preview, &font, id)),
-            )
+            .child(self.preview_block(block, preview, &font, id))
             .into_any_element()
     }
 
