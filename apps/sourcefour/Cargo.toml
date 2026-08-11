@@ -30,6 +30,7 @@ unicode-segmentation.workspace = true
 tracing-subscriber.workspace = true
 
 [dev-dependencies]
+gpui = { git = "https://github.com/zed-industries/zed", package = "gpui", rev = "d637307bd75389f63adbb7d86bc66174ee817d0d", features = ["test-support"] }
 sourcefour-test-support = { path = "../../crates/sourcefour-test-support" }
 tempfile.workspace = true
 

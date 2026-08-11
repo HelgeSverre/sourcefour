@@ -324,7 +324,7 @@ impl SourcefourWindow {
         use crate::settings::AuthMethod;
         use crate::settings_ui::GithubConnection;
 
-        let pasted = self.token_input.read(cx).content.trim().to_string();
+        let pasted = self.token_input.read(cx).text().trim().to_string();
         if self.settings.github.auth_method == AuthMethod::Token {
             let Some(path) = credentials_path() else {
                 return;

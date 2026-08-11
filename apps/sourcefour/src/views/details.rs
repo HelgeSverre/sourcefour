@@ -422,7 +422,7 @@ impl SourcefourWindow {
     /// The commit affordance: enabled once something is staged and the
     /// summary has words; the label says which is missing otherwise.
     fn commit_button(&self, staged: usize, cx: &mut gpui::Context<Self>) -> Div {
-        let summary_empty = self.commit_input.read(cx).content.trim().is_empty();
+        let summary_empty = self.commit_input.read(cx).text().trim().is_empty();
         let ready = staged > 0 && !summary_empty && !self.committing;
         let label = if self.committing {
             "Committing…"
