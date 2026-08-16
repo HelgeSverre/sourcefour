@@ -1676,13 +1676,21 @@ fn pasted_path(text: &str) -> std::path::PathBuf {
     let home = crate::persist::home_directory();
     match (text.strip_prefix('~'), home) {
         (Some(""), Some(home)) => home,
-        (Some(rest), Some(home)) => match rest.strip_prefix(std::path::MAIN_SEPARATOR) {
+        (Some(rest), Some(home)) => match home_relative_path(rest, std::path::MAIN_SEPARATOR) {
             Some(relative) => home.join(relative),
             // "~something" is a literal file name, not a home reference.
             None => std::path::PathBuf::from(text),
         },
         _ => std::path::PathBuf::from(text),
     }
+}
+
+/// Removes the separator after `~`. Sourcefour displays home-relative paths
+/// with `/` on every platform, while pasted native paths may use another
+/// separator (notably `\` on Windows).
+fn home_relative_path(text: &str, native_separator: char) -> Option<&str> {
+    text.strip_prefix('/')
+        .or_else(|| text.strip_prefix(native_separator))
 }
 
 impl ErrorWindow {
@@ -2138,15 +2146,17 @@ mod tests {
 
     #[test]
     fn a_pasted_path_is_trimmed_and_home_expanded() {
-        use super::pasted_path;
+        use super::{home_relative_path, pasted_path};
         let home = crate::persist::home_directory().expect("every platform names a home");
 
         assert_eq!(pasted_path(" /opt/repo\n"), Path::new("/opt/repo"));
         assert_eq!(pasted_path("~"), home);
+        assert_eq!(pasted_path("~/code"), home.join("code"));
         assert_eq!(
             pasted_path(&format!("~{}code", std::path::MAIN_SEPARATOR)),
             home.join("code")
         );
+        assert_eq!(home_relative_path(r"\code", '\\'), Some("code"));
         // A file literally named "~backup" is not a home reference.
         assert_eq!(pasted_path("~backup"), Path::new("~backup"));
     }
