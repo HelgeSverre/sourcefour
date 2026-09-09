@@ -1,6 +1,7 @@
 //! The Sourcefour desktop entry point.
 
 mod app;
+mod context_menu;
 mod demo;
 mod diff_highlight;
 mod diff_split;

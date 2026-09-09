@@ -88,6 +88,7 @@ pub fn references(
 
     if let Some(tip) = head_commit(&repository) {
         labels.entry(tip).or_default().push(RefLabel {
+            full_name: Some(String::from("HEAD")),
             name: String::from("HEAD"),
             kind: RefKind::Head,
             is_head: true,
@@ -140,6 +141,7 @@ fn read_local_branches(
         let is_current = current_branch == Some(full_name.as_str());
         let upstream = upstream_of(repository, &reference);
         labels.entry(tip).or_default().push(RefLabel {
+            full_name: Some(full_name.clone()),
             name: short_name.clone(),
             kind: RefKind::LocalBranch,
             is_head: false,
@@ -194,6 +196,7 @@ fn read_remote_branches(
         };
         let short_name = reference.name().shorten().to_string();
         labels.entry(tip).or_default().push(RefLabel {
+            full_name: Some(full_name.clone()),
             name: short_name.clone(),
             kind: RefKind::RemoteBranch,
             is_head: false,
@@ -225,6 +228,7 @@ fn read_tags(platform: &Platform<'_>, labels: &mut Labels) -> usize {
             continue;
         };
         labels.entry(tip).or_default().push(RefLabel {
+            full_name: Some(reference.name().as_bstr().to_string()),
             name: reference.name().shorten().to_string(),
             kind: RefKind::Tag,
             is_head: false,

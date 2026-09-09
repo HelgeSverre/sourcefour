@@ -13,12 +13,12 @@
 //! Nothing here persists: the toggle is per-open-file, and closing the
 //! overlay forgets it.
 
+use crate::context_menu::{ContextMenuExt as _, MenuEntry, PrimaryClickExt as _};
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use gpui::{
-    Div, Font, FontWeight, Hsla, IntoElement, StatefulInteractiveElement, StyledText, TextRun,
-    Window, div, prelude::*, px,
+    Div, Font, FontWeight, Hsla, IntoElement, StyledText, TextRun, Window, div, prelude::*, px,
 };
 use sourcefour_doc::{CellAlignment, DocBlock, DocBlockKind, DocSpan, DocumentKind};
 use sourcefour_git::{DocSource, ImageResolution};
@@ -751,7 +751,7 @@ impl SourcefourWindow {
         else {
             return;
         };
-        cx.write_to_clipboard(gpui::ClipboardItem::new_string(selected.to_owned()));
+        crate::context_menu::copy_text(selected.to_owned(), cx);
     }
 
     /// Drops the selection, reporting whether anything was highlighted.
@@ -792,7 +792,7 @@ impl SourcefourWindow {
         cx: &mut gpui::Context<Self>,
     ) -> gpui::Stateful<Div> {
         self.segment_button(label, show == showing)
-            .on_click(cx.listener(move |this, _, _, cx| {
+            .on_primary_click(cx.listener(move |this, _, _, cx| {
                 this.toggle_preview(show, cx);
             }))
     }
@@ -941,11 +941,43 @@ impl SourcefourWindow {
             .insert((preview.side, id), layout.clone());
         let view = preview.view.clone();
         let side = preview.side;
+        let context_view = view.clone();
+        let context_text = text.clone();
+        let context_layout = layout.clone();
         div()
+            .on_context_menu(move |event, window, cx| {
+                let index = index_at(&context_layout, &context_text, event.position);
+                context_view
+                    .update(cx, |this, cx| {
+                        let mut entries = Vec::new();
+                        if let Some(selection) =
+                            this.preview_selection.as_ref().filter(|selection| {
+                                selection.side == side
+                                    && selection.text == context_text.as_ref()
+                                    && selection.block == id
+                                    && selection.range().contains(&index)
+                            })
+                        {
+                            let range = selection.range();
+                            let text = context_text.clone();
+                            entries.push(MenuEntry::new("Copy selection", move |_, cx| {
+                                if let Some(selected) = text.get(range.clone()) {
+                                    crate::context_menu::copy_text(selected.to_owned(), cx);
+                                }
+                            }));
+                        }
+                        entries.push(MenuEntry::copy("Copy text", context_text.clone()));
+                        this.show_menu(event.position, entries, window, cx);
+                    })
+                    .ok();
+            })
             .cursor_text()
             .on_mouse_down(
                 gpui::MouseButton::Left,
                 move |event: &gpui::MouseDownEvent, _, cx| {
+                    if crate::context_menu::is_context_click(event) {
+                        return;
+                    }
                     // The press fixes the anchor; the drag it may turn into is
                     // routed by the overlay's own move handler, since a drag
                     // leaves this block long before it ends.
@@ -975,7 +1007,19 @@ impl SourcefourWindow {
     /// Recessed rather than `bg_list`, since the pane it sits on is already
     /// that surface and a fence must read as sunk into it.
     fn preview_code(&self, text: &str, id: BlockId) -> Div {
+        let text = gpui::SharedString::from(text.to_owned());
+        let context_text = text.clone();
+        let host = self.menus.downgrade();
         div()
+            .on_context_menu(move |event, window, cx| {
+                crate::context_menu::show(
+                    &host,
+                    event.position,
+                    vec![MenuEntry::copy("Copy code", context_text.clone())],
+                    window,
+                    cx,
+                );
+            })
             .relative()
             // Every fence answers to one group name: gpui resolves a hover
             // group to the innermost element that registered it, so the fence
@@ -991,14 +1035,13 @@ impl SourcefourWindow {
             .font_family(self.mono_font())
             .text_size(px(11.0))
             .text_color(self.theme.text_secondary)
-            .child(text.to_owned())
+            .child(text.clone())
             .child(self.preview_copy(text, id))
     }
 
     /// The fence's copy control: absent until the fence is hovered, then the
     /// same word the Actions log footer offers.
-    fn preview_copy(&self, text: &str, id: BlockId) -> gpui::Stateful<Div> {
-        let text = text.to_owned();
+    fn preview_copy(&self, text: gpui::SharedString, id: BlockId) -> gpui::Stateful<Div> {
         div()
             .id(id.element("preview-copy"))
             .absolute()
@@ -1009,10 +1052,10 @@ impl SourcefourWindow {
             .text_color(self.theme.accent)
             .invisible()
             .group_hover(CODE_GROUP, Styled::visible)
-            .on_click(move |_, _, cx| {
+            .on_primary_click(move |_, _, cx| {
                 // The fence sits inside the overlay's own click handling.
                 cx.stop_propagation();
-                cx.write_to_clipboard(gpui::ClipboardItem::new_string(text.clone()));
+                crate::context_menu::copy_text(text.to_string(), cx);
             })
             .child("copy")
     }

@@ -1,6 +1,7 @@
 //! The window chrome: titlebar, toolbar, filter field, status bar, and the
 //! panel splitters, plus the §6.12 fetch that the toolbar launches.
 
+use crate::context_menu::{ContextMenuExt as _, PrimaryClickExt as _};
 use std::sync::{Arc, Mutex, atomic::AtomicBool};
 
 use gpui::{Div, IntoElement, Window, div, prelude::*, px, svg};
@@ -33,7 +34,7 @@ impl Default for NetworkOperationState {
 }
 
 impl NetworkOperationState {
-    fn running_op(&self) -> Option<NetworkOp> {
+    pub(super) fn running_op(&self) -> Option<NetworkOp> {
         match self {
             Self::Idle { .. } => None,
             Self::Running { op, .. } => Some(*op),
@@ -158,6 +159,22 @@ impl SourcefourWindow {
     pub(super) fn titlebar(&self, cx: &mut gpui::Context<Self>) -> impl IntoElement {
         div()
             .id("titlebar")
+            .on_context_menu(
+                cx.listener(|this, event: &gpui::MouseDownEvent, window, cx| {
+                    if let Some(location) = &this.location {
+                        let path = location
+                            .active_worktree_path
+                            .as_ref()
+                            .unwrap_or(&location.git_dir);
+                        this.show_menu(
+                            event.position,
+                            super::menus::path_entries(path, true),
+                            window,
+                            cx,
+                        );
+                    }
+                }),
+            )
             .h(px(TITLEBAR_HEIGHT))
             .flex_none()
             .flex()
@@ -173,7 +190,7 @@ impl SourcefourWindow {
             .text_color(self.theme.text_secondary)
             // The native titlebar gesture: double-click zooms the window —
             // macOS zoom, not fullscreen.
-            .on_click(|event: &gpui::ClickEvent, window, _| {
+            .on_primary_click(|event: &gpui::ClickEvent, window, _| {
                 if event.up.click_count == 2 {
                     window.zoom_window();
                 }
@@ -211,7 +228,7 @@ impl SourcefourWindow {
                     .id("branch-action")
                     .cursor_pointer()
                     .hover(|style| style.bg(self.theme.bg_hover))
-                    .on_click(cx.listener(|this, _, window, cx| {
+                    .on_primary_click(cx.listener(|this, _, window, cx| {
                         this.open_branch_dialog(window, cx);
                     })),
             )
@@ -262,7 +279,7 @@ impl SourcefourWindow {
             this.cursor_pointer()
                 .hover(|style| style.bg(self.theme.bg_hover))
         })
-        .on_click(cx.listener(move |this, _, _, cx| {
+        .on_primary_click(cx.listener(move |this, _, _, cx| {
             this.start_operation(op, cx);
         }))
     }
@@ -280,7 +297,7 @@ impl SourcefourWindow {
             .then(|| self.history.visible_len().to_string());
         div()
             .id("filter")
-            .on_click(cx.listener(|this, _, window, cx| {
+            .on_primary_click(cx.listener(|this, _, window, cx| {
                 this.filter_input
                     .read(cx)
                     .focus_handle
@@ -326,6 +343,19 @@ impl SourcefourWindow {
     /// A second operation while one runs is a no-op: the buttons disable,
     /// and this guard holds even if a keybinding races the render.
     pub(super) fn start_operation(&mut self, op: NetworkOp, cx: &mut gpui::Context<Self>) {
+        self.start_operation_for_remote(op, None, cx);
+    }
+
+    pub(super) fn fetch_remote(&mut self, remote: String, cx: &mut gpui::Context<Self>) {
+        self.start_operation_for_remote(NetworkOp::Fetch, Some(remote), cx);
+    }
+
+    fn start_operation_for_remote(
+        &mut self,
+        op: NetworkOp,
+        remote: Option<String>,
+        cx: &mut gpui::Context<Self>,
+    ) {
         if self.network_operation.running_op().is_some() {
             return;
         }
@@ -334,7 +364,7 @@ impl SourcefourWindow {
         };
         let request = FetchRequest {
             worktree: self.active_worktree_id(),
-            remote: None,
+            remote,
             prune: self.settings.git.fetch_prune,
         };
         let latest = Arc::new(Mutex::new(None));
@@ -446,7 +476,7 @@ impl SourcefourWindow {
         }
     }
 
-    pub(super) fn status(&self) -> impl IntoElement {
+    pub(super) fn status(&self, cx: &mut gpui::Context<Self>) -> impl IntoElement {
         let path = self.path.clone();
         div()
             .h(px(STATUS_HEIGHT))
@@ -460,7 +490,22 @@ impl SourcefourWindow {
             .bg(self.theme.bg_chrome)
             .text_size(px(10.0))
             .text_color(self.theme.text_faint)
-            .child(path)
+            .child(div().child(path).on_context_menu(cx.listener(
+                |this, event: &gpui::MouseDownEvent, window, cx| {
+                    if let Some(location) = &this.location {
+                        let path = location
+                            .active_worktree_path
+                            .as_ref()
+                            .unwrap_or(&location.git_dir);
+                        this.show_menu(
+                            event.position,
+                            super::menus::path_entries(path, true),
+                            window,
+                            cx,
+                        );
+                    }
+                },
+            )))
             .children(self.network_operation.progress().map(|latest| {
                 let message = latest
                     .lock()
@@ -481,6 +526,17 @@ impl SourcefourWindow {
             }))
             .children(self.op_status.clone().map(|(ok, message)| {
                 div()
+                    .on_context_menu(cx.listener(
+                        |this, event: &gpui::MouseDownEvent, window, cx| {
+                            if let Some((_, message)) = &this.op_status {
+                                let entries = vec![crate::context_menu::MenuEntry::copy(
+                                    "Copy message",
+                                    message.clone(),
+                                )];
+                                this.show_menu(event.position, entries, window, cx);
+                            }
+                        },
+                    ))
                     .text_color(if ok { self.theme.green } else { self.theme.red })
                     .child(message)
             }))

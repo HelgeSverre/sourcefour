@@ -5,6 +5,7 @@
 //! Mutations route through `SourcefourWindow`'s `update_settings`, which
 //! writes the file immediately; there is no separate save step.
 
+use crate::context_menu::{ContextMenuExt as _, PrimaryClickExt as _};
 use gpui::{Div, FocusableWrapper, FontWeight, div, prelude::*, px, svg};
 
 use crate::{
@@ -86,7 +87,7 @@ pub(crate) fn overlay(
         .track_focus(view.focus)
         .items_center()
         .justify_center()
-        .on_click(cx.listener(|this, _, window, cx| {
+        .on_primary_click(cx.listener(|this, _, window, cx| {
             this.close_settings(window, cx);
         }))
         .child(
@@ -101,7 +102,7 @@ pub(crate) fn overlay(
                 .bg(theme.bg_panel)
                 .shadow_lg()
                 .overflow_hidden()
-                .on_click(|_, _, cx| cx.stop_propagation())
+                .on_primary_click(|_, _, cx| cx.stop_propagation())
                 .child(nav(view.section, theme, cx))
                 .child(content(view, cx)),
         )
@@ -152,7 +153,7 @@ fn nav(active: SettingsSection, theme: &Theme, cx: &mut gpui::Context<Sourcefour
                     let hover = theme.bg_hover;
                     move |style| if selected { style } else { style.bg(hover) }
                 })
-                .on_click(cx.listener(move |this, _, _, cx| {
+                .on_primary_click(cx.listener(move |this, _, _, cx| {
                     this.set_settings_section(section, cx);
                 }))
                 .child(section.title())
@@ -206,7 +207,7 @@ fn content(view: &SettingsView<'_>, cx: &mut gpui::Context<SourcefourWindow>) ->
                             let hover = theme.bg_hover;
                             move |style| style.bg(hover)
                         })
-                        .on_click(cx.listener(|this, _, window, cx| {
+                        .on_primary_click(cx.listener(|this, _, window, cx| {
                             this.close_settings(window, cx);
                         }))
                         .child("✕"),
@@ -435,7 +436,7 @@ fn button(
             let hover = theme.bg_hover;
             move |style| style.bg(hover)
         })
-        .on_click(cx.listener(move |this, _, _, cx| on_click(this, cx)))
+        .on_primary_click(cx.listener(move |this, _, _, cx| on_click(this, cx)))
         .child(label)
 }
 
@@ -617,7 +618,7 @@ impl<T: Copy + PartialEq + 'static> Choice<T> {
                             } else {
                                 theme.text_faint
                             })
-                            .on_click(cx.listener(move |this, _, _, cx| {
+                            .on_primary_click(cx.listener(move |this, _, _, cx| {
                                 this.update_settings(cx, move |settings| apply(settings, value));
                             }))
                             .child(label)
@@ -647,10 +648,20 @@ fn link(
     div().flex_none().child(
         div()
             .id(id)
+            .on_context_menu(
+                cx.listener(move |this, event: &gpui::MouseDownEvent, window, cx| {
+                    this.show_menu(
+                        event.position,
+                        crate::context_menu::link_entries(url, false),
+                        window,
+                        cx,
+                    );
+                }),
+            )
             .cursor_pointer()
             .text_size(px(11.0))
             .text_color(theme.accent)
-            .on_click(cx.listener(move |_, _, _, cx| {
+            .on_primary_click(cx.listener(move |_, _, _, cx| {
                 cx.open_url(url);
             }))
             .child(label),
@@ -672,7 +683,7 @@ pub(crate) fn toolbar_button(theme: &Theme, cx: &mut gpui::Context<SourcefourWin
                 let hover = theme.bg_hover;
                 move |style| style.bg(hover)
             })
-            .on_click(cx.listener(|this, _, window, cx| {
+            .on_primary_click(cx.listener(|this, _, window, cx| {
                 // The titlebar behind this button zooms on double-click; a
                 // fast second click on the gear must not reach it.
                 cx.stop_propagation();

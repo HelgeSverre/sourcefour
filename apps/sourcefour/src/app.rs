@@ -192,7 +192,7 @@ pub(crate) fn run(request: &LaunchRequest) -> ExitCode {
 /// The "not a repository" window's keys: Enter opens the typed path, Cmd+O
 /// browses for a folder, and Tab walks the input, its button, and the
 /// browse zone the way a native dialog would.
-fn repo_picker_keymap() -> Vec<gpui::KeyBinding> {
+pub(crate) fn repo_picker_keymap() -> Vec<gpui::KeyBinding> {
     use crate::views::{
         ActivatePickerControl, ChooseRepositoryFolder, FocusNextPickerControl,
         FocusPreviousPickerControl, OpenRepositoryPath,
@@ -215,7 +215,7 @@ fn repo_picker_keymap() -> Vec<gpui::KeyBinding> {
 }
 
 /// History navigation keys, declared once rather than matched ad hoc (§8.5).
-fn history_keymap() -> Vec<gpui::KeyBinding> {
+pub(crate) fn history_keymap() -> Vec<gpui::KeyBinding> {
     use crate::views::{
         CloseActionsRun, CloseDiff, CloseSettings, CopyPreviewSelection, FilterEnter, FilterEscape,
         FocusDetails, FocusFilter, NextActionsJob, NextActionsStep, NextDiffFile, NextDiffHunk,

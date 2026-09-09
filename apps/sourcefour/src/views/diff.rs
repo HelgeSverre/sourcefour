@@ -6,11 +6,12 @@
 //! chips along the bottom, and the card that stands in when no frame was
 //! decoded, know a video from an image.
 
+use crate::context_menu::{ContextMenuExt as _, MenuEntry, PrimaryClickExt as _};
 use std::{ops::Range, sync::Arc};
 
 use gpui::{
-    Div, FontWeight, IntoElement, ListHorizontalSizingBehavior, StatefulInteractiveElement,
-    UniformListScrollHandle, Window, div, prelude::*, px, svg, uniform_list,
+    Div, FontWeight, IntoElement, ListHorizontalSizingBehavior, UniformListScrollHandle, Window,
+    div, prelude::*, px, svg, uniform_list,
 };
 use sourcefour_model::{
     ChangeKind, ChangedFile, DiffContent, DiffCoordinate, DiffPaths, DiffSide, FileDiffRequest,
@@ -62,6 +63,17 @@ pub(super) enum DiffOrigin {
 }
 
 impl DiffOrigin {
+    pub(super) fn menu_target(&self) -> super::menus::FileTarget {
+        match self {
+            Self::Commit(request) => super::menus::FileTarget::Commit {
+                oid: request.oid,
+                parent: request.parent,
+            },
+            Self::WorkingTree { staged, .. } => {
+                super::menus::FileTarget::WorkingTree { staged: *staged }
+            }
+        }
+    }
     /// The path the diff is showing, as the repository names it.
     pub(super) fn path(&self) -> &RepoPath {
         match self {
@@ -554,6 +566,7 @@ impl SourcefourWindow {
 
     /// Closes the diff overlay, returning focus to the history.
     pub(crate) fn close_diff(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) {
+        self.dismiss_menu(cx);
         self.diff_view = None;
         self.diff_switcher_open = false;
         self.clear_preview_selection();
@@ -566,6 +579,7 @@ impl SourcefourWindow {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        self.dismiss_menu(cx);
         if self.diff_view.is_none() {
             return;
         }
@@ -586,6 +600,7 @@ impl SourcefourWindow {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        self.dismiss_menu(cx);
         self.diff_switcher_open = false;
         self.diff_focus.focus(window);
         cx.notify();
@@ -628,15 +643,15 @@ impl SourcefourWindow {
         let Some(file) = view.files.get(index).cloned() else {
             return;
         };
-        let staged = match &view.origin {
-            DiffOrigin::Commit(_) => None,
-            DiffOrigin::WorkingTree { staged, .. } => Some(*staged),
-        };
+        let target = view.origin.menu_target();
         self.diff_switcher_open = false;
-        if let Some(staged) = staged {
-            self.open_worktree_diff(&file, staged, window, cx);
-        } else {
-            self.open_diff(&file, window, cx);
+        match target {
+            super::menus::FileTarget::Commit { oid, parent } => {
+                self.open_commit_diff(&file, oid, parent, window, cx);
+            }
+            super::menus::FileTarget::WorkingTree { staged } => {
+                self.open_worktree_diff(&file, staged, window, cx);
+            }
         }
     }
 
@@ -724,8 +739,96 @@ impl SourcefourWindow {
             .filter_map(|line| side.line(line))
             .collect::<Vec<_>>()
             .join("\n");
-        cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
+        crate::context_menu::copy_text(text, cx);
         true
+    }
+
+    fn show_diff_line_menu(
+        &self,
+        coordinate: DiffCoordinate,
+        position: gpui::Point<gpui::Pixels>,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let Some(view) = &self.diff_view else {
+            return;
+        };
+        let Some(DiffContent::Text(diff)) = &view.content else {
+            return;
+        };
+        let mut entries = Vec::new();
+        if let Some(selection) = view.selection.filter(|selection| {
+            selection.anchor.side == coordinate.side
+                && selection.head.side == coordinate.side
+                && (selection.anchor.line.min(selection.head.line)
+                    ..=selection.anchor.line.max(selection.head.line))
+                    .contains(&coordinate.line)
+        }) {
+            let diff = Arc::clone(diff);
+            entries.push(MenuEntry::new("Copy selection", move |_, cx| {
+                copy_source_lines(
+                    &diff,
+                    coordinate.side,
+                    selection.anchor.line.min(selection.head.line)
+                        ..=selection.anchor.line.max(selection.head.line),
+                    cx,
+                );
+            }));
+        }
+        let source = Arc::clone(diff);
+        entries.push(MenuEntry::new("Copy line", move |_, cx| {
+            copy_source_lines(
+                &source,
+                coordinate.side,
+                coordinate.line..=coordinate.line,
+                cx,
+            );
+        }));
+        let paths = match &view.origin {
+            DiffOrigin::Commit(request) => &request.paths,
+            DiffOrigin::WorkingTree { paths, .. } => paths,
+        };
+        if let Some(path) = match coordinate.side {
+            DiffSide::Old => paths.old_path(),
+            DiffSide::New => paths.new_path(),
+        } {
+            entries.push(MenuEntry::Separator);
+            entries.push(super::menus::copy_repo_path("Copy relative path", path));
+        }
+        self.show_menu(position, entries, window, cx);
+    }
+
+    fn show_diff_file_menu(
+        &self,
+        position: gpui::Point<gpui::Pixels>,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let Some(view) = &self.diff_view else {
+            return;
+        };
+        let paths = match &view.origin {
+            DiffOrigin::Commit(request) => &request.paths,
+            DiffOrigin::WorkingTree { paths, .. } => paths,
+        };
+        let file = view
+            .files
+            .get(view.file_index)
+            .filter(|file| {
+                file.old_path.as_ref() == paths.old_path()
+                    && file.new_path.as_ref() == paths.new_path()
+            })
+            .cloned()
+            .unwrap_or_else(|| ChangedFile {
+                old_path: paths.old_path().cloned(),
+                new_path: paths.new_path().cloned(),
+                status: view.status,
+                additions: None,
+                deletions: None,
+                is_binary: false,
+            });
+        let entries = self.file_entries(&file, view.origin.menu_target(), false, cx);
+        self.show_menu(position, entries, window, cx);
     }
 
     /// Opens the diff overlay for one changed file of the selection (§6.11).
@@ -738,23 +841,42 @@ impl SourcefourWindow {
         let Some(oid) = self.history.selected_commit() else {
             return;
         };
+        self.open_commit_diff(file, oid, self.compare_parent, window, cx);
+    }
+
+    pub(super) fn open_commit_diff(
+        &mut self,
+        file: &ChangedFile,
+        oid: sourcefour_model::Oid,
+        parent: sourcefour_model::DiffParent,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.dismiss_menu(cx);
         let Some(location) = self.location.clone() else {
             return;
         };
         let Some(paths) = DiffPaths::for_file(file) else {
             return;
         };
-        let request = FileDiffRequest {
-            oid,
-            parent: self.compare_parent,
-            paths,
-        };
+        let request = FileDiffRequest { oid, parent, paths };
         let cached = self.cached_commit_diff(&request);
-        let files: Arc<[ChangedFile]> = self
-            .files
-            .as_ref()
-            .map_or_else(|| vec![file.clone()], |files| files.files.clone())
-            .into();
+        let same_comparison = self.diff_view.as_ref().filter(|view| {
+            matches!(&view.origin, DiffOrigin::Commit(origin) if origin.oid == oid && origin.parent == parent)
+                && view.files.contains(file)
+        });
+        let files = same_comparison.map_or_else(
+            || {
+                self.files
+                    .as_ref()
+                    .filter(|files| {
+                        files.oid == oid && files.parent == parent && files.files.contains(file)
+                    })
+                    .map_or_else(|| vec![file.clone()], |files| files.files.clone())
+                    .into()
+            },
+            |view| Arc::clone(&view.files),
+        );
         let file_index = files
             .iter()
             .position(|candidate| candidate == file)
@@ -800,6 +922,7 @@ impl SourcefourWindow {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        self.dismiss_menu(cx);
         let Some(location) = self.location.clone() else {
             return;
         };
@@ -991,7 +1114,7 @@ impl SourcefourWindow {
                     }),
                 )
                 .p(px(26.0))
-                .on_click(cx.listener(|this, event: &gpui::ClickEvent, window, cx| {
+                .on_primary_click(cx.listener(|this, event: &gpui::ClickEvent, window, cx| {
                     if super::is_true_click(event) {
                         this.close_diff(window, cx);
                     }
@@ -1004,7 +1127,7 @@ impl SourcefourWindow {
                         .overflow_hidden()
                         // Clicks inside the panel must not fall through to the
                         // backdrop's close handler.
-                        .on_click(|_, _, cx| cx.stop_propagation())
+                        .on_primary_click(|_, _, cx| cx.stop_propagation())
                         .child(self.diff_header(view, line_count, cx))
                         .child(
                             div()
@@ -1024,6 +1147,10 @@ impl SourcefourWindow {
         )
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the file switcher composes its search and result rows in one place"
+    )]
     fn diff_file_switcher(
         &self,
         view: &DiffView,
@@ -1047,7 +1174,7 @@ impl SourcefourWindow {
                 .border_1()
                 .border_color(self.theme.border_strong)
                 .bg(self.theme.bg_chrome)
-                .on_click(|_, _, cx| cx.stop_propagation())
+                .on_primary_click(|_, _, cx| cx.stop_propagation())
                 .child(
                     div()
                         .h(px(38.0))
@@ -1072,6 +1199,17 @@ impl SourcefourWindow {
                         Some(
                             div()
                                 .id(("diff-file-result", target))
+                                .on_context_menu({
+                                    let file = file.clone();
+                                    let origin = view.origin.menu_target();
+                                    cx.listener(
+                                        move |this, event: &gpui::MouseDownEvent, window, cx| {
+                                            let entries =
+                                                this.file_entries(&file, origin, true, cx);
+                                            this.show_menu(event.position, entries, window, cx);
+                                        },
+                                    )
+                                })
                                 .h(px(34.0))
                                 .flex()
                                 .items_center()
@@ -1104,7 +1242,7 @@ impl SourcefourWindow {
                                         .text_color(self.theme.text_primary)
                                         .child(path),
                                 )
-                                .on_click(cx.listener(move |this, _, window, cx| {
+                                .on_primary_click(cx.listener(move |this, _, window, cx| {
                                     this.open_diff_file_at(target, window, cx);
                                 })),
                         )
@@ -1278,6 +1416,11 @@ impl SourcefourWindow {
         let previous_file_enabled = view.file_index > 0;
         let next_file_enabled = view.file_index + 1 < view.files.len();
         div()
+            .on_context_menu(
+                cx.listener(|this, event: &gpui::MouseDownEvent, window, cx| {
+                    this.show_diff_file_menu(event.position, window, cx);
+                }),
+            )
             .h(px(40.0))
             .flex_none()
             .flex()
@@ -1338,9 +1481,11 @@ impl SourcefourWindow {
                             "icons/chevron-left.svg",
                             previous_file_enabled,
                         )
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.navigate_diff_file(-1, window, cx);
-                        })),
+                        .on_primary_click(cx.listener(
+                            |this, _, window, cx| {
+                                this.navigate_diff_file(-1, window, cx);
+                            },
+                        )),
                     )
                     .child(
                         self.icon_segment_button(
@@ -1348,9 +1493,11 @@ impl SourcefourWindow {
                             "icons/chevron-right.svg",
                             next_file_enabled,
                         )
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.navigate_diff_file(1, window, cx);
-                        })),
+                        .on_primary_click(cx.listener(
+                            |this, _, window, cx| {
+                                this.navigate_diff_file(1, window, cx);
+                            },
+                        )),
                     ),
             )
             .children((hunk_count > 0).then(|| {
@@ -1373,7 +1520,9 @@ impl SourcefourWindow {
                             "icons/chevron-up.svg",
                             previous_hunk_enabled,
                         )
-                        .on_click(cx.listener(|this, _, _, cx| this.navigate_diff_hunk(-1, cx))),
+                        .on_primary_click(
+                            cx.listener(|this, _, _, cx| this.navigate_diff_hunk(-1, cx)),
+                        ),
                     )
                     .child(
                         self.icon_segment_button(
@@ -1381,7 +1530,9 @@ impl SourcefourWindow {
                             "icons/chevron-down.svg",
                             next_hunk_enabled,
                         )
-                        .on_click(cx.listener(|this, _, _, cx| this.navigate_diff_hunk(1, cx))),
+                        .on_primary_click(
+                            cx.listener(|this, _, _, cx| this.navigate_diff_hunk(1, cx)),
+                        ),
                     )
             }))
             .children(preview::applies(view).then(|| self.preview_toggle(view.show_preview, cx)))
@@ -1428,13 +1579,13 @@ impl SourcefourWindow {
                         .items_center()
                         .child(
                             self.segment_button("Full context", view.full_context)
-                                .on_click(cx.listener(|this, _, _, cx| {
+                                .on_primary_click(cx.listener(|this, _, _, cx| {
                                     this.toggle_diff_context(cx);
                                 })),
                         )
                         .child(
                             self.segment_button("Wrap", self.settings.diff.wrap)
-                                .on_click(cx.listener(|this, _, _, cx| {
+                                .on_primary_click(cx.listener(|this, _, _, cx| {
                                     let enabled = !this.settings.diff.wrap;
                                     this.update_settings(cx, |settings| {
                                         settings.diff.wrap = enabled;
@@ -1444,7 +1595,7 @@ impl SourcefourWindow {
                         )
                         .child(
                             self.segment_button("Whitespace", self.settings.diff.show_whitespace)
-                                .on_click(cx.listener(|this, _, _, cx| {
+                                .on_primary_click(cx.listener(|this, _, _, cx| {
                                     let enabled = !this.settings.diff.show_whitespace;
                                     this.update_settings(cx, |settings| {
                                         settings.diff.show_whitespace = enabled;
@@ -1485,7 +1636,7 @@ impl SourcefourWindow {
                             .text_size(px(13.0))
                             .text_color(self.theme.text_secondary)
                             .hover(|style| style.bg(self.theme.bg_hover))
-                            .on_click(cx.listener(|this, _, window, cx| {
+                            .on_primary_click(cx.listener(|this, _, window, cx| {
                                 this.close_diff(window, cx);
                             }))
                             .child("✕"),
@@ -1560,7 +1711,7 @@ impl SourcefourWindow {
         cx: &mut gpui::Context<Self>,
     ) -> gpui::Stateful<Div> {
         self.segment_button(label, mode == active)
-            .on_click(cx.listener(move |this, _, _, cx| {
+            .on_primary_click(cx.listener(move |this, _, _, cx| {
                 this.set_diff_mode(mode, cx);
             }))
     }
@@ -1625,7 +1776,7 @@ impl SourcefourWindow {
                     return div().into_any_element();
                 };
                 let coordinate = entity.read(cx).diff_row_coordinate(index);
-                let row = entity.read(cx).wrapped_diff_row(index);
+                let row = entity.update(cx, |this, cx| this.wrapped_diff_row(index, cx));
                 let Some(coordinate) = coordinate else {
                     return row;
                 };
@@ -1634,7 +1785,7 @@ impl SourcefourWindow {
                     .id(("wrapped-diff-row", cell_coordinate_key(coordinate)))
                     .cursor_pointer()
                     .child(row)
-                    .on_click(move |event: &gpui::ClickEvent, _, cx| {
+                    .on_primary_click(move |event: &gpui::ClickEvent, _, cx| {
                         if let Some(entity) = target.upgrade() {
                             entity.update(cx, |this, cx| {
                                 this.select_diff_line(coordinate, event.modifiers().shift, cx);
@@ -1913,7 +2064,7 @@ impl SourcefourWindow {
                     cx.notify();
                 }),
             )
-            .on_click(cx.listener(|this, event: &gpui::ClickEvent, _, cx| {
+            .on_primary_click(cx.listener(|this, event: &gpui::ClickEvent, _, cx| {
                 if event.down.click_count == 2
                     && let Some(view) = &mut this.diff_view
                 {
@@ -2088,13 +2239,18 @@ impl SourcefourWindow {
             byte_offset: None,
         };
         base.id(("split-diff-cell", cell_key(cell)))
+            .on_context_menu(
+                cx.listener(move |this, event: &gpui::MouseDownEvent, window, cx| {
+                    this.show_diff_line_menu(coordinate, event.position, window, cx);
+                }),
+            )
             .bg(if selected {
                 self.theme.accent.opacity(0.35)
             } else {
                 background.unwrap_or(gpui::transparent_black())
             })
             .cursor_pointer()
-            .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
+            .on_primary_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
                 this.select_diff_line(coordinate, event.modifiers().shift, cx);
             }))
             .child(div().w(px(2.0)).flex_none().h_full().bg(text_color))
@@ -2196,7 +2352,7 @@ impl SourcefourWindow {
         gpui::StyledText::new(text.to_owned()).with_highlights(runs)
     }
 
-    fn wrapped_diff_row(&self, index: usize) -> gpui::AnyElement {
+    fn wrapped_diff_row(&self, index: usize, cx: &mut gpui::Context<Self>) -> gpui::AnyElement {
         use crate::diff_split::DiffRow;
         let Some(view) = &self.diff_view else {
             return div().into_any_element();
@@ -2218,9 +2374,9 @@ impl SourcefourWindow {
                 .w_full()
                 .min_h(px(self.diff_row_height()))
                 .flex()
-                .child(self.wrapped_split_half(view, left.as_ref()))
+                .child(self.wrapped_split_half(view, left.as_ref(), cx))
                 .child(div().w(px(1.0)).flex_none().h_full().bg(self.theme.border))
-                .child(self.wrapped_split_half(view, right.as_ref())),
+                .child(self.wrapped_split_half(view, right.as_ref(), cx)),
             DiffRow::Line { left, right } => {
                 use crate::diff_split::CellKind;
                 let Some(cell) = right.as_ref().or(left.as_ref()) else {
@@ -2243,7 +2399,17 @@ impl SourcefourWindow {
                         .text_color(self.theme.text_faint)
                         .child(cell.map_or_else(String::new, |cell| (cell.line + 1).to_string()))
                 };
+                let coordinate = DiffCoordinate {
+                    side: cell.side,
+                    line: cell.line,
+                    byte_offset: None,
+                };
                 div()
+                    .on_context_menu(cx.listener(
+                        move |this, event: &gpui::MouseDownEvent, window, cx| {
+                            this.show_diff_line_menu(coordinate, event.position, window, cx);
+                        },
+                    ))
                     .w_full()
                     .min_h(px(self.diff_row_height()))
                     .flex()
@@ -2289,17 +2455,37 @@ impl SourcefourWindow {
         &self,
         view: &DiffView,
         cell: Option<&crate::diff_split::DiffCell>,
-    ) -> Div {
+        cx: &mut gpui::Context<Self>,
+    ) -> gpui::AnyElement {
         use crate::diff_split::CellKind;
         let Some(cell) = cell else {
-            return div().flex_1().h_full().bg(self.theme.bg_panel.opacity(0.4));
+            return div()
+                .flex_1()
+                .h_full()
+                .bg(self.theme.bg_panel.opacity(0.4))
+                .into_any_element();
         };
         let (marker, color, background) = match cell.kind {
             CellKind::Addition => ("+", self.theme.green, self.theme.tint_added()),
             CellKind::Deletion => ("-", self.theme.red, self.theme.tint_removed()),
             CellKind::Context => (" ", self.theme.text_secondary, gpui::transparent_black()),
         };
+        let coordinate = DiffCoordinate {
+            side: cell.side,
+            line: cell.line,
+            byte_offset: None,
+        };
         div()
+            .id(("wrapped-split-cell", cell_key(cell)))
+            .on_context_menu(
+                cx.listener(move |this, event: &gpui::MouseDownEvent, window, cx| {
+                    this.show_diff_line_menu(coordinate, event.position, window, cx);
+                }),
+            )
+            .on_primary_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
+                cx.stop_propagation();
+                this.select_diff_line(coordinate, event.modifiers().shift, cx);
+            }))
             .flex_1()
             .min_w(px(1.0))
             .h_full()
@@ -2336,6 +2522,7 @@ impl SourcefourWindow {
                     .text_color(color)
                     .child(self.styled_diff_text(view, cell)),
             )
+            .into_any_element()
     }
 
     /// Rows currently shown by the diff overlay's list, either layout.
@@ -2524,6 +2711,11 @@ impl SourcefourWindow {
         };
         let row = div()
             .id(("unified-diff-cell", cell_key(cell)))
+            .on_context_menu(
+                cx.listener(move |this, event: &gpui::MouseDownEvent, window, cx| {
+                    this.show_diff_line_menu(coordinate, event.position, window, cx);
+                }),
+            )
             .h(px(self.diff_row_height()))
             .w_full()
             .flex()
@@ -2534,7 +2726,7 @@ impl SourcefourWindow {
                 background.unwrap_or(gpui::transparent_black())
             })
             .cursor_pointer()
-            .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
+            .on_primary_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
                 this.select_diff_line(coordinate, event.modifiers().shift, cx);
             }))
             .child(div().w(px(2.0)).flex_none().h_full().bg(text_color))
@@ -2686,9 +2878,109 @@ fn diff_build_probe(started: std::time::Instant, view: &DiffView, wrapped: bool)
     );
 }
 
+fn copy_source_lines(
+    diff: &TextDiff,
+    side: DiffSide,
+    range: std::ops::RangeInclusive<usize>,
+    cx: &mut gpui::App,
+) {
+    let Some(side) = (match side {
+        DiffSide::Old => diff.old.as_ref(),
+        DiffSide::New => diff.new.as_ref(),
+    }) else {
+        return;
+    };
+    let text = range
+        .filter_map(|line| side.line(line))
+        .collect::<Vec<_>>()
+        .join("\n");
+    crate::context_menu::copy_text(text, cx);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[gpui::test]
+    fn diff_menu_copies_the_clicked_side_and_its_selection(cx: &mut gpui::TestAppContext) {
+        let (view, cx) = super::super::test_window(cx, crate::demo::Scene::Split);
+        let coordinate = DiffCoordinate {
+            side: DiffSide::Old,
+            line: 0,
+            byte_offset: None,
+        };
+        let expected = cx.update(|window, cx| {
+            view.update(cx, |view, cx| {
+                let diff = view.diff_view.as_mut().unwrap();
+                diff.selection = Some(DiffSelection {
+                    anchor: DiffCoordinate {
+                        side: DiffSide::New,
+                        ..coordinate
+                    },
+                    head: DiffCoordinate {
+                        side: DiffSide::New,
+                        ..coordinate
+                    },
+                });
+                let expected = diff
+                    .text_diff()
+                    .unwrap()
+                    .old
+                    .as_ref()
+                    .unwrap()
+                    .line(0)
+                    .unwrap()
+                    .to_owned();
+                view.show_diff_line_menu(coordinate, gpui::point(px(100.0), px(100.0)), window, cx);
+                expected
+            })
+        });
+        cx.draw(
+            gpui::Point::default(),
+            gpui::size(px(1200.0), px(800.0)),
+            |_, _| view.clone().into_any_element(),
+        );
+        // The selection on the other side is ineligible; Copy line comes first.
+        cx.simulate_keystrokes("enter");
+        assert_eq!(
+            cx.read_from_clipboard().unwrap().text().as_deref(),
+            Some(expected.as_str())
+        );
+        let expected = cx.update(|window, cx| {
+            view.update(cx, |view, cx| {
+                let diff = view.diff_view.as_mut().unwrap();
+                diff.selection = Some(DiffSelection {
+                    anchor: coordinate,
+                    head: DiffCoordinate {
+                        line: 1,
+                        ..coordinate
+                    },
+                });
+                let old = diff.text_diff().unwrap().old.as_ref().unwrap();
+                let expected = format!("{}\n{}", old.line(0).unwrap(), old.line(1).unwrap());
+                view.show_diff_line_menu(
+                    DiffCoordinate {
+                        line: 1,
+                        ..coordinate
+                    },
+                    gpui::point(px(100.0), px(100.0)),
+                    window,
+                    cx,
+                );
+                expected
+            })
+        });
+        cx.draw(
+            gpui::Point::default(),
+            gpui::size(px(1200.0), px(800.0)),
+            |_, _| view.clone().into_any_element(),
+        );
+        cx.simulate_keystrokes("enter");
+        assert_eq!(
+            cx.read_from_clipboard().unwrap().text().as_deref(),
+            Some(expected.as_str())
+        );
+    }
 
     fn empty_view() -> DiffView {
         DiffView::for_working_tree(

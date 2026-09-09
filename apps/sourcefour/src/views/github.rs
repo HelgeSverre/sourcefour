@@ -1,6 +1,7 @@
 //! The GitHub read surfaces: connection checking, the cached pull/check/run
 //! loads, and the elements that render them (§ settings, GitHub).
 
+use crate::context_menu::{ContextMenuExt as _, PrimaryClickExt as _};
 use gpui::{Div, FontWeight, div, prelude::*, px};
 
 use crate::theme::Theme;
@@ -159,6 +160,12 @@ impl SourcefourWindow {
         );
         div()
             .id(("workflow-run", index))
+            .named_link_menu(
+                self.menus.downgrade(),
+                run.html_url.clone(),
+                true,
+                run.name.clone(),
+            )
             .h(px(38.0))
             .flex()
             .flex_col()
@@ -171,11 +178,14 @@ impl SourcefourWindow {
             // the overlay onto data already in flight.
             .on_mouse_down(
                 gpui::MouseButton::Left,
-                cx.listener(move |this, _, _, cx| {
+                cx.listener(move |this, event: &gpui::MouseDownEvent, _, cx| {
+                    if crate::context_menu::is_context_click(event) {
+                        return;
+                    }
                     this.prefetch_actions_jobs(run_id, cx);
                 }),
             )
-            .on_click(cx.listener(move |this, _, window, cx| {
+            .on_primary_click(cx.listener(move |this, _, window, cx| {
                 cx.stop_propagation();
                 this.open_actions_run(clicked.clone(), None, window, cx);
             }))
@@ -241,13 +251,19 @@ impl SourcefourWindow {
                         div().child(
                             div()
                                 .id(("check-run", index))
+                                .named_link_menu(
+                                    self.menus.downgrade(),
+                                    run.html_url.clone(),
+                                    run_id.is_some(),
+                                    run.name.clone(),
+                                )
                                 .h(px(20.0))
                                 .flex()
                                 .items_center()
                                 .gap(px(8.0))
                                 .cursor_pointer()
                                 .hover(|style| style.bg(self.theme.bg_hover))
-                                .on_click(cx.listener(move |this, _, window, cx| {
+                                .on_primary_click(cx.listener(move |this, _, window, cx| {
                                     cx.stop_propagation();
                                     match run_id {
                                         Some(run_id) => this
@@ -308,7 +324,7 @@ impl SourcefourWindow {
                                 .text_size(px(10.0))
                                 .text_color(self.theme.text_faint)
                                 .hover(|style| style.bg(self.theme.bg_hover))
-                                .on_click(cx.listener(|this, _, _, cx| {
+                                .on_primary_click(cx.listener(|this, _, _, cx| {
                                     this.load_selected_checks(true, cx);
                                 }))
                                 .child("↻"),
@@ -610,6 +626,12 @@ impl SourcefourWindow {
         Some(
             div()
                 .id(("pr-chip", pull.number))
+                .named_link_menu(
+                    self.menus.downgrade(),
+                    pull.html_url.clone(),
+                    true,
+                    format!("#{}", pull.number),
+                )
                 .flex_none()
                 .px(px(4.0))
                 .rounded(px(3.0))
@@ -619,7 +641,7 @@ impl SourcefourWindow {
                 .text_color(color)
                 .cursor_pointer()
                 .hover(|style| style.bg(self.theme.bg_hover))
-                .on_click(move |_, _, cx| {
+                .on_primary_click(move |_, _, cx| {
                     cx.stop_propagation();
                     cx.open_url(&url);
                 })

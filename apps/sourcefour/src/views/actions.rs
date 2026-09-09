@@ -5,11 +5,13 @@
 //! why. Duration bars answer where the time went, and the timeline strip
 //! shows job parallelism on one wall-clock axis.
 
+use crate::context_menu::{ContextMenuExt as _, MenuEntry, PrimaryClickExt as _};
 use gpui::{
     Div, FontWeight, IntoElement, ScrollStrategy, UniformListScrollHandle, Window, div, prelude::*,
     px, uniform_list,
 };
 use sourcefour_model::{CheckConclusion, CheckStatus, WorkflowJob, WorkflowRun};
+use std::sync::Arc;
 
 use super::{SourcefourWindow, github::check_glyph, row_count_as_f32};
 use crate::panels::Splitter;
@@ -222,6 +224,7 @@ impl ActionsState {
                     return Vec::new();
                 };
                 view.logs.clear();
+                view.step_ranges.get_mut().clear();
                 self.logs_pending.clear();
                 self.log_generation = self.log_generation.wrapping_add(1);
                 vec![ActionsEffect::FetchJobs(view.run.id)]
@@ -243,7 +246,10 @@ impl ActionsState {
                     return Vec::new();
                 }
                 let selected = view.selected().is_some_and(|job| job.id == job_id);
-                view.logs.insert(job_id, outcome);
+                view.logs.insert(job_id, outcome.map(Arc::from));
+                view.step_ranges
+                    .get_mut()
+                    .retain(|key, _| key.job_id != job_id);
                 selected
                     .then_some(ActionsEffect::ScrollLog)
                     .into_iter()
@@ -263,6 +269,7 @@ impl ActionsState {
 
 /// One open run: its identity plus lazily arriving jobs and log.
 pub(super) struct ActionsView {
+    step_ranges: std::cell::RefCell<std::collections::HashMap<StepLogKey, std::ops::Range<usize>>>,
     pub(super) run: WorkflowRun,
     /// `None` while the first jobs read is in flight.
     pub(super) jobs: Option<Result<Vec<WorkflowJob>, String>>,
@@ -277,12 +284,33 @@ pub(super) struct ActionsView {
     pub(super) collapsed: bool,
     /// Every job's complete log, fetched in parallel as jobs complete so
     /// expanding any of them is instant.
-    pub(super) logs: std::collections::HashMap<u64, Result<Vec<String>, String>>,
+    pub(super) logs: std::collections::HashMap<u64, Result<Arc<[String]>, String>>,
     /// Show the whole job log instead of the selected step's slice.
     pub(super) full_log: bool,
 }
 
 impl ActionsView {
+    fn step_log_range(
+        &self,
+        job_id: u64,
+        step: &sourcefour_model::WorkflowStep,
+    ) -> Option<std::ops::Range<usize>> {
+        let lines = self.logs.get(&job_id)?.as_ref().ok()?;
+        let key = StepLogKey {
+            job_id,
+            started_at: step.started_at,
+            completed_at: step.completed_at,
+        };
+        Some(
+            self.step_ranges
+                .borrow_mut()
+                .entry(key)
+                .or_insert_with(|| {
+                    sourcefour_github::step_slice(lines, step.started_at, step.completed_at)
+                })
+                .clone(),
+        )
+    }
     fn jobs_ok(&self) -> &[WorkflowJob] {
         match &self.jobs {
             Some(Ok(jobs)) => jobs,
@@ -306,6 +334,13 @@ impl ActionsView {
         }
         default_step(job)
     }
+}
+
+#[derive(Clone, Copy, Eq, Hash, PartialEq)]
+struct StepLogKey {
+    job_id: u64,
+    started_at: Option<i64>,
+    completed_at: Option<i64>,
 }
 
 /// The job a failed run opens on: first failed, else first still running,
@@ -486,13 +521,14 @@ pub(super) fn demo_view() -> ActionsView {
         }
     }
     ActionsView {
+        step_ranges: std::cell::RefCell::default(),
         run: demo_run(),
         jobs: Some(Ok(jobs)),
         focus_job: None,
         selected_job: 1,
         selected_step: None,
         collapsed: false,
-        logs: std::collections::HashMap::from([(2, Ok(demo_log()))]),
+        logs: std::collections::HashMap::from([(2, Ok(demo_log().into()))]),
         full_log: false,
     }
 }
@@ -642,7 +678,109 @@ fn demo_log() -> Vec<String> {
 }
 
 impl SourcefourWindow {
+    fn loaded_job_log(&self, job_id: u64) -> Option<&Arc<[String]>> {
+        self.actions.view.as_ref()?.logs.get(&job_id)?.as_ref().ok()
+    }
+
+    fn copy_actions_log(
+        lines: Arc<[String]>,
+        range: std::ops::Range<usize>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let ticket = crate::context_menu::reserve_clipboard(cx);
+        cx.spawn(async move |this, cx| {
+            let text = cx
+                .background_executor()
+                .spawn(async move { plain_log(lines.get(range).unwrap_or_default()) })
+                .await;
+            this.update(cx, |_, cx| {
+                crate::context_menu::finish_clipboard(ticket, text, cx);
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn log_entries(
+        &self,
+        job_id: u64,
+        line: Option<usize>,
+        step: Option<&sourcefour_model::WorkflowStep>,
+        cx: &gpui::Context<Self>,
+    ) -> Vec<MenuEntry> {
+        let Some(lines) = self.loaded_job_log(job_id) else {
+            return Vec::new();
+        };
+        let mut entries = Vec::new();
+        if let Some(index) = line.filter(|&index| index < lines.len()) {
+            let source = Arc::clone(lines);
+            entries.push(MenuEntry::new("Copy line", move |_, cx| {
+                crate::context_menu::copy_text(sourcefour_github::strip_ansi(&source[index]), cx);
+            }));
+        }
+        let selected_step = self.actions.view.as_ref().and_then(|view| {
+            let job = view.selected().filter(|job| job.id == job_id)?;
+            view.focused_step().and_then(|index| job.steps.get(index))
+        });
+        if let Some(step) = step.or(selected_step) {
+            let range = self
+                .actions
+                .view
+                .as_ref()
+                .and_then(|view| view.step_log_range(job_id, step))
+                .unwrap_or(0..0);
+            let source = Arc::clone(lines);
+            entries.push(MenuEntry::command("Copy step log", cx, move |_, _, cx| {
+                Self::copy_actions_log(Arc::clone(&source), range.clone(), cx);
+            }));
+        }
+        let source = Arc::clone(lines);
+        entries.push(MenuEntry::command("Copy job log", cx, move |_, _, cx| {
+            Self::copy_actions_log(Arc::clone(&source), 0..source.len(), cx);
+        }));
+        entries
+    }
+
+    fn show_job_menu(
+        &self,
+        job_id: u64,
+        position: gpui::Point<gpui::Pixels>,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let Some(job) = self
+            .actions
+            .view
+            .as_ref()
+            .and_then(|view| view.jobs_ok().iter().find(|job| job.id == job_id))
+        else {
+            return;
+        };
+        let mut entries = crate::context_menu::link_entries(&job.html_url, true);
+        entries.push(MenuEntry::copy("Copy name", job.name.clone()));
+        let logs = self.log_entries(job_id, None, None, cx);
+        if !logs.is_empty() {
+            entries.push(MenuEntry::Separator);
+            entries.extend(logs);
+        }
+        self.show_menu(position, entries, window, cx);
+    }
+
     fn dispatch_actions(&mut self, event: ActionsEvent, cx: &mut gpui::Context<Self>) {
+        if matches!(
+            event,
+            ActionsEvent::Open(_)
+                | ActionsEvent::Close
+                | ActionsEvent::SelectJob(_)
+                | ActionsEvent::SelectJobDelta(_)
+                | ActionsEvent::SelectStepDelta(_)
+                | ActionsEvent::ToggleStep(_)
+                | ActionsEvent::ToggleFullLog
+                | ActionsEvent::Refresh
+        ) {
+            self.dismiss_menu(cx);
+        }
+
         let effects = self.actions.reduce(event);
         for effect in effects {
             match effect {
@@ -669,10 +807,12 @@ impl SourcefourWindow {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        self.dismiss_menu(cx);
         self.actions_focus.focus(window);
         self.actions_jobs_scroll = UniformListScrollHandle::new();
         self.actions_log_scroll = UniformListScrollHandle::new();
         let view = ActionsView {
+            step_ranges: std::cell::RefCell::default(),
             run,
             jobs: None,
             focus_job,
@@ -934,7 +1074,7 @@ impl SourcefourWindow {
             return Some((0, lines.len(), lines.len()));
         }
         let step = view.focused_step().and_then(|index| job.steps.get(index))?;
-        let range = sourcefour_github::step_slice(lines, step.started_at, step.completed_at);
+        let range = view.step_log_range(job.id, step)?;
         Some((range.start, range.end, lines.len()))
     }
 
@@ -976,7 +1116,7 @@ impl SourcefourWindow {
                 .key_context("Actions")
                 .track_focus(&self.actions_focus)
                 .p(px(26.0))
-                .on_click(cx.listener(|this, event: &gpui::ClickEvent, window, cx| {
+                .on_primary_click(cx.listener(|this, event: &gpui::ClickEvent, window, cx| {
                     if super::is_true_click(event) {
                         this.close_actions(window, cx);
                     }
@@ -1082,7 +1222,7 @@ impl SourcefourWindow {
                             .text_size(px(13.0))
                             .text_color(self.theme.text_secondary)
                             .hover(|style| style.bg(self.theme.bg_hover))
-                            .on_click(cx.listener(|this, _, window, cx| {
+                            .on_primary_click(cx.listener(|this, _, window, cx| {
                                 this.close_actions(window, cx);
                             }))
                             .child("✕"),
@@ -1123,6 +1263,12 @@ impl SourcefourWindow {
                 .child(label)
         };
         div()
+            .named_link_menu(
+                self.menus.downgrade(),
+                url.clone(),
+                true,
+                view.run.name.clone(),
+            )
             .flex()
             .items_center()
             .gap(px(6.0))
@@ -1143,6 +1289,21 @@ impl SourcefourWindow {
                     .font_family(self.mono_font())
                     .text_size(px(10.0))
                     .text_color(self.theme.text_secondary)
+                    .when(!view.run.sha.is_empty(), |chip| {
+                        chip.on_context_menu({
+                            let sha = view.run.sha.clone();
+                            let host = self.menus.downgrade();
+                            move |event, window, cx| {
+                                crate::context_menu::show(
+                                    &host,
+                                    event.position,
+                                    vec![MenuEntry::copy("Copy SHA", sha.clone())],
+                                    window,
+                                    cx,
+                                );
+                            }
+                        })
+                    })
                     .child(view.run.sha.chars().take(7).collect::<String>()),
             )
             .child(
@@ -1155,7 +1316,7 @@ impl SourcefourWindow {
                     .text_size(px(11.0))
                     .text_color(self.theme.text_faint)
                     .hover(|style| style.bg(self.theme.bg_hover))
-                    .on_click(cx.listener(|this, _, _, cx| {
+                    .on_primary_click(cx.listener(|this, _, _, cx| {
                         this.refresh_actions(cx);
                     }))
                     .child("↻"),
@@ -1164,12 +1325,13 @@ impl SourcefourWindow {
             .child(
                 div()
                     .id("actions-gh-link")
+                    .link_menu(self.menus.downgrade(), url.clone(), true)
                     .flex_none()
                     .cursor_pointer()
                     .text_size(px(10.5))
                     .text_color(self.theme.text_faint)
                     .hover(|style| style.text_color(self.theme.accent))
-                    .on_click(move |_, _, cx| {
+                    .on_primary_click(move |_, _, cx| {
                         cx.stop_propagation();
                         cx.open_url(&url);
                     })
@@ -1256,8 +1418,14 @@ impl SourcefourWindow {
             .view
             .as_ref()
             .is_some_and(|view| index == view.selected_job);
+        let job_id = job.id;
         div()
             .id(("actions-job", index))
+            .on_context_menu(
+                cx.listener(move |this, event: &gpui::MouseDownEvent, window, cx| {
+                    this.show_job_menu(job_id, event.position, window, cx);
+                }),
+            )
             .h(px(34.0))
             .flex()
             .items_center()
@@ -1276,7 +1444,7 @@ impl SourcefourWindow {
                 self.theme.bg_panel
             })
             .hover(|style| style.bg(self.theme.bg_hover))
-            .on_click(cx.listener(move |this, _, _, cx| {
+            .on_primary_click(cx.listener(move |this, _, _, cx| {
                 this.set_actions_job(index, cx);
             }))
             .child(
@@ -1412,8 +1580,29 @@ impl SourcefourWindow {
         let (glyph, color) = check_glyph(&self.theme, step.status);
         let seconds = duration_of(step.started_at, step.completed_at);
         let is_focused = focused == Some(index);
+        let job_id = self
+            .actions
+            .view
+            .as_ref()
+            .and_then(ActionsView::selected)
+            .map(|job| job.id);
+        let step_target = step.clone();
         div()
             .id(("actions-step", index))
+            .when_some(job_id, |row, job_id| {
+                row.on_context_menu(cx.listener(
+                    move |this, event: &gpui::MouseDownEvent, window, cx| {
+                        let mut entries =
+                            vec![MenuEntry::copy("Copy step name", step_target.name.clone())];
+                        let logs = this.log_entries(job_id, None, Some(&step_target), cx);
+                        if !logs.is_empty() {
+                            entries.push(MenuEntry::Separator);
+                            entries.extend(logs);
+                        }
+                        this.show_menu(event.position, entries, window, cx);
+                    },
+                ))
+            })
             .h(px(26.0))
             .flex_none()
             .flex()
@@ -1423,7 +1612,7 @@ impl SourcefourWindow {
             .cursor_pointer()
             .when(is_focused, |this| this.bg(self.theme.bg_hover))
             .hover(|style| style.bg(self.theme.bg_hover))
-            .on_click(cx.listener(move |this, _, _, cx| {
+            .on_primary_click(cx.listener(move |this, _, _, cx| {
                 this.dispatch_actions(ActionsEvent::ToggleStep(index), cx);
             }))
             .child(
@@ -1513,29 +1702,16 @@ impl SourcefourWindow {
         match view.logs.get(&job.id) {
             None => notice(String::from("Fetching log…")),
             Some(Err(message)) => notice(message.clone()),
-            Some(Ok(lines)) => {
+            Some(Ok(_lines)) => {
                 let Some((start, end, total)) = self.actions_log_window() else {
                     return Vec::new();
                 };
                 let shown = end - start;
-                // What the clipboard gets is what the eye reads: escapes
-                // are stripped, and a line without any is not copied.
-                let all = lines
-                    .iter()
-                    .map(|line| {
-                        if line.contains('\u{1b}') {
-                            sourcefour_github::strip_ansi(line)
-                        } else {
-                            line.clone()
-                        }
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n");
                 let list = uniform_list(
                     cx.entity(),
                     "actions-log",
                     shown,
-                    move |this, range, window, _cx| {
+                    move |this, range, window, cx| {
                         let Some((start, end, _)) = this.actions_log_window() else {
                             return Vec::new();
                         };
@@ -1547,11 +1723,13 @@ impl SourcefourWindow {
                         else {
                             return Vec::new();
                         };
+                        let job_id = view.selected().map(|job| job.id);
                         range
                             .filter_map(|offset| {
-                                lines.get(start + offset).filter(|_| start + offset < end)
+                                let index = start + offset;
+                                let line = lines.get(index).filter(|_| index < end)?;
+                                Some(this.actions_log_line(line, job_id?, index, window, cx))
                             })
-                            .map(|line| this.actions_log_line(line, window))
                             .collect()
                     },
                 )
@@ -1567,7 +1745,7 @@ impl SourcefourWindow {
                         .py(px(4.0))
                         .child(list)
                         .into_any_element(),
-                    self.actions_log_footer(view.full_log, shown, total, all, cx),
+                    self.actions_log_footer(view.full_log, shown, total, job.id, cx),
                 ]
             }
         }
@@ -1579,7 +1757,7 @@ impl SourcefourWindow {
         full_log: bool,
         shown: usize,
         total: usize,
-        all: String,
+        job_id: u64,
         cx: &mut gpui::Context<Self>,
     ) -> gpui::AnyElement {
         let footer_label = if full_log {
@@ -1588,6 +1766,12 @@ impl SourcefourWindow {
             format!("showing {shown} of {total} lines · jumped to first error")
         };
         div()
+            .on_context_menu(
+                cx.listener(move |this, event: &gpui::MouseDownEvent, window, cx| {
+                    let entries = this.log_entries(job_id, None, None, cx);
+                    this.show_menu(event.position, entries, window, cx);
+                }),
+            )
             .flex()
             .items_center()
             .gap(px(14.0))
@@ -1604,7 +1788,7 @@ impl SourcefourWindow {
                     .id("actions-log-toggle")
                     .cursor_pointer()
                     .text_color(self.theme.accent)
-                    .on_click(cx.listener(|this, _, _, cx| {
+                    .on_primary_click(cx.listener(|this, _, _, cx| {
                         this.dispatch_actions(ActionsEvent::ToggleFullLog, cx);
                     }))
                     .child(if full_log { "step log" } else { "full log" }),
@@ -1614,24 +1798,43 @@ impl SourcefourWindow {
                     .id("actions-log-copy")
                     .cursor_pointer()
                     .text_color(self.theme.accent)
-                    .on_click(move |_, _, cx| {
+                    .on_primary_click(cx.listener(move |this, _, _, cx| {
                         cx.stop_propagation();
-                        cx.write_to_clipboard(gpui::ClipboardItem::new_string(all.clone()));
-                    })
-                    .child("copy"),
+                        if let Some(lines) = this.loaded_job_log(job_id) {
+                            Self::copy_actions_log(Arc::clone(lines), 0..lines.len(), cx);
+                        }
+                    }))
+                    .child("copy job log"),
             )
             .into_any_element()
     }
 
     /// One virtualized log line: faint timestamp, tinted text.
-    fn actions_log_line(&self, line: &str, window: &Window) -> Div {
+    fn actions_log_line(
+        &self,
+        line: &str,
+        job_id: u64,
+        index: usize,
+        window: &Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> Div {
         let (timestamp, text) = sourcefour_github::split_timestamp(line);
         let tint = match line_tint(text) {
             LineTint::Error => self.theme.red,
             LineTint::Warning => self.theme.orange,
             LineTint::Plain => self.theme.text_secondary,
         };
+        let generation = self.actions.log_generation;
         div()
+            .on_context_menu(
+                cx.listener(move |this, event: &gpui::MouseDownEvent, window, cx| {
+                    if this.actions.log_generation != generation {
+                        return;
+                    }
+                    let entries = this.log_entries(job_id, Some(index), None, cx);
+                    this.show_menu(event.position, entries, window, cx);
+                }),
+            )
             .h(px(LOG_ROW_HEIGHT))
             .flex()
             .items_center()
@@ -1747,7 +1950,7 @@ impl SourcefourWindow {
             .px(px(16.0))
             .cursor_pointer()
             .hover(|style| style.bg(self.theme.bg_hover))
-            .on_click(cx.listener(|this, _, _, cx| this.toggle_actions_timeline(cx)))
+            .on_primary_click(cx.listener(|this, _, _, cx| this.toggle_actions_timeline(cx)))
             .child(
                 div()
                     .w(px(10.0))
@@ -1861,6 +2064,66 @@ impl SourcefourWindow {
                 .rounded(px(3.0))
                 .bg(meter_fill(&self.theme, job.status)),
         )
+    }
+}
+
+/// Clipboard text is assembled only for an explicit copy, on a worker.
+fn plain_log(lines: &[String]) -> String {
+    let mut text = String::new();
+    for (index, line) in lines.iter().enumerate() {
+        if index != 0 {
+            text.push('\n');
+        }
+        if line.contains('\u{1b}') {
+            text.push_str(&sourcefour_github::strip_ansi(line));
+        } else {
+            text.push_str(line);
+        }
+    }
+    text
+}
+
+#[cfg(test)]
+mod menu_tests {
+    use super::*;
+
+    #[gpui::test]
+    fn job_log_copy_uses_the_loaded_revision_and_strips_ansi(cx: &mut gpui::TestAppContext) {
+        let (view, cx) = super::super::test_window(cx, crate::demo::Scene::Actions);
+        let entry = view.update(cx, |view, cx| {
+            let state = view.actions.view.as_mut().unwrap();
+            let job_id = state.selected().unwrap().id;
+            state.logs.insert(
+                job_id,
+                Ok(Arc::from([
+                    "first\u{1b}[31m red\u{1b}[0m".into(),
+                    "second".into(),
+                ])),
+            );
+            let entry = view.log_entries(job_id, None, None, cx).pop().unwrap();
+            // A refresh can replace the cache after a menu was constructed.
+            view.actions
+                .view
+                .as_mut()
+                .unwrap()
+                .logs
+                .insert(job_id, Ok(Arc::from(["new revision".into()])));
+            entry
+        });
+        cx.update(|window, cx| {
+            let MenuEntry::Action {
+                invoke: Some(copy), ..
+            } = entry
+            else {
+                panic!("copy enabled");
+            };
+            copy(window, cx);
+        });
+        cx.run_until_parked();
+        assert_eq!(
+            cx.read_from_clipboard().unwrap().text().as_deref(),
+            Some("first red\nsecond")
+        );
     }
 }
 

@@ -1,6 +1,7 @@
 //! The details pane (§6.10): commit message on the left, changed files on
 //! the right, with the merge-parent comparison choices.
 
+use crate::context_menu::{ContextMenuExt as _, PrimaryClickExt as _};
 use gpui::{Div, FontWeight, IntoElement, div, prelude::*, px, uniform_list};
 use sourcefour_model::{ChangedFile, DiffParent, RepoPath, WorkingTreeStatus, WorkingTreeSummary};
 
@@ -57,8 +58,8 @@ pub(super) struct DetailLines {
     author: String,
     date: Option<String>,
     committer: Option<String>,
-    /// Abbreviated hash and comparison choice per parent, commit order.
-    parent_choices: Vec<(String, DiffParent)>,
+    /// Full identity and comparison choice per parent, commit order.
+    parent_choices: Vec<(sourcefour_model::Oid, DiffParent)>,
     body: Option<String>,
 }
 
@@ -115,7 +116,7 @@ impl SourcefourWindow {
                         } else {
                             DiffParent::Parent(*parent)
                         };
-                        (parent.abbreviated(7), choice)
+                        (*parent, choice)
                     })
                     .collect()
             }),
@@ -130,7 +131,7 @@ impl SourcefourWindow {
     pub(super) fn details_hash_row(
         &self,
         hash: &str,
-        parent_choices: &[(String, DiffParent)],
+        parent_choices: &[(sourcefour_model::Oid, DiffParent)],
         cx: &mut gpui::Context<Self>,
     ) -> Div {
         let comparing = self.compare_parent;
@@ -148,7 +149,13 @@ impl SourcefourWindow {
                 div()
                     .text_size(px(10.5))
                     .text_color(self.theme.text_faint)
-                    .child(format!("Parent  {}", parent_choices[0].0))
+                    .child(format!("Parent  {}", parent_choices[0].0.abbreviated(7)))
+                    .on_context_menu({
+                        let parent = parent_choices[0].0;
+                        cx.listener(move |this, event: &gpui::MouseDownEvent, window, cx| {
+                            this.show_commit_menu(parent, event.position, window, cx);
+                        })
+                    })
             }))
             .children((parent_choices.len() > 1).then(|| {
                 // A merge: pick which parent to compare against.
@@ -165,9 +172,20 @@ impl SourcefourWindow {
                             .enumerate()
                             .map(|(index, (hash, choice))| {
                                 let choice = *choice;
+                                let parent = *hash;
                                 let selected = comparing == choice;
                                 div()
                                     .id(("parent-choice", index))
+                                    .on_context_menu(cx.listener(
+                                        move |this, event: &gpui::MouseDownEvent, window, cx| {
+                                            this.show_commit_menu(
+                                                parent,
+                                                event.position,
+                                                window,
+                                                cx,
+                                            );
+                                        },
+                                    ))
                                     .px(px(6.0))
                                     .rounded(px(4.0))
                                     .border_1()
@@ -182,10 +200,10 @@ impl SourcefourWindow {
                                     } else {
                                         self.theme.text_secondary
                                     })
-                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                    .on_primary_click(cx.listener(move |this, _, _, cx| {
                                         this.set_compare_parent(choice, cx);
                                     }))
-                                    .child(hash.clone())
+                                    .child(hash.abbreviated(7))
                             }),
                     )
             }))
@@ -202,6 +220,13 @@ impl SourcefourWindow {
         let subject = subject.to_owned();
         div()
             .id("details-collapsed")
+            .when_some(self.history.selected_commit(), |row, oid| {
+                row.on_context_menu(cx.listener(
+                    move |this, event: &gpui::MouseDownEvent, window, cx| {
+                        this.show_commit_menu(oid, event.position, window, cx);
+                    },
+                ))
+            })
             .h(px(30.0))
             .flex_none()
             .flex()
@@ -212,7 +237,7 @@ impl SourcefourWindow {
             .border_color(self.theme.border)
             .bg(self.theme.bg_panel)
             .cursor_pointer()
-            .on_click(cx.listener(|this, _, _, cx| {
+            .on_primary_click(cx.listener(|this, _, _, cx| {
                 this.details_collapsed = false;
                 this.persist_ui_state(cx);
                 cx.notify();
@@ -283,7 +308,15 @@ impl SourcefourWindow {
             parent_choices,
             body,
         } = lines;
+        let oid = self.history.selected_commit();
         div()
+            .when_some(oid, |column, oid| {
+                column.on_context_menu(cx.listener(
+                    move |this, event: &gpui::MouseDownEvent, window, cx| {
+                        this.show_commit_menu(oid, event.position, window, cx);
+                    },
+                ))
+            })
             .flex_1()
             .min_w(px(1.0))
             .flex()
@@ -522,7 +555,7 @@ impl SourcefourWindow {
                         this.cursor_pointer()
                             .bg(self.theme.accent)
                             .text_color(self.theme.text_on_accent)
-                            .on_click(cx.listener(|this, _, _, cx| {
+                            .on_primary_click(cx.listener(|this, _, _, cx| {
                                 this.start_commit(cx);
                             }))
                     })
@@ -550,6 +583,12 @@ impl SourcefourWindow {
         let label = if staged { "STAGED" } else { "UNSTAGED" };
         let count = files.len();
         div()
+            .on_context_menu(
+                cx.listener(move |this, event: &gpui::MouseDownEvent, window, cx| {
+                    let entries = this.section_entries(staged, cx);
+                    this.show_menu(event.position, entries, window, cx);
+                }),
+            )
             .h(px(FILE_ROW_HEIGHT))
             .flex_none()
             .flex()
@@ -579,18 +618,8 @@ impl SourcefourWindow {
                                     .bg(self.theme.bg_hover)
                                     .text_color(self.theme.text_primary)
                             })
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                let Some(status) = &this.working_tree_status else {
-                                    return;
-                                };
-                                let files = if staged {
-                                    &status.staged
-                                } else {
-                                    &status.unstaged
-                                };
-                                let paths =
-                                    files.iter().filter_map(stageable_path).cloned().collect();
-                                this.edit_index(paths, staged, cx);
+                            .on_primary_click(cx.listener(move |this, _, _, cx| {
+                                this.edit_index_section(staged, cx);
                             }))
                             .child(if staged { "unstage all" } else { "stage all" }),
                     )
@@ -624,8 +653,19 @@ impl SourcefourWindow {
             .or(file.old_path.as_ref())
             .map_or_else(String::new, sourcefour_model::RepoPath::display_lossy);
         let clicked = file.clone();
+        let context_file = file.clone();
+        let target = self.file_target(staged);
         div()
             .id(("changed-file", index))
+            .debug_selector(|| format!("changed-file-{index}"))
+            .when_some(target, |row, target| {
+                row.on_context_menu(cx.listener(
+                    move |this, event: &gpui::MouseDownEvent, window, cx| {
+                        let entries = this.file_entries(&context_file, target, true, cx);
+                        this.show_menu(event.position, entries, window, cx);
+                    },
+                ))
+            })
             .h(px(FILE_ROW_HEIGHT))
             .flex_none()
             .flex()
@@ -634,7 +674,7 @@ impl SourcefourWindow {
             .text_size(px(11.0))
             .cursor_pointer()
             .hover(|style| style.bg(self.theme.bg_hover))
-            .on_click(cx.listener(move |this, _, window, cx| match staged {
+            .on_primary_click(cx.listener(move |this, _, window, cx| match staged {
                 Some(staged) => this.open_worktree_diff(&clicked, staged, window, cx),
                 None => this.open_diff(&clicked, window, cx),
             }))
@@ -684,7 +724,7 @@ impl SourcefourWindow {
                                 .bg(self.theme.bg_hover)
                                 .text_color(self.theme.text_primary)
                         })
-                        .on_click(cx.listener(move |this, _, _, cx| {
+                        .on_primary_click(cx.listener(move |this, _, _, cx| {
                             cx.stop_propagation();
                             this.edit_index(vec![path.clone()], staged, cx);
                         }))
@@ -695,7 +735,7 @@ impl SourcefourWindow {
 }
 
 /// The path a stage or unstage should name; conflicted rows get none.
-fn stageable_path(file: &ChangedFile) -> Option<&RepoPath> {
+pub(super) fn stageable_path(file: &ChangedFile) -> Option<&RepoPath> {
     if file.status == sourcefour_model::ChangeKind::Unknown {
         return None;
     }
@@ -770,6 +810,7 @@ mod tests {
                 .flex()
                 .flex_col()
                 .child(self.0.update(cx, |view, cx| view.details(cx)))
+                .child(self.0.read(cx).menus.clone())
         }
     }
 
@@ -801,6 +842,45 @@ mod tests {
             gpui::size(px(1200.0), px(800.0)),
             |_, _| fixture.clone().into_any_element(),
         );
+    }
+
+    #[gpui::test]
+    fn a_context_menu_can_copy_the_last_of_a_hundred_thousand_files(cx: &mut TestAppContext) {
+        let (fixture, cx) = fixture(cx, Scene::Commit);
+        let view = cx.update(|_, cx| fixture.read(cx).0.clone());
+        view.update(cx, |view, _| {
+            view.working_tree_status = Some(WorkingTreeStatus {
+                staged: files(50_000),
+                unstaged: files(50_000),
+            });
+        });
+        draw(&fixture, cx);
+        let scroll = cx.update(|_, cx| view.read(cx).working_tree_files_scroll.clone());
+        scroll.scroll_to_item(100_001, ScrollStrategy::Top);
+        draw(&fixture, cx);
+        let row = cx.debug_bounds("changed-file-100001").unwrap();
+        let started = std::time::Instant::now();
+        for _ in 0..5 {
+            draw(&fixture, cx);
+        }
+        let closed = started.elapsed();
+        cx.simulate_mouse_down(
+            row.center(),
+            gpui::MouseButton::Right,
+            gpui::Modifiers::default(),
+        );
+        let started = std::time::Instant::now();
+        for _ in 0..5 {
+            draw(&fixture, cx);
+        }
+        let opened = started.elapsed();
+        cx.simulate_keystrokes("down enter");
+        assert_eq!(
+            cx.read_from_clipboard().unwrap().text().as_deref(),
+            Some("icons/file-049999.svg")
+        );
+        assert!(!cx.update(|_, cx| view.read(cx).menus.read(cx).is_open()));
+        eprintln!("100k file fixture, five GPUI draws: closed {closed:?}, open {opened:?}");
     }
 
     #[gpui::test]

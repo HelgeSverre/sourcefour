@@ -1,9 +1,10 @@
 //! The commit list (§4.4, §8.4): virtualized rows, the header, and the
 //! graph canvas painted over the lane column.
 
+use crate::context_menu::{ContextMenuExt as _, PrimaryClickExt as _};
 use gpui::{
-    Div, FontWeight, IntoElement, StatefulInteractiveElement, UniformListScrollHandle, Window, div,
-    prelude::*, px, uniform_list,
+    Div, FontWeight, IntoElement, UniformListScrollHandle, Window, div, prelude::*, px,
+    uniform_list,
 };
 
 use crate::{
@@ -252,7 +253,11 @@ impl SourcefourWindow {
 
     /// The row's flexible middle: capped ref labels, the clipped subject,
     /// and the CI dot when one is known.
-    fn commit_description_cell(&self, row: &sourcefour_model::CommitRow) -> Div {
+    fn commit_description_cell(
+        &self,
+        row: &sourcefour_model::CommitRow,
+        cx: &mut gpui::Context<Self>,
+    ) -> Div {
         div()
             // flex-basis 0: a long subject must never widen this cell
             // and push the fixed columns out of the header's alignment.
@@ -270,7 +275,7 @@ impl SourcefourWindow {
                 row.labels
                     .iter()
                     .take(3)
-                    .map(|label| self.label_chip(label)),
+                    .map(|label| self.label_chip(label, row.oid, cx)),
             )
             .children((row.labels.len() > 3).then(|| {
                 div()
@@ -315,10 +320,18 @@ impl SourcefourWindow {
                 .id(("commit-missing", index))
                 .h(px(self.settings.history.row_height()));
         };
-        let selected = self.history.selected_commit() == Some(row.oid);
+        let menus = self.menus.read(cx);
+        let selected = self.history.selected_commit() == Some(row.oid)
+            || (menus.is_open() && menus.targets(&row.oid.to_hex()));
         let oid = row.oid;
         div()
             .id(("commit", index))
+            .debug_selector(|| format!("commit-row-{index}"))
+            .on_context_menu(
+                cx.listener(move |this, event: &gpui::MouseDownEvent, window, cx| {
+                    this.show_commit_menu(oid, event.position, window, cx);
+                }),
+            )
             .h(px(self.settings.history.row_height()))
             // Without a full-width row the subject sizes to its text and every
             // later column drifts, so the header no longer lines up with it.
@@ -334,7 +347,7 @@ impl SourcefourWindow {
             .text_color(self.theme.text_primary)
             // The graph column is reserved per row but painted by the overlay.
             .child(div().w(px(self.panels.graph)).h_full().flex_none())
-            .child(self.commit_description_cell(row))
+            .child(self.commit_description_cell(row, cx))
             .when(columns.author, |this| {
                 this.child(
                     div()
@@ -374,7 +387,7 @@ impl SourcefourWindow {
                         .child(oid.abbreviated(7)),
                 )
             })
-            .on_click(cx.listener(move |this, _, _, cx| {
+            .on_primary_click(cx.listener(move |this, _, _, cx| {
                 this.initial_selection_pending = false;
                 this.history.selected = Some(crate::history::Selection::Commit(oid));
                 this.load_selected_files(cx);
@@ -404,7 +417,7 @@ impl SourcefourWindow {
                 self.theme.bg_list
             })
             .hover(|style| style.bg(self.theme.bg_hover))
-            .on_click(cx.listener(|this, _, _, cx| {
+            .on_primary_click(cx.listener(|this, _, _, cx| {
                 this.select_working_tree(cx);
             }))
             .child(div().w(px(self.panels.graph)).h_full().flex_none())
@@ -442,7 +455,12 @@ impl SourcefourWindow {
     }
 
     /// One ref label chip: HEAD, branch, remote branch, or tag (§6.6).
-    pub(super) fn label_chip(&self, label: &sourcefour_model::RefLabel) -> Div {
+    pub(super) fn label_chip(
+        &self,
+        label: &sourcefour_model::RefLabel,
+        oid: sourcefour_model::Oid,
+        cx: &mut gpui::Context<Self>,
+    ) -> Div {
         let color = if label.is_head {
             self.theme.accent
         } else {
@@ -454,7 +472,21 @@ impl SourcefourWindow {
                 sourcefour_model::RefKind::Other => self.theme.text_faint,
             }
         };
+        let target = label.clone();
         div()
+            .debug_selector(|| format!("ref-chip-{}", label.name))
+            .on_context_menu(
+                cx.listener(move |this, event: &gpui::MouseDownEvent, window, cx| {
+                    let entries = this.ref_entries(
+                        &target.name,
+                        target.full_name.as_deref(),
+                        target.kind,
+                        oid,
+                        cx,
+                    );
+                    this.show_menu(event.position, entries, window, cx);
+                }),
+            )
             .flex_none()
             .px(px(5.0))
             .rounded(px(4.0))

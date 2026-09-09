@@ -16,6 +16,7 @@
 //! The settings overlay is a sibling (`crate::settings_ui`) reaching in
 //! through `pub(crate)` methods only.
 
+use crate::context_menu::{ContextMenuExt as _, PrimaryClickExt as _};
 use gpui::{
     Div, FocusHandle, FontWeight, IntoElement, Render, UniformListScrollHandle, Window, actions,
     div, prelude::*, px,
@@ -45,6 +46,7 @@ mod details;
 mod diff;
 mod github;
 mod history_pane;
+mod menus;
 mod preview;
 mod sidebar;
 mod svg_preview;
@@ -65,6 +67,7 @@ struct DiffCacheEntry {
     reason = "independent view-state flags on the one window root"
 )]
 pub(crate) struct SourcefourWindow {
+    menus: gpui::Entity<crate::context_menu::MenuHost>,
     /// Repository name, stable across the repository's worktrees.
     name: String,
     /// Display-friendly active worktree path.
@@ -379,7 +382,10 @@ impl SourcefourWindow {
         Self::watch_activation(gpui_window, cx);
         let session = RepoSessionId::new();
         let generation = Generation(0);
+        let menus = cx.new(|cx| crate::context_menu::MenuHost::new(gpui_window, cx));
+        cx.observe(&menus, |_, _, cx| cx.notify()).detach();
         let mut window = Self {
+            menus,
             name: launch.name,
             path: launch.path,
             demo: launch.demo,
@@ -469,6 +475,15 @@ impl SourcefourWindow {
                 cx,
             ),
         };
+        for input in [
+            &window.commit_input,
+            &window.diff_file_input,
+            &window.filter_input,
+            &window.branch_input,
+            &window.token_input,
+        ] {
+            input.update(cx, |input, _| input.set_menu_host(window.menus.downgrade()));
+        }
         Self::watch_filter(&window.filter_input, cx);
         cx.observe(&window.diff_file_input, |this, _, cx| {
             this.diff_switcher_selection = 0;
@@ -511,6 +526,7 @@ impl SourcefourWindow {
         cx.observe(filter_input, |this, input, cx| {
             let text = input.read(cx).text().to_string();
             if this.history.filter != text {
+                this.dismiss_menu(cx);
                 this.history.set_filter(&text);
                 cx.notify();
             }
@@ -631,6 +647,7 @@ impl SourcefourWindow {
     /// stays usable on screen as `Refreshing` until the fresh one arrives
     /// (§11.2). Every reload path routes through here.
     pub(super) fn begin_reload(&mut self, cx: &mut gpui::Context<Self>) {
+        self.dismiss_menu(cx);
         self.generation = Generation(self.generation.0 + 1);
         if let Some(current) = self.repo.value().cloned() {
             self.repo = LoadState::Refreshing {
@@ -714,6 +731,7 @@ impl SourcefourWindow {
 
     /// Starts a traversal for `scope`, discarding anything already loaded.
     fn start_history(&mut self, scope: HistoryScope, cx: &mut gpui::Context<Self>) {
+        self.dismiss_menu(cx);
         let Some(location) = self.location.clone() else {
             return;
         };
@@ -849,6 +867,9 @@ impl SourcefourWindow {
                 }
                 match status {
                     Ok(status) => {
+                        if this.working_tree_status.as_ref() != Some(&status) {
+                            this.dismiss_menu(cx);
+                        }
                         if this.apply_working_tree_status(status) {
                             this.load_selected_files(cx);
                         }
@@ -978,6 +999,7 @@ impl SourcefourWindow {
     /// the read starts only if the selection still stands after ~50ms. A
     /// result is dropped when the selection or generation moved on.
     fn load_selected_files(&mut self, cx: &mut gpui::Context<Self>) {
+        self.dismiss_menu(cx);
         // Checks follow the selection with their own cache and TTL.
         self.load_selected_checks(false, cx);
         let Some(oid) = self.history.selected_commit() else {
@@ -1229,6 +1251,7 @@ impl SourcefourWindow {
 
     /// Opens the settings overlay and moves focus into it.
     pub(crate) fn open_settings(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) {
+        self.dismiss_menu(cx);
         if self.settings_view.is_none() {
             self.settings_view = Some(crate::settings_ui::SettingsSection::default());
         }
@@ -1307,7 +1330,13 @@ impl SourcefourWindow {
         reason = "all window action routing stays centralized and auditable"
     )]
     fn root_actions(root: Div, cx: &mut gpui::Context<Self>) -> Div {
-        root.on_action(cx.listener(|this, _: &SelectNextCommit, _, cx| {
+        root.on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
+            if event.keystroke.key == "f10" && event.keystroke.modifiers.shift {
+                this.keyboard_commit_menu(window, cx);
+                cx.stop_propagation();
+            }
+        }))
+        .on_action(cx.listener(|this, _: &SelectNextCommit, _, cx| {
             this.move_selection(1, cx);
         }))
         .on_action(cx.listener(|this, _: &SelectPreviousCommit, _, cx| {
@@ -1548,7 +1577,13 @@ impl Render for SourcefourWindow {
         let columns = ColumnVisibility::for_available_width(
             window.viewport_size().width.0 - self.panels.sidebar,
         );
-        let root = div().key_context("History");
+        self.menus
+            .update(cx, |menus, _| menus.set_theme(&self.theme));
+        let root = div().key_context(if self.menus.read(cx).is_open() {
+            "MenuRoot"
+        } else {
+            "History"
+        });
         let element = Self::root_actions(root, cx)
             .track_focus(&self.focus)
             .size_full()
@@ -1582,11 +1617,12 @@ impl Render for SourcefourWindow {
                             .child(self.details(cx)),
                     ),
             )
-            .child(self.status())
+            .child(self.status(cx))
             .children(self.diff_overlay(cx))
             .children(self.branch_overlay(cx))
             .children(self.settings_overlay(cx))
-            .children(self.actions_overlay(window.viewport_size().height.0, cx));
+            .children(self.actions_overlay(window.viewport_size().height.0, cx))
+            .child(self.menus.clone());
         // §12.5 frame instrumentation: element construction only — layout,
         // paint, and GPU time happen inside gpui after this returns.
         if std::env::var_os("SOURCEFOUR_FRAME_LOG").is_some() {
@@ -1597,6 +1633,31 @@ impl Render for SourcefourWindow {
         }
         element
     }
+}
+
+#[cfg(test)]
+fn test_window(
+    cx: &mut gpui::TestAppContext,
+    scene: demo::Scene,
+) -> (gpui::Entity<SourcefourWindow>, &mut gpui::VisualTestContext) {
+    cx.update(|cx| {
+        cx.bind_keys(crate::app::history_keymap());
+        cx.bind_keys(crate::text_input::keymap());
+    });
+    cx.add_window_view(|window, cx| {
+        SourcefourWindow::new(
+            WindowLaunch {
+                demo: true,
+                name: "menu-test".into(),
+                path: "/tmp/menu-test".into(),
+                location: None,
+                scene,
+            },
+            &UiState::default(),
+            window,
+            cx,
+        )
+    })
 }
 
 /// A sink for operations whose progress no interface element shows yet.
@@ -1641,7 +1702,7 @@ pub(crate) fn modal_panel(id: &'static str, theme: &Theme) -> gpui::Stateful<Div
         .border_color(theme.border_strong)
         .bg(theme.bg_panel)
         .shadow_lg()
-        .on_click(|_, _, cx| cx.stop_propagation())
+        .on_primary_click(|_, _, cx| cx.stop_propagation())
 }
 
 /// The window shown instead of the shell when discovery fails.
@@ -1653,6 +1714,7 @@ pub(crate) fn modal_panel(id: &'static str, theme: &Theme) -> gpui::Stateful<Div
 /// already is the failure surface — and one that resolves replaces this
 /// window with the shell.
 pub(crate) struct ErrorWindow {
+    menus: gpui::Entity<crate::context_menu::MenuHost>,
     theme: Theme,
     title: String,
     message: String,
@@ -1708,14 +1770,18 @@ impl ErrorWindow {
     ) -> Self {
         let theme = Theme::dark();
         let (title, message) = failure_text(failure);
+        let menus = cx.new(|cx| crate::context_menu::MenuHost::new(window, cx));
+        cx.observe(&menus, |_, _, cx| cx.notify()).detach();
         let path_input = cx.new(|cx| {
             crate::text_input::TextInput::new("Paste or type a repository path…", &theme, cx)
                 .role(crate::text_input::InputRole::RepoPath)
         });
+        path_input.update(cx, |input, _| input.set_menu_host(menus.downgrade()));
         // The Open button's enabled state follows what is typed.
         cx.observe(&path_input, |_, _, cx| cx.notify()).detach();
         path_input.read(cx).focus_handle.clone().focus(window);
         Self {
+            menus,
             theme,
             title,
             message,
@@ -1852,7 +1918,11 @@ impl Render for ErrorWindow {
         let divider = || div().flex_1().h(px(1.0)).bg(theme.border);
         div()
             .id("repo-picker")
-            .key_context("RepoPicker")
+            .key_context(if self.menus.read(cx).is_open() {
+                "MenuRoot"
+            } else {
+                "RepoPicker"
+            })
             .size_full()
             .flex()
             .flex_col()
@@ -1901,6 +1971,17 @@ impl Render for ErrorWindow {
                 div()
                     .text_size(px(12.0))
                     .text_color(theme.text_secondary)
+                    .on_context_menu(cx.listener(
+                        |this, event: &gpui::MouseDownEvent, window, cx| {
+                            let entries = vec![crate::context_menu::MenuEntry::copy(
+                                "Copy message",
+                                this.message.clone(),
+                            )];
+                            this.menus.update(cx, |menus, cx| {
+                                menus.open(event.position, entries, None, window, cx);
+                            });
+                        },
+                    ))
                     .child(self.message.clone()),
             )
             .child(self.path_row(window, cx))
@@ -1919,6 +2000,7 @@ impl Render for ErrorWindow {
                     .child(divider()),
             )
             .child(self.browse_zone(window, cx))
+            .child(self.menus.clone())
     }
 }
 
@@ -1968,7 +2050,7 @@ impl ErrorWindow {
                             .cursor_pointer()
                             .bg(theme.accent)
                             .text_color(theme.text_on_accent)
-                            .on_click(cx.listener(|this, _, window, cx| {
+                            .on_primary_click(cx.listener(|this, _, window, cx| {
                                 this.submit_path(window, cx);
                             }))
                     })
@@ -2013,7 +2095,7 @@ impl ErrorWindow {
             .gap(px(7.0))
             .cursor_pointer()
             .hover(move |style| style.bg(theme.bg_hover))
-            .on_click(cx.listener(|_, _, window, cx| Self::choose_folder(window, cx)))
+            .on_primary_click(cx.listener(|_, _, window, cx| Self::choose_folder(window, cx)))
             .child(
                 gpui::svg()
                     .path("icons/folder.svg")

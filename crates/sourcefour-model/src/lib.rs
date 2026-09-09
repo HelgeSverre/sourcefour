@@ -476,6 +476,8 @@ pub enum RefKind {
 /// A display label attached to a commit row.
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct RefLabel {
+    /// Complete reference name when supplied by repository metadata.
+    pub full_name: Option<String>,
     /// Visible label text.
     pub name: String,
     /// Reference type, used for stable ordering and color.

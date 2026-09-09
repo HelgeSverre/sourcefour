@@ -8,11 +8,11 @@
 use std::ops::Range;
 
 use gpui::{
-    App, Bounds, ClipboardItem, CursorStyle, Element, ElementId, ElementInputHandler, Entity,
-    EntityInputHandler, FocusHandle, Focusable, GlobalElementId, IntoElement, LayoutId,
-    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point, Render,
-    SharedString, Style, TextAlign, TextRun, UTF16Selection, UnderlineStyle, Window, WrappedLine,
-    actions, div, fill, point, prelude::*, px, relative, size,
+    App, Bounds, CursorStyle, Element, ElementId, ElementInputHandler, Entity, EntityInputHandler,
+    FocusHandle, Focusable, GlobalElementId, IntoElement, LayoutId, MouseButton, MouseDownEvent,
+    MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point, Render, SharedString, Style, TextAlign,
+    TextRun, UTF16Selection, UnderlineStyle, Window, WrappedLine, actions, div, fill, point,
+    prelude::*, px, relative, size,
 };
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -141,6 +141,7 @@ struct LayoutSnapshot {
 
 /// A themed editable text field, single-line unless explicitly configured.
 pub(crate) struct TextInput {
+    menus: Option<gpui::WeakEntity<crate::context_menu::MenuHost>>,
     pub(crate) focus_handle: FocusHandle,
     /// Draw mask characters instead of the content (token fields). The mask
     /// is one `*` per byte so every caret offset stays valid; secrets are
@@ -163,6 +164,7 @@ impl TextInput {
         cx: &mut gpui::Context<Self>,
     ) -> Self {
         Self {
+            menus: None,
             focus_handle: cx.focus_handle(),
             masked: false,
             editor: EditorState::new(),
@@ -190,6 +192,72 @@ impl TextInput {
     pub(crate) fn role(mut self, role: InputRole) -> Self {
         self.role = role;
         self
+    }
+
+    pub(crate) fn set_menu_host(&mut self, host: gpui::WeakEntity<crate::context_menu::MenuHost>) {
+        self.menus = Some(host);
+    }
+
+    fn context_menu(
+        &mut self,
+        position: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        use crate::context_menu::{MenuEntry, show};
+        let Some(host) = self.menus.clone() else {
+            return;
+        };
+        self.is_selecting = false;
+        self.focus_handle.focus(window);
+        let selected = !self.editor.selection_is_empty();
+        let entry =
+            |label, enabled, operation: fn(&mut Self, &mut Window, &mut gpui::Context<Self>)| {
+                if enabled {
+                    MenuEntry::command(label, cx, operation)
+                } else {
+                    MenuEntry::disabled(label)
+                }
+            };
+        let entries = vec![
+            entry("Undo", self.editor.can_undo(), |this, window, cx| {
+                this.undo(&Undo, window, cx);
+            }),
+            entry("Redo", self.editor.can_redo(), |this, window, cx| {
+                this.redo(&Redo, window, cx);
+            }),
+            MenuEntry::Separator,
+            entry("Cut", selected, |this, window, cx| {
+                this.cut(&Cut, window, cx);
+            }),
+            entry("Copy", selected, |this, window, cx| {
+                this.copy(&Copy, window, cx);
+            }),
+            entry("Paste", true, |this, window, cx| {
+                this.paste(&Paste, window, cx);
+            }),
+            MenuEntry::Separator,
+            entry(
+                "Select all",
+                !self.editor.text().is_empty(),
+                |this, window, cx| this.select_all(&SelectAll, window, cx),
+            ),
+        ];
+        show(&host, position, entries, window, cx);
+    }
+
+    fn context_mouse_down(
+        &mut self,
+        event: &MouseDownEvent,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let index = self.index_for_mouse_position(event.position);
+        let selection = self.editor.selection();
+        if selection.is_empty() || !selection.contains(&index) {
+            self.move_to(index, cx);
+        }
+        self.context_menu(event.position, window, cx);
     }
 
     fn key_context(&self) -> &'static str {
@@ -224,6 +292,12 @@ impl TextInput {
 
     /// Replaces the whole content, moving the caret to the end.
     pub(crate) fn set_text(&mut self, text: &str, cx: &mut gpui::Context<Self>) {
+        if let Some(host) = &self.menus {
+            host.update(cx, |host, cx| {
+                host.invalidate_for_focus(&self.focus_handle, cx);
+            })
+            .ok();
+        }
         self.editor.set_text(text);
         cx.notify();
     }
@@ -424,18 +498,14 @@ impl TextInput {
     fn copy(&mut self, _: &Copy, _: &mut Window, cx: &mut gpui::Context<Self>) {
         let selection = self.editor.selection();
         if !selection.is_empty() {
-            cx.write_to_clipboard(ClipboardItem::new_string(
-                self.editor.text()[selection].to_string(),
-            ));
+            crate::context_menu::copy_text(self.editor.text()[selection].to_string(), cx);
         }
     }
 
     fn cut(&mut self, _: &Cut, window: &mut Window, cx: &mut gpui::Context<Self>) {
         let selection = self.editor.selection();
         if !selection.is_empty() {
-            cx.write_to_clipboard(ClipboardItem::new_string(
-                self.editor.text()[selection].to_string(),
-            ));
+            crate::context_menu::copy_text(self.editor.text()[selection].to_string(), cx);
             self.next_edit_kind = EditKind::Cut;
             self.replace_text_in_range(None, "", window, cx);
         }
@@ -447,6 +517,9 @@ impl TextInput {
         _window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        if crate::context_menu::is_context_click(event) {
+            return;
+        }
         self.is_selecting = true;
         if event.modifiers.shift {
             self.select_to(self.index_for_mouse_position(event.position), cx);
@@ -1148,6 +1221,7 @@ impl Element for TextElement {
 
 impl Render for TextInput {
     fn render(&mut self, _window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+        use crate::context_menu::ContextMenuExt as _;
         div()
             .flex()
             .flex_1()
@@ -1187,6 +1261,13 @@ impl Render for TextInput {
             .on_action(cx.listener(Self::undo))
             .on_action(cx.listener(Self::redo))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
+            .on_context_menu(cx.listener(Self::context_mouse_down))
+            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
+                if event.keystroke.key == "f10" && event.keystroke.modifiers.shift {
+                    cx.stop_propagation();
+                    this.context_menu(this.layout.bounds.origin, window, cx);
+                }
+            }))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
             .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_mouse_up))
             .on_mouse_move(cx.listener(Self::on_mouse_move))
@@ -1215,8 +1296,77 @@ mod tests {
     };
     use crate::theme::Theme;
 
+    fn draw_input(cx: &mut gpui::VisualTestContext) {
+        let fixture = cx.update(|window, _| window.root::<TextAreaFixture>().unwrap().unwrap());
+        cx.draw(
+            gpui::Point::default(),
+            gpui::size(px(500.0), px(300.0)),
+            |_, _| fixture.into_any_element(),
+        );
+    }
+
+    #[gpui::test]
+    fn context_cut_preserves_selection_and_undo_targets_the_input(cx: &mut TestAppContext) {
+        let (input, cx) = text_area("alpha beta", 0, cx);
+        input.update(cx, |input, cx| {
+            input.editor.extend(5);
+            cx.notify();
+        });
+        draw_input(cx);
+        let position =
+            cx.update(|_, cx| input.read(cx).layout.bounds.origin + gpui::point(px(5.0), px(8.0)));
+        cx.simulate_mouse_down(
+            position,
+            gpui::MouseButton::Right,
+            gpui::Modifiers::default(),
+        );
+        draw_input(cx);
+        assert_eq!(cx.update(|_, cx| input.read(cx).editor.selection()), 0..5);
+        assert!(!cx.update(|_, cx| input.read(cx).is_selecting));
+        // Undo and Redo are disabled initially, so Cut is the first entry.
+        cx.simulate_keystrokes("enter");
+        assert_eq!(
+            cx.read_from_clipboard().unwrap().text().as_deref(),
+            Some("alpha")
+        );
+        assert_eq!(cx.update(|_, cx| input.read(cx).text().to_owned()), " beta");
+        draw_input(cx);
+        cx.simulate_keystrokes("cmd-z");
+        assert_eq!(
+            cx.update(|_, cx| input.read(cx).text().to_owned()),
+            "alpha beta"
+        );
+        cx.update(|window, cx| assert!(input.read(cx).focus_handle.is_focused(window)));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[gpui::test]
+    fn input_control_click_outside_selection_moves_caret_without_dragging(cx: &mut TestAppContext) {
+        let (input, cx) = text_area("alpha beta", 0, cx);
+        input.update(cx, |input, cx| {
+            input.editor.extend(5);
+            cx.notify();
+        });
+        draw_input(cx);
+        let position = cx
+            .update(|_, cx| input.read(cx).layout.bounds.origin + gpui::point(px(200.0), px(8.0)));
+        cx.simulate_click(
+            position,
+            gpui::Modifiers {
+                control: true,
+                ..gpui::Modifiers::default()
+            },
+        );
+        draw_input(cx);
+        assert_eq!(cx.update(|_, cx| input.read(cx).editor.selection()), 10..10);
+        assert!(!cx.update(|_, cx| input.read(cx).is_selecting));
+        cx.simulate_keystrokes("escape");
+        cx.update(|window, cx| assert!(input.read(cx).focus_handle.is_focused(window)));
+    }
+
     struct TextAreaFixture {
         input: Entity<TextInput>,
+        menus: Entity<crate::context_menu::MenuHost>,
     }
 
     impl Render for TextAreaFixture {
@@ -1225,7 +1375,10 @@ mod tests {
             _: &mut gpui::Window,
             _: &mut gpui::Context<Self>,
         ) -> impl IntoElement {
-            div().w(px(500.0)).child(self.input.clone())
+            div()
+                .w(px(500.0))
+                .child(self.input.clone())
+                .child(self.menus.clone())
         }
     }
 
@@ -1234,15 +1387,18 @@ mod tests {
         cursor: usize,
         cx: &'a mut TestAppContext,
     ) -> (Entity<TextInput>, &'a mut gpui::VisualTestContext) {
+        cx.update(|cx| cx.bind_keys(super::keymap()));
         let (fixture, cx) = cx.add_window_view(|window, cx| {
+            let menus = cx.new(|cx| crate::context_menu::MenuHost::new(window, cx));
             let input = cx.new(|cx| {
                 let mut input = TextInput::new("", &Theme::dark(), cx).multiline(4);
                 input.editor.set_text(text);
                 input.editor.collapse(cursor);
                 input
             });
+            input.update(cx, |input, _| input.set_menu_host(menus.downgrade()));
             window.focus(&input.read(cx).focus_handle);
-            TextAreaFixture { input }
+            TextAreaFixture { input, menus }
         });
         let input = cx.update(|_, cx| fixture.read(cx).input.clone());
         (input, cx)

@@ -770,6 +770,7 @@ mod tests {
         let mut state = loaded(4);
         state.rows[1].author_name = String::from("Grace Hopper");
         state.rows[2].labels.push(sourcefour_model::RefLabel {
+            full_name: None,
             name: String::from("release/v1"),
             kind: sourcefour_model::RefKind::Tag,
             is_head: false,

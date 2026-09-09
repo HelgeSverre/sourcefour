@@ -99,6 +99,12 @@ impl EditorState {
     pub(super) fn selection_is_empty(&self) -> bool {
         self.anchor == self.head
     }
+    pub(super) fn can_undo(&self) -> bool {
+        !self.undo.is_empty() || self.composition_before.is_some()
+    }
+    pub(super) fn can_redo(&self) -> bool {
+        !self.redo.is_empty()
+    }
     pub(super) fn preferred_x(&self) -> Option<f32> {
         self.preferred_x
     }

@@ -1,6 +1,7 @@
 //! The left sidebar: reorderable, collapsible sections of worktrees,
 //! branches, remotes, and Actions runs.
 
+use crate::context_menu::{ContextMenuExt as _, PrimaryClickExt as _};
 use gpui::{
     Div, FontWeight, IntoElement, Render, StatefulInteractiveElement, Window, div, prelude::*, px,
     svg,
@@ -316,7 +317,7 @@ impl SourcefourWindow {
                     .child(title),
             )
             .child(count)
-            .on_click(cx.listener(move |this, _, _, cx| {
+            .on_primary_click(cx.listener(move |this, _, _, cx| {
                 this.sections.toggle(section);
                 this.persist_ui_state(cx);
                 cx.notify();
@@ -388,12 +389,14 @@ impl SourcefourWindow {
                     .child(self.section("REMOTES", snapshot.remotes.len().to_string(), section, cx))
                     .when(self.sections.expanded(section), |this| {
                         this.children(snapshot.remotes.iter().flat_map(|remote| {
-                            std::iter::once(self.remote_row(remote)).chain(
+                            let mut rows = vec![self.remote_row(remote, cx)];
+                            rows.extend(
                                 remote
                                     .branches
                                     .iter()
-                                    .map(|branch| self.remote_branch_row(&branch.short_name)),
-                            )
+                                    .map(|branch| self.remote_branch_row(branch, cx)),
+                            );
+                            rows
                         }))
                     }),
                 // Only a GitHub repository has Actions to show.
@@ -424,7 +427,19 @@ impl SourcefourWindow {
             (WorktreeAccessibility::Accessible, true) => self.theme.green,
             (WorktreeAccessibility::Accessible, false) => self.theme.text_faint,
         };
+        let host = self.menus.downgrade();
+        let path = tree.path.clone();
+        let accessible = matches!(tree.accessibility, WorktreeAccessibility::Accessible);
         div()
+            .on_context_menu(move |event, window, cx| {
+                crate::context_menu::show(
+                    &host,
+                    event.position,
+                    super::menus::path_entries(&path, accessible),
+                    window,
+                    cx,
+                );
+            })
             .h(px(47.0))
             .flex_none()
             .flex()
@@ -502,7 +517,21 @@ impl SourcefourWindow {
         let scoped = is_scoped_to(self.history.scope.as_ref(), &branch.full_name);
         let full_name = branch.full_name.clone();
         let tip = branch.tip;
+        let menu_name = branch.short_name.clone();
+        let menu_full_name = branch.full_name.clone();
         div()
+            .on_context_menu(
+                cx.listener(move |this, event: &gpui::MouseDownEvent, window, cx| {
+                    let entries = this.ref_entries(
+                        &menu_name,
+                        Some(&menu_full_name),
+                        sourcefour_model::RefKind::LocalBranch,
+                        tip,
+                        cx,
+                    );
+                    this.show_menu(event.position, entries, window, cx);
+                }),
+            )
             .id(gpui::SharedString::from(branch.full_name.clone()))
             .h(px(26.0))
             .flex_none()
@@ -513,7 +542,7 @@ impl SourcefourWindow {
             .gap(px(7.0))
             .cursor_pointer()
             .hover(|style| style.bg(self.theme.bg_hover))
-            .on_click(cx.listener(move |this, _, _, cx| {
+            .on_primary_click(cx.listener(move |this, _, _, cx| {
                 let scope = toggled_scope(this.history.scope.as_ref(), &full_name, tip);
                 this.start_history(scope, cx);
                 cx.notify();
@@ -604,7 +633,7 @@ impl SourcefourWindow {
             .child(disclosure(&self.theme, expanded))
             .child(folder_marker(&self.theme))
             .child(label.to_owned())
-            .on_click(cx.listener(move |this, _, _, cx| {
+            .on_primary_click(cx.listener(move |this, _, _, cx| {
                 if !this.collapsed_branch_folders.remove(&path) {
                     this.collapsed_branch_folders.insert(path.clone());
                 }
@@ -613,8 +642,19 @@ impl SourcefourWindow {
             }))
     }
 
-    pub(super) fn remote_row(&self, remote: &sourcefour_model::RemoteSnapshot) -> Div {
+    pub(super) fn remote_row(
+        &self,
+        remote: &sourcefour_model::RemoteSnapshot,
+        cx: &mut gpui::Context<Self>,
+    ) -> Div {
+        let name = remote.name.clone();
         div()
+            .on_context_menu(
+                cx.listener(move |this, event: &gpui::MouseDownEvent, window, cx| {
+                    let entries = this.remote_entries(&name, cx);
+                    this.show_menu(event.position, entries, window, cx);
+                }),
+            )
             .h(px(29.0))
             .flex_none()
             .flex()
@@ -635,8 +675,25 @@ impl SourcefourWindow {
             }))
     }
 
-    pub(super) fn remote_branch_row(&self, short_name: &str) -> Div {
+    pub(super) fn remote_branch_row(
+        &self,
+        branch: &sourcefour_model::RemoteBranchSnapshot,
+        cx: &mut gpui::Context<Self>,
+    ) -> Div {
+        let target = branch.clone();
         div()
+            .on_context_menu(
+                cx.listener(move |this, event: &gpui::MouseDownEvent, window, cx| {
+                    let entries = this.ref_entries(
+                        &target.short_name,
+                        Some(&target.full_name),
+                        sourcefour_model::RefKind::RemoteBranch,
+                        target.tip,
+                        cx,
+                    );
+                    this.show_menu(event.position, entries, window, cx);
+                }),
+            )
             .h(px(24.0))
             .flex_none()
             .flex()
@@ -644,7 +701,7 @@ impl SourcefourWindow {
             .pl(px(34.0))
             .text_size(px(12.0))
             .text_color(self.theme.purple)
-            .child(short_name.to_owned())
+            .child(branch.short_name.clone())
     }
 
     pub(super) fn loading_sidebar(&self, cx: &mut gpui::Context<Self>) -> Div {

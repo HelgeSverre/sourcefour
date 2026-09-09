@@ -1,5 +1,6 @@
 //! The §6.13 create-branch dialog: state, overlay, and submission.
 
+use crate::context_menu::PrimaryClickExt as _;
 use gpui::{Div, FontWeight, IntoElement, Window, div, prelude::*, px};
 use sourcefour_model::{HeadSnapshot, OperationOutcome};
 
@@ -7,6 +8,10 @@ use super::SourcefourWindow;
 
 /// The §6.13 create-branch dialog's state; the name lives in its input.
 pub(super) struct BranchDialog {
+    start: Option<sourcefour_model::Oid>,
+    location: Option<sourcefour_model::RepoLocation>,
+    worktree: sourcefour_model::WorktreeId,
+    session: sourcefour_model::RepoSessionId,
     checkout: bool,
     running: bool,
     error: Option<String>,
@@ -15,7 +20,21 @@ pub(super) struct BranchDialog {
 impl SourcefourWindow {
     /// Opens the §6.13 create-branch dialog seeded from the selection.
     pub(super) fn open_branch_dialog(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) {
+        self.open_branch_at(self.branch_start(), window, cx);
+    }
+
+    pub(super) fn open_branch_at(
+        &mut self,
+        start: Option<sourcefour_model::Oid>,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.dismiss_menu(cx);
         self.branch_dialog = Some(BranchDialog {
+            start,
+            location: self.location.clone(),
+            worktree: self.active_worktree_id(),
+            session: self.session,
             checkout: false,
             running: false,
             error: None,
@@ -47,20 +66,23 @@ impl SourcefourWindow {
         cx: &mut gpui::Context<Self>,
     ) {
         let name = self.branch_input.read(cx).text().to_string();
-        let (Some(start), Some(location)) = (self.branch_start(), self.location.clone()) else {
-            return;
-        };
         let Some(dialog) = &mut self.branch_dialog else {
             return;
         };
-        if dialog.running || !sourcefour_git::is_valid_branch_name(&name) {
+        let (Some(start), Some(location)) = (dialog.start, dialog.location.clone()) else {
+            return;
+        };
+        if dialog.running
+            || dialog.session != self.session
+            || !sourcefour_git::is_valid_branch_name(&name)
+        {
             return;
         }
         let checkout = dialog.checkout;
         dialog.running = true;
         dialog.error = None;
         let request = sourcefour_model::CreateBranchRequest {
-            worktree: self.active_worktree_id(),
+            worktree: dialog.worktree.clone(),
             name,
             start,
             checkout,
@@ -116,14 +138,14 @@ impl SourcefourWindow {
         let name = self.branch_input.read(cx).text().to_string();
         let creatable = !dialog.running && sourcefour_git::is_valid_branch_name(&name);
         let invalid = !name.is_empty() && !sourcefour_git::is_valid_branch_name(&name);
-        let start = self
-            .branch_start()
+        let start = dialog
+            .start
             .map_or_else(|| String::from("HEAD"), |oid| oid.abbreviated(9));
         Some(
             super::modal_backdrop("branch-overlay", &self.theme)
                 .items_center()
                 .justify_center()
-                .on_click(cx.listener(|this, _, window, cx| {
+                .on_primary_click(cx.listener(|this, _, window, cx| {
                     this.close_branch_dialog(window, cx);
                 }))
                 .child(
@@ -195,7 +217,7 @@ impl SourcefourWindow {
             .cursor_pointer()
             .text_size(px(11.5))
             .text_color(self.theme.text_secondary)
-            .on_click(cx.listener(|this, _, _, cx| {
+            .on_primary_click(cx.listener(|this, _, _, cx| {
                 if let Some(dialog) = &mut this.branch_dialog {
                     dialog.checkout = !dialog.checkout;
                 }
@@ -243,7 +265,7 @@ impl SourcefourWindow {
                     .text_size(px(11.5))
                     .text_color(self.theme.text_secondary)
                     .hover(|style| style.bg(self.theme.bg_hover))
-                    .on_click(cx.listener(|this, _, window, cx| {
+                    .on_primary_click(cx.listener(|this, _, window, cx| {
                         this.close_branch_dialog(window, cx);
                     }))
                     .child("Cancel"),
@@ -259,7 +281,7 @@ impl SourcefourWindow {
                         this.cursor_pointer()
                             .bg(self.theme.accent)
                             .text_color(self.theme.text_on_accent)
-                            .on_click(cx.listener(|this, _, window, cx| {
+                            .on_primary_click(cx.listener(|this, _, window, cx| {
                                 this.submit_branch_dialog(window, cx);
                             }))
                     })
@@ -269,5 +291,36 @@ impl SourcefourWindow {
                     })
                     .child(if running { "Creating…" } else { "Create" }),
             )
+    }
+}
+
+#[cfg(test)]
+mod menu_tests {
+    use crate::history::Selection;
+    use gpui::{IntoElement as _, Point, TestAppContext, px, size};
+
+    #[gpui::test]
+    fn branch_menu_keeps_its_start_and_gives_the_dialog_focus(cx: &mut TestAppContext) {
+        let (view, cx) = super::super::test_window(cx, crate::demo::Scene::Overview);
+        let target = cx.update(|window, cx| {
+            view.update(cx, |view, cx| {
+                view.location = view.snapshot().map(|snapshot| snapshot.location.clone());
+                let target = view.history.rows[1].oid;
+                view.show_commit_menu(target, gpui::point(px(100.0), px(100.0)), window, cx);
+                // The command must keep the menu target, not consult this selection.
+                view.history.selected = Some(Selection::Commit(view.history.rows[2].oid));
+                target
+            })
+        });
+        cx.draw(Point::default(), size(px(1200.0), px(800.0)), |_, _| {
+            view.clone().into_any_element()
+        });
+        cx.simulate_keystrokes("end enter");
+        cx.update(|window, cx| {
+            let view = view.read(cx);
+            assert_eq!(view.branch_dialog.as_ref().unwrap().start, Some(target));
+            assert!(!view.menus.read(cx).is_open());
+            assert!(view.branch_input.read(cx).focus_handle.is_focused(window));
+        });
     }
 }

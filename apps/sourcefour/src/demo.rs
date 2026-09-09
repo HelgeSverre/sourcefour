@@ -220,6 +220,7 @@ pub(crate) fn history() -> (Vec<CommitRow>, Vec<GraphRow>) {
                 .collect();
             let labels = if index == 0 {
                 SmallVec::from_iter([RefLabel {
+                    full_name: None,
                     name: String::from("main"),
                     kind: RefKind::LocalBranch,
                     is_head: true,
@@ -249,6 +250,7 @@ pub(crate) fn history() -> (Vec<CommitRow>, Vec<GraphRow>) {
     // Ref chips matching the snapshot's branch tips, so §12.4 captures cover
     // every label kind: local, remote, and tag, plus the >3 overflow on row 2.
     let chip = |name: &str, kind: RefKind| RefLabel {
+        full_name: None,
         name: name.to_owned(),
         kind,
         is_head: false,
