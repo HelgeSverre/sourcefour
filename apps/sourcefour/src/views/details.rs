@@ -1,12 +1,54 @@
 //! The details pane (§6.10): commit message on the left, changed files on
 //! the right, with the merge-parent comparison choices.
 
-use gpui::{Div, FontWeight, IntoElement, div, prelude::*, px};
-use sourcefour_model::{ChangedFile, DiffParent};
+use gpui::{Div, FontWeight, IntoElement, div, prelude::*, px, uniform_list};
+use sourcefour_model::{ChangedFile, DiffParent, RepoPath, WorkingTreeStatus, WorkingTreeSummary};
 
 use crate::history::display_date;
 
 use super::{SourcefourWindow, change_color, change_letter, counted};
+
+/// Headers and files share a height so the entire list can be virtualized.
+const FILE_ROW_HEIGHT: f32 = 22.0;
+
+enum WorkingTreeRow<'a> {
+    Header {
+        staged: bool,
+        files: &'a [ChangedFile],
+    },
+    File {
+        staged: bool,
+        file: &'a ChangedFile,
+    },
+}
+
+/// Resolve a display index without assembling or copying the full file list.
+fn working_tree_row(status: &WorkingTreeStatus, index: usize) -> Option<WorkingTreeRow<'_>> {
+    if index == 0 {
+        Some(WorkingTreeRow::Header {
+            staged: true,
+            files: &status.staged,
+        })
+    } else if index <= status.staged.len() {
+        status
+            .staged
+            .get(index - 1)
+            .map(|file| WorkingTreeRow::File { staged: true, file })
+    } else if index == status.staged.len() + 1 {
+        Some(WorkingTreeRow::Header {
+            staged: false,
+            files: &status.unstaged,
+        })
+    } else {
+        status
+            .unstaged
+            .get(index - status.staged.len() - 2)
+            .map(|file| WorkingTreeRow::File {
+                staged: false,
+                file,
+            })
+    }
+}
 
 /// Assembled text for the details header (§6.10).
 pub(super) struct DetailLines {
@@ -313,27 +355,44 @@ impl SourcefourWindow {
             )
             .child(
                 div()
-                    .id("details-files-scroll")
-                    .flex_grow()
+                    .flex_1()
                     .min_h(px(0.0))
-                    .overflow_y_scroll()
+                    .overflow_hidden()
                     .pb(px(6.0))
-                    .children(
-                        self.files
-                            .clone()
-                            .iter()
-                            .flat_map(|files| files.files.clone())
-                            .enumerate()
-                            .map(|(index, file)| self.file_row(index, &file, None, cx)),
+                    .child(
+                        uniform_list(
+                            cx.entity(),
+                            "details-files-scroll",
+                            self.files.as_ref().map_or(0, |files| files.files.len()),
+                            |this, visible, _, cx| {
+                                let Some(files) = &this.files else {
+                                    return Vec::new();
+                                };
+                                visible
+                                    .filter_map(|index| {
+                                        files
+                                            .files
+                                            .get(index)
+                                            .map(|file| this.file_row(index, file, None, cx))
+                                    })
+                                    .collect()
+                            },
+                        )
+                        .track_scroll(self.details_files_scroll.clone())
+                        .size_full(),
                     ),
             )
     }
 
-    /// The details pane while the working tree is selected: what is staged,
-    /// what is not. Read-only until stage/commit land.
+    /// The details pane while the working tree is selected.
     fn working_tree_details(&self, cx: &mut gpui::Context<Self>) -> gpui::AnyElement {
-        let status = self.working_tree_status.clone().unwrap_or_default();
-        let summary = status.summary();
+        let summary = self.working_tree_status.as_ref().map_or(
+            WorkingTreeSummary {
+                staged: 0,
+                unstaged: 0,
+            },
+            WorkingTreeStatus::summary,
+        );
         div()
             .h(px(self.panels.details))
             .flex_none()
@@ -393,30 +452,44 @@ impl SourcefourWindow {
                     .pt(px(10.0))
                     .child(
                         div()
-                            .id("working-tree-files-scroll")
-                            .flex_grow()
+                            .flex_1()
                             .min_h(px(0.0))
-                            .overflow_y_scroll()
+                            .overflow_hidden()
                             .pb(px(6.0))
-                            .children(self.working_tree_section(
-                                "STAGED",
-                                true,
-                                summary.staged,
-                                &status.staged,
-                                0,
-                                cx,
-                            ))
-                            .children(self.working_tree_section(
-                                "UNSTAGED",
-                                false,
-                                summary.unstaged,
-                                &status.unstaged,
-                                status.staged.len(),
-                                cx,
-                            )),
+                            .child(self.working_tree_files_list(cx).size_full()),
                     ),
             )
             .into_any_element()
+    }
+
+    /// Only the visible headers and files allocate UI elements in a frame.
+    fn working_tree_files_list(&self, cx: &mut gpui::Context<Self>) -> gpui::UniformList {
+        let count = self
+            .working_tree_status
+            .as_ref()
+            .map_or(2, |status| status.staged.len() + status.unstaged.len() + 2);
+        uniform_list(
+            cx.entity(),
+            "working-tree-files-scroll",
+            count,
+            |this, visible, _, cx| {
+                let empty = WorkingTreeStatus::default();
+                let status = this.working_tree_status.as_ref().unwrap_or(&empty);
+                visible
+                    .filter_map(|index| {
+                        working_tree_row(status, index).map(|row| match row {
+                            WorkingTreeRow::Header { staged, files } => this
+                                .working_tree_header(staged, files, cx)
+                                .into_any_element(),
+                            WorkingTreeRow::File { staged, file } => this
+                                .file_row(index, file, Some(staged), cx)
+                                .into_any_element(),
+                        })
+                    })
+                    .collect()
+            },
+        )
+        .track_scroll(self.working_tree_files_scroll.clone())
     }
 
     /// The commit affordance: enabled once something is staged and the
@@ -467,33 +540,31 @@ impl SourcefourWindow {
             }))
     }
 
-    /// One section of the working-tree file list: header plus rows.
-    fn working_tree_section(
+    /// Collect bulk-action paths only when clicked, never during rendering.
+    fn working_tree_header(
         &self,
-        label: &'static str,
         staged: bool,
-        count: usize,
         files: &[ChangedFile],
-        id_offset: usize,
         cx: &mut gpui::Context<Self>,
-    ) -> Vec<gpui::AnyElement> {
-        let all: Vec<sourcefour_model::RepoPath> =
-            files.iter().filter_map(stageable_path).collect();
-        let mut rows = vec![
-            div()
-                .flex()
-                .items_center()
-                .pb(px(6.0))
-                .pt(px(4.0))
-                .child(
-                    div()
-                        .flex_1()
-                        .text_size(px(10.0))
-                        .font_weight(FontWeight::BOLD)
-                        .text_color(self.theme.text_faint)
-                        .child(format!("{label} · {}", counted(count, "file"))),
-                )
-                .when(!all.is_empty(), |this| {
+    ) -> Div {
+        let label = if staged { "STAGED" } else { "UNSTAGED" };
+        let count = files.len();
+        div()
+            .h(px(FILE_ROW_HEIGHT))
+            .flex_none()
+            .flex()
+            .items_center()
+            .child(
+                div()
+                    .flex_1()
+                    .text_size(px(10.0))
+                    .font_weight(FontWeight::BOLD)
+                    .text_color(self.theme.text_faint)
+                    .child(format!("{label} · {}", counted(count, "file"))),
+            )
+            .when(
+                files.iter().any(|file| stageable_path(file).is_some()),
+                |this| {
                     this.child(
                         div()
                             .id(("stage-section", usize::from(staged)))
@@ -509,18 +580,22 @@ impl SourcefourWindow {
                                     .text_color(self.theme.text_primary)
                             })
                             .on_click(cx.listener(move |this, _, _, cx| {
-                                this.edit_index(all.clone(), staged, cx);
+                                let Some(status) = &this.working_tree_status else {
+                                    return;
+                                };
+                                let files = if staged {
+                                    &status.staged
+                                } else {
+                                    &status.unstaged
+                                };
+                                let paths =
+                                    files.iter().filter_map(stageable_path).cloned().collect();
+                                this.edit_index(paths, staged, cx);
                             }))
                             .child(if staged { "unstage all" } else { "stage all" }),
                     )
-                })
-                .into_any_element(),
-        ];
-        rows.extend(files.iter().enumerate().map(|(index, file)| {
-            self.file_row(id_offset + index, file, Some(staged), cx)
-                .into_any_element()
-        }));
-        rows
+                },
+            )
     }
 
     /// Switches the comparison parent and reloads files for the selection.
@@ -551,7 +626,7 @@ impl SourcefourWindow {
         let clicked = file.clone();
         div()
             .id(("changed-file", index))
-            .h(px(22.0))
+            .h(px(FILE_ROW_HEIGHT))
             .flex_none()
             .flex()
             .items_center()
@@ -594,7 +669,7 @@ impl SourcefourWindow {
             .when_some(staged, |this, staged| {
                 // Conflicted rows only warn: staging one would mark it
                 // resolved, which is the merge milestone's call to offer.
-                let path = stageable_path(file);
+                let path = stageable_path(file).cloned();
                 this.children(path.map(|path| {
                     div()
                         .id(("stage-toggle", index))
@@ -620,9 +695,182 @@ impl SourcefourWindow {
 }
 
 /// The path a stage or unstage should name; conflicted rows get none.
-fn stageable_path(file: &ChangedFile) -> Option<sourcefour_model::RepoPath> {
+fn stageable_path(file: &ChangedFile) -> Option<&RepoPath> {
     if file.status == sourcefour_model::ChangeKind::Unknown {
         return None;
     }
-    file.new_path.clone().or_else(|| file.old_path.clone())
+    file.new_path.as_ref().or(file.old_path.as_ref())
+}
+
+#[cfg(test)]
+mod tests {
+    use gpui::{
+        AppContext, Entity, Render, ScrollStrategy, TestAppContext, VisualTestContext, prelude::*,
+        px,
+    };
+    use sourcefour_model::{ChangeKind, ChangedFile, RepoPath, WorkingTreeStatus};
+
+    use super::{FILE_ROW_HEIGHT, SourcefourWindow, WorkingTreeRow, working_tree_row};
+    use crate::{app::WindowLaunch, demo::Scene, history::Selection, ui_state::UiState};
+
+    fn files(count: usize) -> Vec<ChangedFile> {
+        (0..count)
+            .map(|index| ChangedFile {
+                old_path: None,
+                new_path: Some(RepoPath(format!("icons/file-{index:06}.svg").into_bytes())),
+                status: ChangeKind::Added,
+                additions: Some(1),
+                deletions: Some(0),
+                is_binary: false,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn virtual_rows_cover_both_sections_including_empty_ones() {
+        for staged in [0, 1, 5] {
+            for unstaged in [0, 1, 5] {
+                let status = WorkingTreeStatus {
+                    staged: files(staged),
+                    unstaged: files(unstaged),
+                };
+                assert!(
+                    matches!(working_tree_row(&status, 0), Some(WorkingTreeRow::Header { staged: true, files }) if files.len() == staged)
+                );
+                assert!(
+                    matches!(working_tree_row(&status, staged + 1), Some(WorkingTreeRow::Header { staged: false, files }) if files.len() == unstaged)
+                );
+                for (index, expected) in status.staged.iter().enumerate() {
+                    assert!(
+                        matches!(working_tree_row(&status, index + 1), Some(WorkingTreeRow::File { staged: true, file }) if std::ptr::eq(file, expected))
+                    );
+                }
+                for (index, expected) in status.unstaged.iter().enumerate() {
+                    assert!(
+                        matches!(working_tree_row(&status, staged + index + 2), Some(WorkingTreeRow::File { staged: false, file }) if std::ptr::eq(file, expected))
+                    );
+                }
+                assert!(working_tree_row(&status, staged + unstaged + 2).is_none());
+            }
+        }
+    }
+
+    /// Exercise the shipping details pane in a real GPUI layout/paint pass.
+    /// Rendering all these rows eagerly exhausted GPUI's element arena.
+    struct DetailsFixture(Entity<SourcefourWindow>);
+
+    impl Render for DetailsFixture {
+        fn render(
+            &mut self,
+            _: &mut gpui::Window,
+            cx: &mut gpui::Context<Self>,
+        ) -> impl IntoElement {
+            gpui::div()
+                .size_full()
+                .flex()
+                .flex_col()
+                .child(self.0.update(cx, |view, cx| view.details(cx)))
+        }
+    }
+
+    fn fixture(
+        cx: &mut TestAppContext,
+        scene: Scene,
+    ) -> (Entity<DetailsFixture>, &mut VisualTestContext) {
+        cx.add_window_view(|window, cx| {
+            DetailsFixture(cx.new(|cx| {
+                SourcefourWindow::new(
+                    WindowLaunch {
+                        demo: true,
+                        name: String::from("large-repository"),
+                        path: String::new(),
+                        location: None,
+                        scene,
+                    },
+                    &UiState::default(),
+                    window,
+                    cx,
+                )
+            }))
+        })
+    }
+
+    fn draw(fixture: &Entity<DetailsFixture>, cx: &mut VisualTestContext) {
+        cx.draw(
+            gpui::Point::default(),
+            gpui::size(px(1200.0), px(800.0)),
+            |_, _| fixture.clone().into_any_element(),
+        );
+    }
+
+    #[gpui::test]
+    fn a_hundred_thousand_worktree_files_render_and_scroll_without_exhausting_the_arena(
+        cx: &mut TestAppContext,
+    ) {
+        let (fixture, cx) = fixture(cx, Scene::Commit);
+        let view = cx.update(|_, cx| fixture.read(cx).0.clone());
+        view.update(cx, |view, _| {
+            view.working_tree_status = Some(WorkingTreeStatus {
+                staged: files(50_000),
+                unstaged: files(50_000),
+            });
+        });
+        draw(&fixture, cx);
+        let scroll = cx.update(|_, cx| view.read(cx).working_tree_files_scroll.clone());
+        assert_eq!(
+            scroll
+                .0
+                .borrow()
+                .last_item_size
+                .expect("list was laid out")
+                .contents
+                .height,
+            px(FILE_ROW_HEIGHT) * 100_002
+        );
+        assert!(scroll.0.borrow().base_handle.bounds().size.height < px(800.0));
+        // Cross the staged/unstaged boundary, then reach the last file.
+        for index in [50_000, 50_001, 100_001] {
+            scroll.scroll_to_item(index, ScrollStrategy::Top);
+            draw(&fixture, cx);
+            assert!(scroll.0.borrow().base_handle.offset().y < px(-1000.0));
+        }
+        // A refresh can empty the list while scrolled to the very bottom.
+        view.update(cx, |view, _| {
+            view.working_tree_status = Some(WorkingTreeStatus::default());
+        });
+        draw(&fixture, cx);
+        assert_eq!(scroll.0.borrow().base_handle.offset().y, px(0.0));
+    }
+
+    #[gpui::test]
+    fn a_hundred_thousand_commit_files_render_and_scroll_without_exhausting_the_arena(
+        cx: &mut TestAppContext,
+    ) {
+        let (fixture, cx) = fixture(cx, Scene::Overview);
+        let view = cx.update(|_, cx| fixture.read(cx).0.clone());
+        view.update(cx, |view, _| {
+            assert!(matches!(view.history.selected, Some(Selection::Commit(_))));
+            view.files.as_mut().expect("demo commit has files").files = files(100_000);
+        });
+        draw(&fixture, cx);
+        let scroll = cx.update(|_, cx| view.read(cx).details_files_scroll.clone());
+        assert_eq!(
+            scroll
+                .0
+                .borrow()
+                .last_item_size
+                .expect("list was laid out")
+                .contents
+                .height,
+            px(FILE_ROW_HEIGHT) * 100_000
+        );
+        scroll.scroll_to_item(99_999, ScrollStrategy::Top);
+        draw(&fixture, cx);
+        assert!(scroll.0.borrow().base_handle.offset().y < px(-1000.0));
+        view.update(cx, |view, _| {
+            view.files = None;
+        });
+        draw(&fixture, cx);
+        assert_eq!(scroll.0.borrow().base_handle.offset().y, px(0.0));
+    }
 }

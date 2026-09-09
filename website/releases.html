@@ -73,6 +73,8 @@
         <ul>
           <li>Two-column details pane: full commit message on the left, changed files on
           the right, with per-file line counts.</li>
+          <li>Working-tree and commit file lists render only visible rows, fixing a
+          crash when opening repositories with tens of thousands of changed files.</li>
           <li>Merge commits compare against either parent, switched from the details
           header.</li>
           <li>Click a changed file to open its diff in a full-window overlay, unified or
@@ -91,6 +93,9 @@
           helpers and hooks work exactly as they do in the terminal — with live progress
           and a cancel button.</li>
           <li>Create a branch from any commit, optionally checking it out.</li>
+          <li>Stage and unstage large selections without hitting command-line size
+          limits. Filenames with spaces, wildcards, or leading dashes are handled
+          literally, and files outside the selection stay untouched.</li>
         </ul>
 
         <h3>Under the hood</h3>

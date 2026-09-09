@@ -95,6 +95,9 @@ pub(crate) struct SourcefourWindow {
     detail: Option<sourcefour_model::CommitDetail>,
     /// Changed files for the selected commit, when loaded (§6.10).
     files: Option<CommitFiles>,
+    /// Independent scroll positions for the virtualized changed-file lists.
+    details_files_scroll: UniformListScrollHandle,
+    working_tree_files_scroll: UniformListScrollHandle,
     /// The commit the current detail/files load belongs to, requested or done.
     files_for: Option<sourcefour_model::Oid>,
     /// The working tree's uncommitted state, when read (§6.14 limits how
@@ -395,6 +398,8 @@ impl SourcefourWindow {
             startup_reported: false,
             detail: None,
             files: None,
+            details_files_scroll: UniformListScrollHandle::new(),
+            working_tree_files_scroll: UniformListScrollHandle::new(),
             files_for: None,
             working_tree_status: None,
             initial_selection_pending: !launch.demo,
