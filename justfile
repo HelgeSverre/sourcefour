@@ -81,6 +81,11 @@ uninstall:
     rm -rf /Applications/Sourcefour.app
     @echo "Removed /Applications/Sourcefour.app"
 
+# Reinstall the packaged app.
+[group('dist')]
+reinstall:
+    just uninstall && just install
+
 # Regenerate the app icon in every packaging format.
 [group('dist')]
 icon:
