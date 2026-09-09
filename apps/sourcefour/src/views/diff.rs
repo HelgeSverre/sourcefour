@@ -90,6 +90,8 @@ pub(super) struct DiffView {
     pub(super) show_preview: bool,
     /// The parsed document with its images, `None` until the load lands.
     pub(super) preview: Option<PreviewState>,
+    /// SVG rasterization is cached per loaded source comparison.
+    pub(super) svg_preview: Option<super::svg_preview::SvgPreview>,
     /// Optional syntax and intraline layers, computed after plain rows land.
     pub(super) highlight: Option<Arc<crate::diff_highlight::DiffHighlight>>,
     pub(super) highlight_message: Option<&'static str>,
@@ -145,6 +147,7 @@ impl DiffView {
         origin: DiffOrigin,
         mode: DiffMode,
     ) -> Self {
+        let show_preview = super::svg_preview::is_svg(origin.path());
         Self {
             title: origin.path().display_lossy(),
             status,
@@ -156,8 +159,9 @@ impl DiffView {
             origin,
             content: None,
             mode,
-            show_preview: false,
+            show_preview,
             preview: None,
+            svg_preview: None,
             highlight: None,
             highlight_message: None,
             unified: None,
@@ -208,6 +212,7 @@ impl DiffView {
         self.wrap_list = None;
         self.before_image = None;
         self.after_image = None;
+        self.svg_preview = None;
         self.ensure_rows();
         self.ensure_images();
         if std::env::var_os("SOURCEFOUR_FRAME_LOG").is_some() {
@@ -880,6 +885,7 @@ impl SourcefourWindow {
         if let Some((request, diff)) = cache_entry {
             self.cache_commit_diff(request, diff);
         }
+        self.load_svg_preview(cx);
         self.reset_diff_wrap_list(cx);
         if let Some((diff, path)) = enrichment {
             cx.spawn(async move |this, cx| {
@@ -1126,6 +1132,9 @@ impl SourcefourWindow {
     ) -> gpui::AnyElement {
         match &view.content {
             None => self.diff_notice("Computing diff…").into_any_element(),
+            Some(DiffContent::Text(_)) if super::svg_preview::showing(view) => {
+                self.svg_preview_body(view).into_any_element()
+            }
             // Preview renders both versions of the document, the old side
             // left and the new side right — the raw text stays under Source.
             Some(DiffContent::Text(_)) if preview::showing(view) => match &view.preview {

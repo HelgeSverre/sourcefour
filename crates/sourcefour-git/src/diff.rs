@@ -165,7 +165,9 @@ fn content_for(
             ),
         },
         (old, new) => {
-            if let Some(format) = image_format(&path.0) {
+            // SVGs keep their text diff; Source/Preview renders those same
+            // revisions as images on demand.
+            if let Some(format) = image_format(&path.0).filter(|format| format != "svg") {
                 DiffContent::Image {
                     before: old,
                     after: new,
@@ -254,7 +256,7 @@ pub(crate) fn image_format(path: &[u8]) -> Option<String> {
     let dot = path.iter().rposition(|&byte| byte == b'.')?;
     let extension = std::str::from_utf8(&path[dot + 1..]).ok()?.to_lowercase();
     match extension.as_str() {
-        "png" | "gif" | "webp" | "bmp" => Some(extension),
+        "png" | "gif" | "webp" | "bmp" | "svg" => Some(extension),
         "jpg" | "jpeg" => Some(String::from("jpeg")),
         "tif" | "tiff" => Some(String::from("tiff")),
         _ => None,

@@ -247,17 +247,19 @@ impl PreviewDoc {
 pub(super) enum PreviewImage {
     /// Bytes the renderer can draw.
     Loaded(Arc<gpui::Image>),
+    /// Rasterized SVG, drawn on a light canvas for transparent icons.
+    Svg(Arc<gpui::Image>),
     /// An http(s) reference, which the preview never fetches.
     Remote,
     /// Absent from every side, or in a format the renderer cannot decode.
     Missing,
 }
 
-/// Whether the open diff could be previewed: a Markdown path whose diff came
-/// back as text. Nothing else has a renderer yet.
+/// Whether the open text diff has a document or SVG renderer.
 pub(super) fn applies(view: &DiffView) -> bool {
     matches!(view.content, Some(DiffContent::Text(_)))
-        && DocumentKind::detect(&view.origin.path().0) == Some(DocumentKind::Markdown)
+        && (DocumentKind::detect(&view.origin.path().0) == Some(DocumentKind::Markdown)
+            || super::svg_preview::is_svg(view.origin.path()))
 }
 
 /// Whether the preview is what the body should draw right now.
@@ -368,8 +370,15 @@ fn load_side(location: &RepoLocation, source: Option<&DocSource>, path: &RepoPat
         for reference in sourcefour_doc::image_sources(&blocks) {
             images.entry(reference.to_owned()).or_insert_with(|| {
                 match sourcefour_git::resolve_doc_image(location, source, path, reference) {
-                    ImageResolution::Found { bytes, format } => render_image(Some(&bytes), &format)
-                        .map_or(PreviewImage::Missing, PreviewImage::Loaded),
+                    ImageResolution::Found { bytes, format } => {
+                        if format == "svg" {
+                            super::svg_preview::image_from_bytes(&bytes)
+                                .map_or(PreviewImage::Missing, PreviewImage::Svg)
+                        } else {
+                            render_image(Some(&bytes), &format)
+                                .map_or(PreviewImage::Missing, PreviewImage::Loaded)
+                        }
+                    }
                     ImageResolution::Remote => PreviewImage::Remote,
                     ImageResolution::Missing => PreviewImage::Missing,
                 }
@@ -632,6 +641,11 @@ impl SourcefourWindow {
             return;
         };
         view.show_preview = show;
+        if super::svg_preview::applies(view) {
+            self.load_svg_preview(cx);
+            cx.notify();
+            return;
+        }
         if !show || view.preview.is_some() {
             cx.notify();
             return;
@@ -1139,7 +1153,8 @@ impl SourcefourWindow {
     /// One image block: the picture when it resolved, a framed note when it
     /// did not, and its alt text beneath either.
     fn preview_image(&self, src: &str, alt: &str, preview: &PreviewDoc, id: BlockId) -> Div {
-        let body = match preview.images.get(src) {
+        let resolved = preview.images.get(src);
+        let body = match resolved {
             // Both bounds are absolute for the same reason the column is: a
             // relative maximum leaves the image with no width to fit into.
             //
@@ -1148,13 +1163,18 @@ impl SourcefourWindow {
             // block's address rather than the image's own id — one document can
             // reference the same source twice, and `images` hands both the same
             // `Arc`, so two elements would share one frame counter.
-            Some(PreviewImage::Loaded(image)) => gpui::img(image.clone())
-                .id(id.element("preview-image"))
-                .max_w(px(CONTENT_WIDTH - 2.0 * CONTENT_PADDING))
-                .max_h(px(IMAGE_HEIGHT))
-                .object_fit(gpui::ObjectFit::Contain)
-                .rounded(px(5.0))
-                .into_any_element(),
+            Some(PreviewImage::Loaded(image) | PreviewImage::Svg(image)) => {
+                gpui::img(image.clone())
+                    .id(id.element("preview-image"))
+                    .max_w(px(CONTENT_WIDTH - 2.0 * CONTENT_PADDING))
+                    .max_h(px(IMAGE_HEIGHT))
+                    .object_fit(gpui::ObjectFit::Contain)
+                    .rounded(px(5.0))
+                    .when(matches!(resolved, Some(PreviewImage::Svg(_))), |image| {
+                        image.bg(super::svg_preview::canvas())
+                    })
+                    .into_any_element()
+            }
             Some(PreviewImage::Remote) => self
                 .preview_placeholder(format!("remote image · {src}"))
                 .into_any_element(),
@@ -1493,6 +1513,47 @@ mod tests {
             blocks[0].kind,
             DocBlockKind::Heading { level: 1, .. }
         ));
+    }
+
+    #[test]
+    fn markdown_svg_images_render_from_the_selected_revision_and_bad_svg_is_a_placeholder()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let repository = sourcefour_test_support::TempRepo::init();
+        let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" width="20" height="10"><path d="M0 0H10V10H0Z"/></svg>"#;
+        std::fs::write(repository.path().join("icon.SVG"), svg)?;
+        std::fs::write(repository.path().join("broken.svg"), "<svg>")?;
+        std::fs::write(
+            repository.path().join("README.md"),
+            "![icon](icon.SVG)\n\n![broken](broken.svg)\n",
+        )?;
+        repository.git(&["add", "."]);
+        std::fs::write(repository.path().join("icon.SVG"), "incomplete edit")?;
+        let location = sourcefour_git::discover(repository.path())?;
+        let path = path("README.md");
+        let staged = super::load_side(
+            &location,
+            Some(&DocSource::Index { path: path.clone() }),
+            &path,
+        );
+        let Some(super::PreviewImage::Svg(image)) = staged.images.get("icon.SVG") else {
+            panic!("the valid staged SVG renders despite the worktree edit");
+        };
+        assert_eq!(image.format, gpui::ImageFormat::Png);
+        assert!(image.bytes.starts_with(b"\x89PNG\r\n\x1a\n"));
+        assert!(matches!(
+            staged.images.get("broken.svg"),
+            Some(super::PreviewImage::Missing)
+        ));
+        let unstaged = super::load_side(
+            &location,
+            Some(&DocSource::Worktree { path: path.clone() }),
+            &path,
+        );
+        assert!(matches!(
+            unstaged.images.get("icon.SVG"),
+            Some(super::PreviewImage::Missing)
+        ));
+        Ok(())
     }
 
     #[test]

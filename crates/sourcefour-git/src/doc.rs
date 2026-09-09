@@ -47,7 +47,7 @@ pub fn parent_commit_oid(location: &RepoLocation, oid: Oid, parent: DiffParent) 
 /// What resolving one image reference produced.
 #[derive(Clone, Debug)]
 pub enum ImageResolution {
-    /// Bytes plus the renderable format name (png/jpeg/gif/webp/bmp/tiff).
+    /// Bytes plus the renderable format name (png/jpeg/gif/webp/bmp/tiff/svg).
     Found {
         /// The image's bytes.
         bytes: Vec<u8>,
@@ -428,7 +428,7 @@ mod tests {
     }
 
     #[test]
-    fn a_format_the_viewer_cannot_render_is_missing() -> Result<(), Box<dyn std::error::Error>> {
+    fn local_svg_images_are_resolved_for_preview() -> Result<(), Box<dyn std::error::Error>> {
         let repository = TempRepo::init();
         write(&repository, "readme.md", b"![vector](logo.svg)\n")?;
         write(&repository, "logo.svg", b"<svg/>")?;
@@ -444,8 +444,8 @@ mod tests {
         );
 
         assert!(
-            matches!(resolution, ImageResolution::Missing),
-            "the viewer decodes no svg, so a present file is still missing"
+            matches!(resolution, ImageResolution::Found { bytes, format } if bytes == b"<svg/>" && format == "svg"),
+            "SVG bytes reach the preview renderer"
         );
         Ok(())
     }

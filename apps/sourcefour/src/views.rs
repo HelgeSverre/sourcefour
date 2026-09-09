@@ -47,6 +47,7 @@ mod github;
 mod history_pane;
 mod preview;
 mod sidebar;
+mod svg_preview;
 
 use branch_dialog::BranchDialog;
 use diff::{DiffMode, DiffView};
