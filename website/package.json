@@ -1,0 +1,11 @@
+{
+  "name": "sourcefour-website",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "generate:og": "node scripts/generate-og.mjs"
+  },
+  "devDependencies": {
+    "puppeteer": "^24.0.0"
+  }
+}
