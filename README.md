@@ -19,8 +19,7 @@ Built with [GPUI](https://www.gpui.rs) for GPU-rendered native UI and
 | Linux | [`.AppImage`](https://github.com/HelgeSverre/sourcefour/releases/latest/download/sourcefour-x86_64-unknown-linux-gnu.AppImage), x86-64 | `brew install helgesverre/tap/sourcefour` |
 
 Those links always resolve to the newest tagged release; the filenames never
-carry a version, which is what keeps them stable. No release is tagged yet, so
-until the first one they resolve to nothing — build from source for now:
+carry a version, which is what keeps them stable. To build from source instead:
 
 ```sh
 cargo install --git https://github.com/HelgeSverre/sourcefour sourcefour
