@@ -1,12 +1,11 @@
 //! Repository discovery: turn an invocation path into a repository identity.
 
-use std::{
-    ffi::OsStr,
-    path::{Path, PathBuf},
-};
+use std::{ffi::OsStr, path::Path};
 
 use gix::discover::upwards::Error as UpwardsError;
 use sourcefour_model::{RepoFailure, RepoFailureKind, RepoKind, RepoLocation};
+
+use crate::path::canonical;
 
 /// Discovers the repository containing `invocation_path`.
 ///
@@ -75,12 +74,6 @@ fn discovery_start(invocation_path: &Path) -> &Path {
     } else {
         invocation_path
     }
-}
-
-/// Resolves symlinks so repository identity compares reliably, and keeps the
-/// original path when resolution is not permitted rather than failing the open.
-fn canonical(path: &Path) -> PathBuf {
-    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
 fn classify(invocation_path: &Path, error: &gix::discover::Error) -> RepoFailure {

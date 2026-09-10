@@ -4,12 +4,14 @@
 //! its HEAD readable, so enumeration opens proxies with possibly-inaccessible
 //! worktree semantics rather than assuming the checkout is present.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use sourcefour_model::{
     HeadSnapshot, Oid, RepoFailure, RepoFailureKind, RepoLocation, WorktreeAccessibility,
     WorktreeId, WorktreeSnapshot,
 };
+
+use crate::path::canonical;
 
 /// Enumerates the worktrees sharing `location`'s common directory.
 ///
@@ -159,10 +161,6 @@ fn convert_oid(id: &gix::hash::oid) -> Option<Oid> {
         32 => Some(Oid::sha256(id.as_bytes().try_into().ok()?)),
         _ => None,
     }
-}
-
-fn canonical(path: &Path) -> PathBuf {
-    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
 #[cfg(test)]

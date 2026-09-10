@@ -16,6 +16,7 @@ mod files;
 mod history;
 mod media;
 mod operation;
+mod path;
 mod pull;
 mod push;
 mod refs;
