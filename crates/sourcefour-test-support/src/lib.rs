@@ -203,9 +203,12 @@ impl TempRepo {
     }
 
     fn new(directory: TempDir, root: &Path) -> Self {
+        let root = canonical(root);
+        run_git(&root, &["config", "user.name", FIXTURE_NAME]);
+        run_git(&root, &["config", "user.email", FIXTURE_EMAIL]);
         Self {
             _directory: directory,
-            root: canonical(root),
+            root,
             clock: Cell::new(0),
         }
     }
