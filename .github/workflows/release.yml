@@ -372,15 +372,61 @@ jobs:
           done
           git push
 
+  # cargo-dist publishes the cross-platform command-line formula above. The
+  # cask additionally installs the signed Sourcefour.app on macOS. Serialize
+  # the tap writes so the two jobs cannot race each other's pushes.
+  publish-homebrew-cask:
+    needs:
+      - plan
+      - host
+      - publish-homebrew-formula
+    runs-on: "ubuntu-22.04"
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      RELEASE_TAG: ${{ needs.plan.outputs.tag }}
+    if: ${{ !fromJson(needs.plan.outputs.val).announcement_is_prerelease || fromJson(needs.plan.outputs.val).publish_prereleases }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: "helgesverre/homebrew-tap"
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: homebrew-tap
+      - name: Fetch signed macOS package
+        run: |
+          mkdir -p dist
+          gh release download "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "sourcefour-universal-apple-darwin.pkg" \
+            --dir dist
+      - name: Commit cask
+        run: |
+          version="${RELEASE_TAG#v}"
+          sha256="$(shasum -a 256 dist/sourcefour-universal-apple-darwin.pkg | awk '{print $1}')"
+          mkdir -p homebrew-tap/Casks
+          scripts/render-cask.sh "$version" "$sha256" > homebrew-tap/Casks/sourcefour.rb
+
+          cd homebrew-tap
+          git config user.name "sourcefour-release-bot"
+          git config user.email "sourcefour-release-bot@users.noreply.github.com"
+          git add Casks/sourcefour.rb
+          if git diff --cached --quiet; then
+            echo "Cask already up to date for v${version}"
+            exit 0
+          fi
+          git commit -m "sourcefour ${version} cask"
+          git push
+
   announce:
     needs:
       - plan
       - host
       - publish-homebrew-formula
+      - publish-homebrew-cask
     # use "always() && ..." to allow us to wait for all publish jobs while
     # still allowing individual publish jobs to skip themselves (for prereleases).
     # "host" however must run to completion, no skipping allowed!
-    if: ${{ always() && needs.host.result == 'success' && (needs.publish-homebrew-formula.result == 'skipped' || needs.publish-homebrew-formula.result == 'success') }}
+    if: ${{ always() && needs.host.result == 'success' && (needs.publish-homebrew-formula.result == 'skipped' || needs.publish-homebrew-formula.result == 'success') && (needs.publish-homebrew-cask.result == 'skipped' || needs.publish-homebrew-cask.result == 'success') }}
     runs-on: "ubuntu-22.04"
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

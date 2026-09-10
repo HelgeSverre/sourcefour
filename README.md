@@ -14,7 +14,7 @@ Built with [GPUI](https://www.gpui.rs) for GPU-rendered native UI and
 
 | Platform | Installer | Package manager |
 | --- | --- | --- |
-| macOS | [`.pkg`](https://github.com/HelgeSverre/sourcefour/releases/latest/download/sourcefour-universal-apple-darwin.pkg), universal, signed and notarized | `brew install helgesverre/tap/sourcefour` |
+| macOS | [`.pkg`](https://github.com/HelgeSverre/sourcefour/releases/latest/download/sourcefour-universal-apple-darwin.pkg), universal, signed and notarized | `brew install --cask helgesverre/tap/sourcefour` |
 | Windows | [`.msi`](https://github.com/HelgeSverre/sourcefour/releases/latest/download/sourcefour-x86_64-pc-windows-msvc.msi), 64-bit | — |
 | Linux | [`.AppImage`](https://github.com/HelgeSverre/sourcefour/releases/latest/download/sourcefour-x86_64-unknown-linux-gnu.AppImage), x86-64 | `brew install helgesverre/tap/sourcefour` |
 
@@ -70,15 +70,16 @@ just release 0.2.0
 | Artifact | Built by | Notes |
 | --- | --- | --- |
 | Archives, checksums, Homebrew formula | cargo-dist | macOS (both arches), Linux x86-64, Windows x64 |
+| Homebrew cask | `.github/workflows/release.yml` | Installs the signed universal `.pkg` and exposes its CLI |
 | `.msi` | cargo-dist + `apps/sourcefour/wix/main.wxs` | Start Menu shortcut, optional PATH entry |
 | `.pkg` | `.github/workflows/macos-pkg.yml` | Universal, signed, notarized, stapled |
 | `.AppImage` | `.github/workflows/linux-appimage.yml` | Built on ubuntu-22.04 for a low glibc floor |
 
 The `.pkg` and the `.AppImage` are maintained alongside the generated jobs
 because cargo-dist produces neither. `release.yml` is hand-edited to add the
-test gate and those two jobs, which is why `dist-workspace.toml` marks `ci` as
-allowed-dirty; rerun `dist generate` after changing dist config and re-apply
-both edits.
+test gate, those two jobs, and the macOS cask publisher, which is why
+`dist-workspace.toml` marks `ci` as allowed-dirty; rerun `dist generate` after
+changing dist config and re-apply those edits.
 
 ### Secrets this needs
 
@@ -91,10 +92,10 @@ both edits.
 | `APPLE_APPLICATION_SIGNING_IDENTITY`, `APPLE_INSTALLER_SIGNING_IDENTITY` | variable | Certificate common names |
 | `APPLE_NOTARY_ISSUER_ID`, `APPLE_NOTARY_KEY_ID`, `APPLE_TEAM_ID` | variable | Notary and team identifiers |
 
-Only the Homebrew token is needed to publish archives and the formula; the
-Apple values are what make the `.pkg` job run. Until they exist, a tag will
-build everything and then fail at the `.pkg` step rather than publishing a
-release with a missing macOS installer.
+The Homebrew token publishes the formula and cask; the Apple values are what
+make the `.pkg` job run. Until they exist, a tag will build everything and then
+fail at the `.pkg` step rather than publishing a release with a missing macOS
+installer.
 
 ## License
 

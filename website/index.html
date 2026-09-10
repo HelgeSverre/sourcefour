@@ -57,7 +57,7 @@
 
     <div class="install">
       <span class="sigil">$</span>
-      <code id="install-cmd">brew install helgesverre/tap/sourcefour</code>
+      <code id="install-cmd">brew install --cask helgesverre/tap/sourcefour</code>
       <button class="copy" data-copy="#install-cmd" type="button">copy</button>
     </div>
 
@@ -407,6 +407,10 @@
     primary.textContent = "Download for " + label;
     const current = document.querySelector(`#dl-menu a[data-platform="${platform}"]`);
     current?.setAttribute("aria-current", "true");
+    if (platform === "linux") {
+      document.getElementById("install-cmd").textContent =
+        "brew install helgesverre/tap/sourcefour";
+    }
   }
 
   // The chevron reflects the menu's state; the browser owns the state itself.
