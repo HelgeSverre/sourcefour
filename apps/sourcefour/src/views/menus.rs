@@ -353,7 +353,7 @@ impl SourcefourWindow {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gpui::{IntoElement as _, Modifiers, MouseButton, TestAppContext, point, px, size};
+    use gpui::{Modifiers, MouseButton, TestAppContext, point, px, size};
 
     #[gpui::test]
     fn picker_input_menu_pastes_without_submitting_the_repository(cx: &mut TestAppContext) {
@@ -371,13 +371,12 @@ mod tests {
         let (view, cx) = cx.add_window_view(|window, cx| {
             super::super::ErrorWindow::new(&failure, recovered.clone(), window, cx)
         });
-        cx.draw(Point::default(), size(px(500.0), px(300.0)), |_, _| {
-            view.clone().into_any_element()
-        });
+        cx.simulate_resize(size(px(500.0), px(300.0)));
+        cx.update(|_, cx| view.update(cx, |_, cx| cx.notify()));
+        cx.run_until_parked();
         cx.simulate_keystrokes("shift-f10");
-        cx.draw(Point::default(), size(px(500.0), px(300.0)), |_, _| {
-            view.clone().into_any_element()
-        });
+        cx.update(|_, cx| view.update(cx, |_, cx| cx.notify()));
+        cx.run_until_parked();
         cx.simulate_keystrokes("enter");
         cx.update(|window, cx| {
             let view = view.read(cx);
@@ -389,9 +388,8 @@ mod tests {
     }
 
     fn draw(view: &gpui::Entity<SourcefourWindow>, cx: &mut gpui::VisualTestContext) {
-        cx.draw(Point::default(), size(px(1200.0), px(800.0)), |_, _| {
-            view.clone().into_any_element()
-        });
+        cx.update(|_, cx| view.update(cx, |_, cx| cx.notify()));
+        cx.run_until_parked();
     }
 
     #[gpui::test]

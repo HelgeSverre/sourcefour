@@ -45,7 +45,7 @@ impl SourcefourWindow {
             .read(cx)
             .focus_handle
             .clone()
-            .focus(window);
+            .focus(window, cx);
         cx.notify();
     }
 
@@ -87,7 +87,7 @@ impl SourcefourWindow {
             start,
             checkout,
         };
-        self.focus.focus(window);
+        self.focus.focus(window, cx);
         cx.spawn(async move |this, cx| {
             let outcome = cx
                 .background_executor()
@@ -125,7 +125,7 @@ impl SourcefourWindow {
         cx: &mut gpui::Context<Self>,
     ) {
         self.branch_dialog = None;
-        self.focus.focus(window);
+        self.focus.focus(window, cx);
         cx.notify();
     }
 
@@ -297,7 +297,7 @@ impl SourcefourWindow {
 #[cfg(test)]
 mod menu_tests {
     use crate::history::Selection;
-    use gpui::{IntoElement as _, Point, TestAppContext, px, size};
+    use gpui::{TestAppContext, px};
 
     #[gpui::test]
     fn branch_menu_keeps_its_start_and_gives_the_dialog_focus(cx: &mut TestAppContext) {
@@ -312,9 +312,8 @@ mod menu_tests {
                 target
             })
         });
-        cx.draw(Point::default(), size(px(1200.0), px(800.0)), |_, _| {
-            view.clone().into_any_element()
-        });
+        cx.update(|_, cx| view.update(cx, |_, cx| cx.notify()));
+        cx.run_until_parked();
         cx.simulate_keystrokes("end enter");
         cx.update(|window, cx| {
             let view = view.read(cx);

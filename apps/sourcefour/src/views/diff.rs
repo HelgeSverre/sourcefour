@@ -561,7 +561,7 @@ impl SourcefourWindow {
         self.diff_view = None;
         self.diff_switcher_open = false;
         self.clear_preview_selection();
-        self.focus.focus(window);
+        self.focus.focus(window, cx);
         cx.notify();
     }
 
@@ -582,7 +582,7 @@ impl SourcefourWindow {
             .read(cx)
             .focus_handle
             .clone()
-            .focus(window);
+            .focus(window, cx);
         cx.notify();
     }
 
@@ -593,7 +593,7 @@ impl SourcefourWindow {
     ) {
         self.dismiss_menu(cx);
         self.diff_switcher_open = false;
-        self.diff_focus.focus(window);
+        self.diff_focus.focus(window, cx);
         cx.notify();
     }
 
@@ -882,7 +882,7 @@ impl SourcefourWindow {
         self.diff_request += 1;
         let token = self.diff_request;
         self.diff_scroll = UniformListScrollHandle::new();
-        self.diff_focus.focus(window);
+        self.diff_focus.focus(window, cx);
         if let Some(diff) = cached {
             self.set_diff_content(token, Ok(DiffContent::Text(diff)), cx);
             return;
@@ -947,7 +947,7 @@ impl SourcefourWindow {
         self.diff_request += 1;
         let token = self.diff_request;
         self.diff_scroll = UniformListScrollHandle::new();
-        self.diff_focus.focus(window);
+        self.diff_focus.focus(window, cx);
         let ffmpeg_dir = self.settings.video.ffmpeg_dir.clone();
         cx.spawn(async move |this, cx| {
             let content = cx
@@ -1090,8 +1090,8 @@ impl SourcefourWindow {
                 .on_mouse_move(
                     cx.listener(|this, event: &gpui::MouseMoveEvent, window, cx| {
                         this.drag_move(
-                            event.position.x.0,
-                            event.position.y.0,
+                            event.position.x.as_f32(),
+                            event.position.y.as_f32(),
                             event.pressed_button,
                             window,
                             cx,
@@ -1339,7 +1339,32 @@ impl SourcefourWindow {
         if self.settings.diff.wrap
             && let Some(list) = &view.wrap_list
         {
-            let element = gpui::list(list.clone()).size_full().into_any_element();
+            let weak = cx.entity().downgrade();
+            let element = gpui::list(list.clone(), move |index, _window, cx| {
+                let Some(entity) = weak.upgrade() else {
+                    return div().into_any_element();
+                };
+                let coordinate = entity.read(cx).diff_row_coordinate(index);
+                let row = entity.update(cx, |this, cx| this.wrapped_diff_row(index, cx));
+                let Some(coordinate) = coordinate else {
+                    return row;
+                };
+                let target = entity.downgrade();
+                div()
+                    .id(("wrapped-diff-row", cell_coordinate_key(coordinate)))
+                    .cursor_pointer()
+                    .child(row)
+                    .on_primary_click(move |event: &gpui::ClickEvent, _, cx| {
+                        if let Some(entity) = target.upgrade() {
+                            entity.update(cx, |this, cx| {
+                                this.select_diff_line(coordinate, event.modifiers().shift, cx);
+                            });
+                        }
+                    })
+                    .into_any_element()
+            })
+            .size_full()
+            .into_any_element();
             diff_build_probe(started, view, true);
             return element;
         }
@@ -1359,7 +1384,7 @@ impl SourcefourWindow {
             )
             .with_width_from_item(view.widest_row())
             .with_horizontal_sizing_behavior(ListHorizontalSizingBehavior::Unconstrained)
-            .track_scroll(self.diff_scroll.clone())
+            .track_scroll(&self.diff_scroll)
             .size_full()
             .into_any_element(),
             Some(DiffContent::Text(_)) => uniform_list(
@@ -1377,7 +1402,7 @@ impl SourcefourWindow {
             )
             .with_width_from_item(view.widest_row())
             .with_horizontal_sizing_behavior(ListHorizontalSizingBehavior::Unconstrained)
-            .track_scroll(self.diff_scroll.clone())
+            .track_scroll(&self.diff_scroll)
             .size_full()
             .into_any_element(),
             // Only text content reaches here; diff_body routed the rest.
@@ -1750,39 +1775,15 @@ impl SourcefourWindow {
         cx.notify();
     }
 
-    pub(super) fn reset_diff_wrap_list(&mut self, cx: &mut gpui::Context<Self>) {
+    pub(super) fn reset_diff_wrap_list(&mut self, _cx: &mut gpui::Context<Self>) {
         let Some(view) = &mut self.diff_view else {
             return;
         };
         let count = view.rows().len();
-        let weak = cx.entity().downgrade();
         view.wrap_list = Some(gpui::ListState::new(
             count,
             gpui::ListAlignment::Top,
             px(200.0),
-            move |index, _window, cx| {
-                let Some(entity) = weak.upgrade() else {
-                    return div().into_any_element();
-                };
-                let coordinate = entity.read(cx).diff_row_coordinate(index);
-                let row = entity.update(cx, |this, cx| this.wrapped_diff_row(index, cx));
-                let Some(coordinate) = coordinate else {
-                    return row;
-                };
-                let target = entity.downgrade();
-                div()
-                    .id(("wrapped-diff-row", cell_coordinate_key(coordinate)))
-                    .cursor_pointer()
-                    .child(row)
-                    .on_primary_click(move |event: &gpui::ClickEvent, _, cx| {
-                        if let Some(entity) = target.upgrade() {
-                            entity.update(cx, |this, cx| {
-                                this.select_diff_line(coordinate, event.modifiers().shift, cx);
-                            });
-                        }
-                    })
-                    .into_any_element()
-            },
         ));
     }
 
@@ -1817,7 +1818,7 @@ impl SourcefourWindow {
         } else {
             let handle = self.diff_scroll.0.borrow();
             let offset = handle.base_handle.offset();
-            let viewport_height = handle.base_handle.bounds().size.height.0;
+            let viewport_height = handle.base_handle.bounds().size.height.as_f32();
             let scroll_top = hunk_scroll_top(row, row_height, view.rows().len(), viewport_height);
             handle
                 .base_handle
@@ -2049,12 +2050,12 @@ impl SourcefourWindow {
                 gpui::MouseButton::Left,
                 cx.listener(|this, event: &gpui::MouseDownEvent, _, cx| {
                     this.drag = Some(Drag::ImageSlider);
-                    this.scrub_image(event.position.x.0);
+                    this.scrub_image(event.position.x.as_f32());
                     cx.notify();
                 }),
             )
             .on_primary_click(cx.listener(|this, event: &gpui::ClickEvent, _, cx| {
-                if event.down.click_count == 2
+                if matches!(event, gpui::ClickEvent::Mouse(event) if event.down.click_count == 2)
                     && let Some(view) = &mut this.diff_view
                 {
                     view.slider = 0.5;
@@ -2150,11 +2151,11 @@ impl SourcefourWindow {
     /// Maps a window-space X onto the juxtapose slider fraction.
     pub(super) fn scrub_image(&mut self, x: f32) {
         let bounds = self.juxtapose_bounds.get();
-        let width = bounds.size.width.0;
+        let width = bounds.size.width.as_f32();
         if width <= 0.0 {
             return;
         }
-        let fraction = ((x - bounds.origin.x.0) / width).clamp(0.02, 0.98);
+        let fraction = ((x - bounds.origin.x.as_f32()) / width).clamp(0.02, 0.98);
         if let Some(view) = &mut self.diff_view {
             view.slider = fraction;
         }
@@ -2538,12 +2539,12 @@ impl SourcefourWindow {
         let rows = self.diff_rows_len();
         let handle = self.diff_scroll.0.borrow();
         let bounds = handle.base_handle.bounds();
-        let viewport = bounds.size.height.0;
+        let viewport = bounds.size.height.as_f32();
         let content = row_count_as_f32(rows) * self.diff_row_height();
         if viewport <= 0.0 || content <= viewport {
             return None;
         }
-        let offset = (-handle.base_handle.offset().y.0).clamp(0.0, content - viewport);
+        let offset = (-handle.base_handle.offset().y.as_f32()).clamp(0.0, content - viewport);
         drop(handle);
         let thumb = (viewport * viewport / content).clamp(30.0, viewport);
         let top = offset / (content - viewport) * (viewport - thumb);
@@ -2560,7 +2561,7 @@ impl SourcefourWindow {
                     gpui::MouseButton::Left,
                     cx.listener(|this, event: &gpui::MouseDownEvent, _, cx| {
                         this.drag = Some(Drag::DiffBar);
-                        this.scrub_diff(event.position.y.0);
+                        this.scrub_diff(event.position.y.as_f32());
                         cx.notify();
                     }),
                 )
@@ -2586,12 +2587,12 @@ impl SourcefourWindow {
         let rows = self.diff_rows_len();
         let handle = self.diff_scroll.0.borrow();
         let bounds = handle.base_handle.bounds();
-        let viewport = bounds.size.height.0;
+        let viewport = bounds.size.height.as_f32();
         let content = row_count_as_f32(rows) * self.diff_row_height();
         if viewport <= 0.0 || content <= viewport {
             return;
         }
-        let fraction = ((y - bounds.origin.y.0) / viewport).clamp(0.0, 1.0);
+        let fraction = ((y - bounds.origin.y.as_f32()) / viewport).clamp(0.0, 1.0);
         let offset = fraction * (content - viewport);
         handle
             .base_handle
@@ -2924,11 +2925,8 @@ mod tests {
                 expected
             })
         });
-        cx.draw(
-            gpui::Point::default(),
-            gpui::size(px(1200.0), px(800.0)),
-            |_, _| view.clone().into_any_element(),
-        );
+        cx.update(|_, cx| view.update(cx, |_, cx| cx.notify()));
+        cx.run_until_parked();
         // The selection on the other side is ineligible; Copy line comes first.
         cx.simulate_keystrokes("enter");
         assert_eq!(
@@ -2959,11 +2957,8 @@ mod tests {
                 expected
             })
         });
-        cx.draw(
-            gpui::Point::default(),
-            gpui::size(px(1200.0), px(800.0)),
-            |_, _| view.clone().into_any_element(),
-        );
+        cx.update(|_, cx| view.update(cx, |_, cx| cx.notify()));
+        cx.run_until_parked();
         cx.simulate_keystrokes("enter");
         assert_eq!(
             cx.read_from_clipboard().unwrap().text().as_deref(),
@@ -3120,9 +3115,7 @@ mod tests {
 
     #[test]
     fn a_wrapped_hunk_becomes_the_logical_top_item() {
-        let list = gpui::ListState::new(12, gpui::ListAlignment::Top, px(0.0), |_, _, _| {
-            div().into_any_element()
-        });
+        let list = gpui::ListState::new(12, gpui::ListAlignment::Top, px(0.0));
 
         scroll_wrapped_list_to_hunk(&list, 7);
 

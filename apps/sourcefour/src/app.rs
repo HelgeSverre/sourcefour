@@ -9,8 +9,8 @@ use std::{
 };
 
 use gpui::{
-    App, AppContext, Application, AssetSource, Bounds, Menu, MenuItem, Result, SharedString,
-    TitlebarOptions, WindowBounds, WindowOptions, actions, px, size,
+    App, AppContext, AssetSource, Bounds, Menu, MenuItem, Result, SharedString, TitlebarOptions,
+    WindowBounds, WindowOptions, actions, px, size,
 };
 use sourcefour_git::{discover, display_name};
 use sourcefour_model::{RepoFailure, RepoLocation};
@@ -139,12 +139,12 @@ pub(crate) fn run(request: &LaunchRequest) -> ExitCode {
     // repository after all, so the process exits clean.
     let recovered = Arc::new(AtomicBool::new(false));
     let recovered_in_app = Arc::clone(&recovered);
-    Application::new()
+    gpui_platform::application()
         .with_assets(SourcefourAssets::new())
         .run(move |cx: &mut App| {
             startup_phase("gpui-run");
             // One invocation is one window: closing it closes Sourcefour.
-            cx.on_window_closed(|cx| {
+            cx.on_window_closed(|cx, _| {
                 if cx.windows().is_empty() {
                     cx.quit();
                 }
@@ -160,6 +160,7 @@ pub(crate) fn run(request: &LaunchRequest) -> ExitCode {
             cx.set_menus(vec![Menu {
                 name: SharedString::from("Sourcefour"),
                 items: vec![MenuItem::action("Quit Sourcefour", Quit)],
+                disabled: false,
             }]);
             startup_phase("pre-window");
             let result = match launch {
@@ -342,7 +343,7 @@ fn window_options(
         width,
         height,
         minimum,
-        display_size.map(|size| (size.width.0, size.height.0)),
+        display_size.map(|size| (size.width.as_f32(), size.height.as_f32())),
     );
     let bounds = Bounds::centered(None, size(px(width), px(height)), cx);
     let window_bounds = match mode {

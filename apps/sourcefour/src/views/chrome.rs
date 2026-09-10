@@ -191,12 +191,12 @@ impl SourcefourWindow {
             // The native titlebar gesture: double-click zooms the window —
             // macOS zoom, not fullscreen.
             .on_primary_click(|event: &gpui::ClickEvent, window, _| {
-                if event.up.click_count == 2 {
+                if matches!(event, gpui::ClickEvent::Mouse(event) if event.up.click_count == 2) {
                     window.zoom_window();
                 }
             })
             .child(window_title(&self.name, &self.path))
-            .child(div().flex_grow())
+            .child(div().flex_grow_1())
             .child(crate::settings_ui::toolbar_button(&self.theme, cx))
     }
 
@@ -234,7 +234,7 @@ impl SourcefourWindow {
             )
             .child(action("Merge", "icons/git-merge.svg"))
             .child(action("Stash", "icons/archive.svg"))
-            .child(div().flex_grow())
+            .child(div().flex_grow_1())
             .child(self.filter_box(window, cx))
     }
 
@@ -302,7 +302,7 @@ impl SourcefourWindow {
                     .read(cx)
                     .focus_handle
                     .clone()
-                    .focus(window);
+                    .focus(window, cx);
                 cx.notify();
             }))
             .w(px(260.0))
@@ -547,7 +547,7 @@ impl SourcefourWindow {
                     self.history.rows.len()
                 ))
             }))
-            .child(div().flex_grow())
+            .child(div().flex_grow_1())
             .child(self.snapshot().map_or_else(
                 || String::from("Loading repository metadata..."),
                 status_summary,

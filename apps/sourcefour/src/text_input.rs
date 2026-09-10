@@ -21,7 +21,7 @@ use crate::theme::Theme;
 mod editor;
 use editor::{EditKind, EditorState};
 
-const INPUT_LINE_HEIGHT: Pixels = Pixels(18.0);
+const INPUT_LINE_HEIGHT: Pixels = px(18.0);
 
 actions!(
     filter_input,
@@ -209,7 +209,7 @@ impl TextInput {
             return;
         };
         self.is_selecting = false;
-        self.focus_handle.focus(window);
+        self.focus_handle.focus(window, cx);
         let selected = !self.editor.selection_is_empty();
         let entry =
             |label, enabled, operation: fn(&mut Self, &mut Window, &mut gpui::Context<Self>)| {
@@ -675,7 +675,7 @@ impl TextInput {
         if let Some(layout) = self.valid_layout()
             && let Some(position) = position_for_index(&layout.lines, cursor, layout.line_height)
         {
-            let x = self.editor.preferred_x().unwrap_or(position.x.0);
+            let x = self.editor.preferred_x().unwrap_or(position.x.as_f32());
             let target_y = if direction < 0 {
                 position.y - layout.line_height
             } else {
@@ -1305,11 +1305,8 @@ mod tests {
 
     fn draw_input(cx: &mut gpui::VisualTestContext) {
         let fixture = cx.update(|window, _| window.root::<TextAreaFixture>().unwrap().unwrap());
-        cx.draw(
-            gpui::Point::default(),
-            gpui::size(px(500.0), px(300.0)),
-            |_, _| fixture.into_any_element(),
-        );
+        cx.update(|_, cx| fixture.update(cx, |_, cx| cx.notify()));
+        cx.run_until_parked();
     }
 
     #[gpui::test]
@@ -1404,9 +1401,12 @@ mod tests {
                 input
             });
             input.update(cx, |input, _| input.set_menu_host(menus.downgrade()));
-            window.focus(&input.read(cx).focus_handle);
+            let focus_handle = input.read(cx).focus_handle.clone();
+            window.focus(&focus_handle, cx);
             TextAreaFixture { input, menus }
         });
+        cx.simulate_resize(gpui::size(px(500.0), px(300.0)));
+        cx.run_until_parked();
         let input = cx.update(|_, cx| fixture.read(cx).input.clone());
         (input, cx)
     }

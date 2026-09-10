@@ -351,7 +351,7 @@ impl SourcefourWindow {
                 div()
                     .id("details-scroll")
                     .track_focus(&self.details_focus)
-                    .flex_grow()
+                    .flex_grow_1()
                     .min_h(px(0.0))
                     .overflow_y_scroll()
                     .children(body.map(|body| {
@@ -410,7 +410,7 @@ impl SourcefourWindow {
                                     .collect()
                             }),
                         )
-                        .track_scroll(self.details_files_scroll.clone())
+                        .track_scroll(&self.details_files_scroll)
                         .size_full(),
                     ),
             )
@@ -520,7 +520,7 @@ impl SourcefourWindow {
                     .collect()
             }),
         )
-        .track_scroll(self.working_tree_files_scroll.clone())
+        .track_scroll(&self.working_tree_files_scroll)
     }
 
     /// The commit affordance: enabled once something is staged and the
@@ -816,7 +816,7 @@ mod tests {
         cx: &mut TestAppContext,
         scene: Scene,
     ) -> (Entity<DetailsFixture>, &mut VisualTestContext) {
-        cx.add_window_view(|window, cx| {
+        let (fixture, cx) = cx.add_window_view(|window, cx| {
             DetailsFixture(cx.new(|cx| {
                 SourcefourWindow::new(
                     WindowLaunch {
@@ -831,15 +831,15 @@ mod tests {
                     cx,
                 )
             }))
-        })
+        });
+        cx.simulate_resize(gpui::size(px(1200.0), px(800.0)));
+        cx.run_until_parked();
+        (fixture, cx)
     }
 
     fn draw(fixture: &Entity<DetailsFixture>, cx: &mut VisualTestContext) {
-        cx.draw(
-            gpui::Point::default(),
-            gpui::size(px(1200.0), px(800.0)),
-            |_, _| fixture.clone().into_any_element(),
-        );
+        cx.update(|_, cx| fixture.update(cx, |_, cx| cx.notify()));
+        cx.run_until_parked();
     }
 
     #[gpui::test]

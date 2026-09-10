@@ -33,12 +33,12 @@ fn paint_graph(
     theme: &Theme,
     window: &mut Window,
 ) {
-    let viewport = bounds.size.height.0;
+    let viewport = bounds.size.height.as_f32();
     let content = row_count_as_f32(history.visible_len()) * row_height;
     // Mirror the list's own clamp so rubber-band overscroll cannot shear the
     // graph away from the rows it annotates.
-    let scroll_top =
-        (-scroll.0.borrow().base_handle.offset().y.0).clamp(0.0, (content - viewport).max(0.0));
+    let scroll_top = (-scroll.0.borrow().base_handle.offset().y.as_f32())
+        .clamp(0.0, (content - viewport).max(0.0));
     let first = usize_from_f32((scroll_top / row_height).floor());
     let last = history
         .visible_len()
@@ -160,7 +160,7 @@ impl SourcefourWindow {
     pub(super) fn history(&self, columns: ColumnVisibility, cx: &mut gpui::Context<Self>) -> Div {
         div()
             .relative()
-            .flex_grow()
+            .flex_grow_1()
             .min_h(px(1.0))
             .child(self.history_list(columns, cx))
             .children(self.graph_overlay(cx))
@@ -246,7 +246,7 @@ impl SourcefourWindow {
                         .collect()
                 }),
             )
-            .track_scroll(self.list_scroll.clone())
+            .track_scroll(&self.list_scroll)
             .size_full(),
         )
     }

@@ -14,7 +14,8 @@ name = "sourcefour"
 path = "src/main.rs"
 
 [dependencies]
-gpui = { git = "https://github.com/zed-industries/zed", package = "gpui", rev = "4d00d07df1f3d921aeb1fb630c8d9a1789e6b602" }
+gpui = { git = "https://github.com/zed-industries/zed", package = "gpui", rev = "3405c42f6756fcf7f3a66ccb12090a59c9dff30a" }
+gpui_platform = { git = "https://github.com/zed-industries/zed", package = "gpui_platform", rev = "3405c42f6756fcf7f3a66ccb12090a59c9dff30a", features = ["font-kit"] }
 gix-imara-diff.workspace = true
 resvg.workspace = true
 serde.workspace = true
@@ -31,7 +32,7 @@ unicode-segmentation.workspace = true
 tracing-subscriber.workspace = true
 
 [dev-dependencies]
-gpui = { git = "https://github.com/zed-industries/zed", package = "gpui", rev = "4d00d07df1f3d921aeb1fb630c8d9a1789e6b602", features = ["test-support"] }
+gpui = { git = "https://github.com/zed-industries/zed", package = "gpui", rev = "3405c42f6756fcf7f3a66ccb12090a59c9dff30a", features = ["test-support"] }
 sourcefour-test-support = { path = "../../crates/sourcefour-test-support" }
 tempfile.workspace = true
 

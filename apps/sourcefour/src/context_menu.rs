@@ -176,7 +176,7 @@ pub(crate) trait PrimaryClickExt: StatefulInteractiveElement + Sized {
         listener: impl Fn(&gpui::ClickEvent, &mut Window, &mut App) + 'static,
     ) -> Self {
         self.on_click(move |event, window, cx| {
-            if !is_context_click(&event.down) {
+            if !matches!(event, gpui::ClickEvent::Mouse(event) if is_context_click(&event.down)) {
                 listener(event, window, cx);
             }
         })
@@ -272,7 +272,7 @@ impl MenuHost {
             previous_focus,
             target,
         });
-        self.focus.focus(window);
+        self.focus.focus(window, cx);
         cx.notify();
     }
 
@@ -281,7 +281,7 @@ impl MenuHost {
             if self.focus.is_focused(window)
                 && let Some(previous) = popup.previous_focus
             {
-                previous.focus(window);
+                previous.focus(window, cx);
             }
             cx.notify();
         }
@@ -303,11 +303,11 @@ impl MenuHost {
                 }
                 let focus = this.focus.clone();
                 this.window
-                    .update(cx, |_, window, _| {
+                    .update(cx, |_, window, cx| {
                         if focus.is_focused(window)
                             && let Some(previous) = popup.previous_focus
                         {
-                            previous.focus(window);
+                            previous.focus(window, cx);
                         }
                     })
                     .ok();
@@ -575,24 +575,28 @@ mod tests {
     }
 
     fn fixture(cx: &mut TestAppContext) -> (Entity<Fixture>, &mut VisualTestContext) {
-        cx.add_window_view(|window, cx| {
+        let (fixture, cx) = cx.add_window_view(|window, cx| {
             let host = cx.new(|cx| MenuHost::new(window, cx));
             cx.observe(&host, |_, _, cx| cx.notify()).detach();
             let focus = cx.focus_handle();
-            focus.focus(window);
+            focus.focus(window, cx);
             Fixture {
                 host,
                 focus,
                 activations: 0,
                 builds: 0,
             }
-        })
+        });
+        cx.simulate_resize(size(px(800.0), px(600.0)));
+        cx.run_until_parked();
+        (fixture, cx)
     }
 
     fn draw(fixture: &Entity<Fixture>, cx: &mut VisualTestContext) {
-        cx.draw(Point::default(), size(px(800.0), px(600.0)), |_, _| {
-            fixture.clone().into_any_element()
+        cx.update(|_, cx| {
+            fixture.update(cx, |_, cx| cx.notify());
         });
+        cx.run_until_parked();
     }
 
     #[gpui::test]
@@ -713,7 +717,10 @@ mod tests {
                     ..gpui::ScrollWheelEvent::default()
                 }),
                 1 => cx.simulate_resize(size(px(900.0), px(700.0))),
-                2 => cx.update(|window, cx| fixture.read(cx).focus.focus(window)),
+                2 => cx.update(|window, cx| {
+                    let focus = fixture.read(cx).focus.clone();
+                    focus.focus(window, cx);
+                }),
                 _ => cx.deactivate_window(),
             }
             draw(&fixture, cx);

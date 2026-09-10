@@ -514,7 +514,7 @@ impl SourcefourWindow {
             window.load_metadata(location.clone(), cx);
             Self::watch_metadata(location, cx);
         }
-        window.focus.focus(gpui_window);
+        window.focus.focus(gpui_window, cx);
         window
     }
 
@@ -576,8 +576,8 @@ impl SourcefourWindow {
             };
             let bounds = bounds.get_bounds();
             this.window_state = Some(WindowState {
-                width: bounds.size.width.0,
-                height: bounds.size.height.0,
+                width: bounds.size.width.as_f32(),
+                height: bounds.size.height.as_f32(),
                 mode,
             });
             this.window_save_generation = this.window_save_generation.wrapping_add(1);
@@ -1255,14 +1255,14 @@ impl SourcefourWindow {
         if self.settings_view.is_none() {
             self.settings_view = Some(crate::settings_ui::SettingsSection::default());
         }
-        self.settings_focus.focus(window);
+        self.settings_focus.focus(window, cx);
         cx.notify();
     }
 
     /// Closes the settings overlay, returning focus to the history.
     pub(crate) fn close_settings(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) {
         self.settings_view = None;
-        self.focus.focus(window);
+        self.focus.focus(window, cx);
         cx.notify();
     }
 
@@ -1360,7 +1360,7 @@ impl SourcefourWindow {
                 .read(cx)
                 .focus_handle
                 .clone()
-                .focus(window);
+                .focus(window, cx);
             cx.notify();
         }))
         .on_action(cx.listener(|this, _: &FilterEscape, window, cx| {
@@ -1368,10 +1368,10 @@ impl SourcefourWindow {
                 this.close_diff_file_switcher(window, cx);
             } else if this.branch_dialog.is_some() {
                 this.branch_dialog = None;
-                this.focus.focus(window);
+                this.focus.focus(window, cx);
             } else if this.history.filter.is_empty() {
                 // First Escape clears the query; a second returns to history.
-                this.focus.focus(window);
+                this.focus.focus(window, cx);
             } else {
                 this.filter_input
                     .update(cx, |input, cx| input.set_text("", cx));
@@ -1384,7 +1384,7 @@ impl SourcefourWindow {
             } else if this.branch_dialog.is_some() {
                 this.submit_branch_dialog(window, cx);
             } else {
-                this.focus.focus(window);
+                this.focus.focus(window, cx);
             }
             cx.notify();
         }))
@@ -1456,7 +1456,7 @@ impl SourcefourWindow {
                 this.details_collapsed = false;
                 this.persist_ui_state(cx);
             }
-            this.details_focus.focus(window);
+            this.details_focus.focus(window, cx);
             cx.notify();
         }))
         .on_action(cx.listener(|this, _: &OpenSettings, window, cx| {
@@ -1490,8 +1490,8 @@ impl SourcefourWindow {
         root.on_mouse_move(
             cx.listener(|this, event: &gpui::MouseMoveEvent, window, cx| {
                 this.drag_move(
-                    event.position.x.0,
-                    event.position.y.0,
+                    event.position.x.as_f32(),
+                    event.position.y.as_f32(),
                     event.pressed_button,
                     window,
                     cx,
@@ -1526,7 +1526,7 @@ impl SourcefourWindow {
             None => {}
             Some(Drag::Splitter(splitter)) => {
                 self.panels
-                    .drag(splitter, x, y, window.viewport_size().height.0);
+                    .drag(splitter, x, y, window.viewport_size().height.as_f32());
                 cx.notify();
             }
             Some(Drag::DiffBar) => {
@@ -1573,9 +1573,9 @@ impl Render for SourcefourWindow {
             }
         }
         let frame_started = std::time::Instant::now();
-        self.apply_responsive_diff_mode(window.viewport_size().width.0, cx);
+        self.apply_responsive_diff_mode(window.viewport_size().width.as_f32(), cx);
         let columns = ColumnVisibility::for_available_width(
-            window.viewport_size().width.0 - self.panels.sidebar,
+            window.viewport_size().width.as_f32() - self.panels.sidebar,
         );
         self.menus
             .update(cx, |menus, _| menus.set_theme(&self.theme));
@@ -1596,14 +1596,14 @@ impl Render for SourcefourWindow {
             .child(self.toolbar(window, cx))
             .child(
                 div()
-                    .flex_grow()
+                    .flex_grow_1()
                     .flex()
                     .min_h(px(1.0))
                     .child(self.sidebar(cx))
                     .child(self.splitter(Splitter::Sidebar, cx))
                     .child(
                         div()
-                            .flex_grow()
+                            .flex_grow_1()
                             .flex()
                             .flex_col()
                             .min_w(px(1.0))
@@ -1621,7 +1621,7 @@ impl Render for SourcefourWindow {
             .children(self.diff_overlay(cx))
             .children(self.branch_overlay(cx))
             .children(self.settings_overlay(cx))
-            .children(self.actions_overlay(window.viewport_size().height.0, cx))
+            .children(self.actions_overlay(window.viewport_size().height.as_f32(), cx))
             .child(self.menus.clone());
         // §12.5 frame instrumentation: element construction only — layout,
         // paint, and GPU time happen inside gpui after this returns.
@@ -1644,7 +1644,7 @@ fn test_window(
         cx.bind_keys(crate::app::history_keymap());
         cx.bind_keys(crate::text_input::keymap());
     });
-    cx.add_window_view(|window, cx| {
+    let (view, cx) = cx.add_window_view(|window, cx| {
         SourcefourWindow::new(
             WindowLaunch {
                 demo: true,
@@ -1657,7 +1657,10 @@ fn test_window(
             window,
             cx,
         )
-    })
+    });
+    cx.simulate_resize(gpui::size(gpui::px(1200.0), gpui::px(800.0)));
+    cx.run_until_parked();
+    (view, cx)
 }
 
 /// A sink for operations whose progress no interface element shows yet.
@@ -1675,8 +1678,11 @@ fn drag_lost_its_button(pressed: Option<gpui::MouseButton>) -> bool {
 /// True when a click stayed put — a slider or scrollbar drag released
 /// over a backdrop is the end of a drag, not a request to close.
 pub(crate) fn is_true_click(event: &gpui::ClickEvent) -> bool {
+    let gpui::ClickEvent::Mouse(event) = event else {
+        return false;
+    };
     let (down, up) = (event.down.position, event.up.position);
-    (down.x.0 - up.x.0).abs() <= 3.0 && (down.y.0 - up.y.0).abs() <= 3.0
+    (down.x.as_f32() - up.x.as_f32()).abs() <= 3.0 && (down.y.as_f32() - up.y.as_f32()).abs() <= 3.0
 }
 
 /// The shared modal shell (§4.6 modality): a scrim that occludes
@@ -1779,7 +1785,7 @@ impl ErrorWindow {
         path_input.update(cx, |input, _| input.set_menu_host(menus.downgrade()));
         // The Open button's enabled state follows what is typed.
         cx.observe(&path_input, |_, _, cx| cx.notify()).detach();
-        path_input.read(cx).focus_handle.clone().focus(window);
+        path_input.read(cx).focus_handle.clone().focus(window, cx);
         Self {
             menus,
             theme,
@@ -1825,7 +1831,7 @@ impl ErrorWindow {
             .position(|handle| handle.is_focused(window))
             .unwrap_or(0);
         let step = if backwards { order.len() - 1 } else { 1 };
-        order[(current + step) % order.len()].focus(window);
+        order[(current + step) % order.len()].focus(window, cx);
         cx.notify();
     }
 
@@ -1843,6 +1849,7 @@ impl ErrorWindow {
     /// same discovery as a launch path.
     fn choose_folder(window: &mut Window, cx: &mut gpui::Context<Self>) {
         let paths = cx.prompt_for_paths(gpui::PathPromptOptions {
+            prompt: None,
             files: false,
             directories: true,
             multiple: false,

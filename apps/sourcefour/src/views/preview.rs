@@ -220,20 +220,7 @@ impl PreviewDoc {
     ) -> Self {
         let view = cx.entity().downgrade();
         Self {
-            list: gpui::ListState::new(
-                parse.blocks.len(),
-                gpui::ListAlignment::Top,
-                px(OVERDRAW),
-                {
-                    let view = view.clone();
-                    move |index, window, cx| {
-                        view.upgrade().map_or_else(
-                            || div().into_any_element(),
-                            |view| view.read(cx).preview_item(side, index, window),
-                        )
-                    }
-                },
-            ),
+            list: gpui::ListState::new(parse.blocks.len(), gpui::ListAlignment::Top, px(OVERDRAW)),
             blocks: parse.blocks,
             images: parse.images,
             side,
@@ -618,16 +605,22 @@ fn index_at(layout: &gpui::TextLayout, text: &str, position: gpui::Point<gpui::P
 ///
 /// The pane's own id scopes every element id the blocks under it build.
 pub(super) fn pane(preview: &PreviewDoc, side: PreviewSide) -> gpui::Stateful<Div> {
+    let view = preview.view.clone();
     div()
         .id(side.pane_id())
         .size_full()
         .flex()
         .justify_center()
         .child(
-            gpui::list(preview.list.clone())
-                .h_full()
-                .w_full()
-                .max_w(px(CONTENT_WIDTH)),
+            gpui::list(preview.list.clone(), move |index, window, cx| {
+                view.upgrade().map_or_else(
+                    || div().into_any_element(),
+                    |view| view.read(cx).preview_item(side, index, window),
+                )
+            })
+            .h_full()
+            .w_full()
+            .max_w(px(CONTENT_WIDTH)),
         )
 }
 

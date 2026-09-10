@@ -561,7 +561,7 @@ impl SourcefourWindow {
             .child(branch_marker(&self.theme))
             .child(label.into())
             .children(self.pr_chip(&branch.short_name))
-            .child(div().flex_grow())
+            .child(div().flex_grow_1())
             .children(ahead_behind_text(branch.ahead_behind).map(|text| {
                 div()
                     .text_size(px(10.5))
@@ -666,7 +666,7 @@ impl SourcefourWindow {
             .text_color(self.theme.orange)
             .child(remote_marker(&self.theme))
             .child(remote.name.clone())
-            .child(div().flex_grow())
+            .child(div().flex_grow_1())
             .children(remote.fetch_url.clone().map(|url| {
                 div()
                     .text_size(px(10.0))

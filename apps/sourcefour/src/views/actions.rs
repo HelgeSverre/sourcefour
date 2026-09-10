@@ -808,7 +808,7 @@ impl SourcefourWindow {
         cx: &mut gpui::Context<Self>,
     ) {
         self.dismiss_menu(cx);
-        self.actions_focus.focus(window);
+        self.actions_focus.focus(window, cx);
         self.actions_jobs_scroll = UniformListScrollHandle::new();
         self.actions_log_scroll = UniformListScrollHandle::new();
         let view = ActionsView {
@@ -904,7 +904,7 @@ impl SourcefourWindow {
     /// Closes the overlay, returning focus to the history.
     pub(super) fn close_actions(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) {
         self.dispatch_actions(ActionsEvent::Close, cx);
-        self.focus.focus(window);
+        self.focus.focus(window, cx);
     }
 
     /// Moves the job selection by `delta` and reloads its log.
@@ -1321,7 +1321,7 @@ impl SourcefourWindow {
                     }))
                     .child("↻"),
             )
-            .child(div().flex_grow())
+            .child(div().flex_grow_1())
             .child(
                 div()
                     .id("actions-gh-link")
@@ -1397,7 +1397,7 @@ impl SourcefourWindow {
                             .collect()
                     }),
                 )
-                .track_scroll(self.actions_jobs_scroll.clone())
+                .track_scroll(&self.actions_jobs_scroll)
                 .flex_1()
                 .min_h(px(1.0))
                 .w_full()
@@ -1731,7 +1731,7 @@ impl SourcefourWindow {
                             .collect()
                     }),
                 )
-                .track_scroll(self.actions_log_scroll.clone())
+                .track_scroll(&self.actions_log_scroll)
                 .h(px(row_count_as_f32(shown.min(16)) * LOG_ROW_HEIGHT + 8.0))
                 .w_full()
                 .into_any_element();
