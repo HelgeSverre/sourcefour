@@ -133,15 +133,18 @@ mod tests {
 
     #[test]
     fn a_rejecting_hook_fails_with_its_own_words() -> Result<(), Box<dyn std::error::Error>> {
-        use std::os::unix::fs::PermissionsExt;
-
         let repository = TempRepo::init();
         repository.commit("base");
         let hooks = repository.path().join(".git/hooks");
         std::fs::create_dir_all(&hooks)?;
         let hook = hooks.join("pre-commit");
         std::fs::write(&hook, "#!/bin/sh\necho 'the hook says no' >&2\nexit 1\n")?;
-        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755))?;
+        }
         std::fs::write(repository.path().join("work.txt"), "blocked\n")?;
         repository.git(&["add", "work.txt"]);
         let sink = CollectingSink(Mutex::new(Vec::new()));
