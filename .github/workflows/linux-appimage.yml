@@ -1,4 +1,4 @@
-name: Linux AppImage
+name: Linux packages
 
 on:
   workflow_call:
@@ -9,7 +9,7 @@ permissions:
 
 jobs:
   build:
-    name: Build AppImage
+    name: Build Linux packages
     # Built on the oldest runner we support so the AppImage's glibc floor stays
     # low enough for older distributions to run it.
     runs-on: ubuntu-22.04
@@ -27,6 +27,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install --yes \
             desktop-file-utils \
+            file \
             libclang-dev \
             libfontconfig1-dev \
             libfuse2 \
@@ -48,7 +49,7 @@ jobs:
       - name: Install cargo-packager
         run: cargo install cargo-packager --version 0.11.8 --locked
 
-      - name: Build AppImage
+      - name: Build Linux packages
         run: .github/scripts/package-linux-appimage.sh
 
       - name: Upload installer artifact
@@ -59,3 +60,5 @@ jobs:
           path: |
             target/distrib/*.AppImage
             target/distrib/*.AppImage.sha256
+            target/distrib/*.deb
+            target/distrib/*.deb.sha256

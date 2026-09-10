@@ -40,14 +40,19 @@ tempfile.workspace = true
 workspace = true
 
 # Drives the macOS .app that gets wrapped into the signed .pkg, and the Linux
-# AppImage. Assets are compiled into the binary, so neither format ships a
-# resources directory.
+# AppImage and Debian package. Assets are compiled into the binary, so none of
+# these formats ships a resources directory.
 [package.metadata.packager]
 before-packaging-command = "cargo build --release --locked -p sourcefour"
 product-name = "Sourcefour"
 identifier = "no.lisethsolutions.sourcefour"
 icons = ["assets/icon/Sourcefour.png", "assets/icon/Sourcefour.icns"]
 formats = ["app"]
+
+# Keep this list aligned with `ldd target/release/sourcefour` on the oldest
+# Ubuntu runner used to build Linux release artifacts.
+[package.metadata.packager.deb]
+depends = ["libc6", "libgcc-s1", "libxcb1", "libxkbcommon0", "libxkbcommon-x11-0"]
 
 [package.metadata.packager.macos]
 minimum-system-version = "13.0"

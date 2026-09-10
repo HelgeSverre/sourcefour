@@ -6148,7 +6148,7 @@ dependencies = [
 
 [[package]]
 name = "sourcefour"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "gix-imara-diff",
  "gpui",
@@ -6172,14 +6172,14 @@ dependencies = [
 
 [[package]]
 name = "sourcefour-doc"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "pulldown-cmark",
 ]
 
 [[package]]
 name = "sourcefour-git"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "gix",
  "gix-imara-diff",
@@ -6194,7 +6194,7 @@ dependencies = [
 
 [[package]]
 name = "sourcefour-github"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -6205,7 +6205,7 @@ dependencies = [
 
 [[package]]
 name = "sourcefour-graph"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "smallvec",
  "sourcefour-model",
@@ -6213,7 +6213,7 @@ dependencies = [
 
 [[package]]
 name = "sourcefour-model"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "smallvec",
  "thiserror 2.0.19",
@@ -6222,7 +6222,7 @@ dependencies = [
 
 [[package]]
 name = "sourcefour-test-support"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "tempfile",
 ]

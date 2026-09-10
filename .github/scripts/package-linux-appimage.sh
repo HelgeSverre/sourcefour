@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Builds an AppImage: one executable file a user downloads, marks executable,
-# and runs on any reasonably current desktop Linux, no package manager and no
-# root. cargo-dist has no AppImage support, so this is maintained alongside the
-# generated jobs, in the same shape as package-macos-pkg.sh.
+# Builds the Linux installers: an AppImage for portable use and a Debian package
+# with desktop integration. cargo-dist supports neither format, so these are
+# maintained alongside the generated jobs, in the same shape as
+# package-macos-pkg.sh.
 set -euo pipefail
 
 script_directory="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -32,7 +32,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-required_commands=(cargo sha256sum)
+required_commands=(cargo dpkg-deb sha256sum)
 for command_name in "${required_commands[@]}"; do
   if ! command -v "$command_name" >/dev/null 2>&1; then
     echo "error: required command not found: $command_name" >&2
@@ -60,7 +60,7 @@ cargo build --release --locked --package sourcefour
 
 # appimagetool mounts its own runtime through FUSE, which no CI container has.
 export APPIMAGE_EXTRACT_AND_RUN=1
-cargo packager --packages sourcefour --release --formats appimage
+cargo packager --packages sourcefour --release --formats appimage,deb
 
 built_appimage="$(find target/release -maxdepth 1 -name '*.AppImage' -print -quit)"
 if [[ -z "$built_appimage" ]]; then
@@ -68,12 +68,21 @@ if [[ -z "$built_appimage" ]]; then
   exit 1
 fi
 
+built_deb="$(find target/release -maxdepth 1 -name '*.deb' -print -quit)"
+if [[ -z "$built_deb" ]]; then
+  echo "error: cargo-packager did not produce a Debian package in target/release" >&2
+  exit 1
+fi
+
 mkdir -p "$output_directory"
 # Version-less on purpose; see the same note in package-macos-pkg.sh.
 package_name="sourcefour-x86_64-unknown-linux-gnu.AppImage"
 package_path="$output_directory/$package_name"
-rm -f "$package_path" "$package_path.sha256"
+deb_name="sourcefour-x86_64-unknown-linux-gnu.deb"
+deb_path="$output_directory/$deb_name"
+rm -f "$package_path" "$package_path.sha256" "$deb_path" "$deb_path.sha256"
 mv "$built_appimage" "$package_path"
+mv "$built_deb" "$deb_path"
 chmod +x "$package_path"
 
 # An AppImage that cannot list its own contents is not one a user can run.
@@ -82,10 +91,18 @@ if ! "$package_path" --appimage-offset >/dev/null; then
   exit 1
 fi
 
+# Check both the control metadata and archive payload. A malformed package can
+# otherwise make it all the way to a release before a user discovers it.
+dpkg-deb --info "$deb_path" >/dev/null
+dpkg-deb --contents "$deb_path" | grep ' \./usr/bin/sourcefour$' >/dev/null
+dpkg-deb --contents "$deb_path" | grep ' \./usr/share/applications/.*\.desktop$' >/dev/null
 (
   cd "$output_directory"
   sha256sum "$package_name" > "$package_name.sha256"
+  sha256sum "$deb_name" > "$deb_name.sha256"
 )
 
 echo "Created installer: $package_path"
 echo "Created checksum:  $package_path.sha256"
+echo "Created installer: $deb_path"
+echo "Created checksum:  $deb_path.sha256"
