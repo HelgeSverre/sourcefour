@@ -860,7 +860,6 @@ section {
 .brand-lockup.dark { background: var(--chrome); }
 .brand-lockup.light { background: #f2f4f7; color: #12151b; }
 .brand-lockup strong { font-family: var(--font-mono); font-size: clamp(1.7rem, 4vw, 2.8rem); letter-spacing: -0.07em; }
-.brand-lockup strong span { color: var(--accent); font-weight: 500; }
 
 .brand-principles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-top: 16px; }
 .brand-principles article { padding: 24px; border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--panel); }

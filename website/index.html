@@ -32,7 +32,6 @@
     <div class="nav-links">
       <a class="hide-sm" href="#features">Features</a>
       <a href="releases.html">Releases</a>
-      <a class="hide-sm" href="brand.html">Brand</a>
       <a class="hide-sm" href="https://github.com/HelgeSverre/sourcefour">GitHub</a>
       <a class="btn" href="#download">Download</a>
     </div>
@@ -43,8 +42,8 @@
   <div class="wrap">
     <h1 aria-label="Sourcefour">Source<span class="sfx" id="sfx" aria-hidden="true"><em>four</em></span></h1>
     <p class="lede">
-      One command in any repository: the graph, the worktrees, the diffs — live,
-      native, and asking for nothing. No account, no daemon, no configuration.
+      A native Git client that opens where you are. The commit graph, your
+      worktrees, every diff. Fast, and in sync with the terminal.
     </p>
 
     <div class="install">
@@ -114,10 +113,10 @@
     <div class="row">
       <div>
         <p class="eyebrow">The graph</p>
-        <h2>Every line of development, drawn properly</h2>
+        <h2>Branches and merges, side by side</h2>
         <p>Merges show both parents. Octopus merges show all of them. Each line of
         development keeps its own colour from tip to root, and the commit you have
-        checked out wears a halo.</p>
+        checked out gets a highlighted ring.</p>
         <p>Lanes are assigned by an incremental algorithm as commits stream in, so the
         drawing stays correct while history is still loading.</p>
       </div>
@@ -132,9 +131,9 @@
       </div>
       <div class="copy-cell">
         <p class="eyebrow">The sidebar</p>
-        <h2>Worktrees are not an afterthought</h2>
+        <h2>All your worktrees in one place</h2>
         <p>Linked worktrees sit at the top of the sidebar with the branch each one has
-        checked out — locked, detached, or sitting on a drive you unplugged. Branches
+        checked out: locked, detached, or sitting on a drive you unplugged. Branches
         carry their ahead/behind counts; remotes carry their tracking branches.</p>
         <p>Click a branch to scope history to it. Click again to widen back out.</p>
       </div>
@@ -165,20 +164,20 @@
             <span class="wt-badge missing">missing</span>
           </div>
         </div>
-        <p class="cell-note">The odd states too — a lock, a detached HEAD, a checkout
-        on a drive that left. Straight from the plumbing, never a guess.</p>
+        <p class="cell-note">Including the odd states: a lock, a detached HEAD, or a
+        checkout on a drive that's gone. Read directly from Git, not inferred.</p>
       </div>
     </div>
 
     <div class="row">
       <div>
         <p class="eyebrow">Diffs</p>
-        <h2>Read the change without leaving the window</h2>
+        <h2>Click a file, read the diff</h2>
         <p>Click any changed file and its diff fills the window, syntax-highlighted and
         monospaced, with word-level changes and old and new line numbers where Git puts
         them. Escape closes it.</p>
-        <p>The scrollbar is a scrubber: grab it and fly through a ten-thousand-line diff
-        without lifting your hand.</p>
+        <p>The scrollbar doubles as a scrubber, so you can jump through a
+        ten-thousand-line diff without scrolling line by line.</p>
       </div>
       <div class="frame zoom focus-left">
         <img src="screenshots/diff.png" alt="The diff overlay showing a unified diff with added and removed lines and hunk headers.">
@@ -188,7 +187,7 @@
     <div class="row duo-row">
       <div class="duo-copy">
         <p class="eyebrow">Side by side</p>
-        <h2>Unified or split, whichever you think in</h2>
+        <h2>Switch between unified and split</h2>
         <p>One click swaps the layout, and the choice is remembered the next time you
         open a diff. Similar additions and deletions are aligned, context folds out of
         the way, and wrapping is available when a long line needs it.</p>
@@ -208,7 +207,7 @@
     <div class="row">
       <div>
         <p class="eyebrow">Images</p>
-        <h2>Image changes you can actually see</h2>
+        <h2>Image diffs, rendered as images</h2>
         <p>PNG, JPEG, GIF, WebP and friends open as pictures, not as a note saying the
         file is binary. Drag the divider to wipe between before and after, or switch to
         side by side when you want both at once.</p>
@@ -223,7 +222,7 @@
     <div class="row flip">
       <div>
         <p class="eyebrow">GitHub Actions</p>
-        <h2>CI failures, explained on arrival</h2>
+        <h2>See why a run failed, immediately</h2>
         <p>Click a run and the failing job is already selected, the failing step already
         open, the log already scrolled to the first error. No tabs, no spinners, no
         digging.</p>
@@ -241,29 +240,29 @@
 
 <section class="band subhero">
   <div class="wrap">
-    <h2>Keep the <span class="hl">command&nbsp;line</span></h2>
-    <p>Sourcefour watches the repository itself. Commit, rebase, branch and tag from
-    your terminal — the window follows along, without losing your selection or your
-    scroll. There is no refresh button, because there is nothing to refresh.</p>
+    <h2>Opens <span class="hl">where you are</span></h2>
+    <p>Run it from inside a repository and it opens straight to that repo's history.
+    No picker, no setup. Commit, rebase, or tag from your terminal and the window
+    updates itself.</p>
   </div>
 </section>
 
 <section>
   <div class="wrap">
     <p class="eyebrow">What you get</p>
-    <h2 style="font-size: var(--text-2xl); max-width: 18ch;">A history browser, complete on the first launch</h2>
+    <h2 style="font-size: var(--text-2xl); max-width: 18ch;">No plugins, no setup, no waiting</h2>
     <div class="grid">
       <div class="card">
         <span class="n">01</span>
         <h3>Worktrees out of the box</h3>
-        <p>Every linked worktree appears with its branch, its path and its state —
+        <p>Every linked worktree appears with its branch, its path and its state:
         locked, detached, or missing its checkout entirely.</p>
       </div>
       <div class="card">
         <span class="n">02</span>
         <h3>Always live</h3>
         <p>Branches created, tags pushed and commits made outside the app show up on
-        their own, without a poll you can feel.</p>
+        their own, without a noticeable delay.</p>
       </div>
       <div class="card">
         <span class="n">03</span>
@@ -296,10 +295,9 @@
 <section id="download" class="band">
   <div class="wrap">
     <p class="eyebrow">Download</p>
-    <h2>Free, and free of charge</h2>
-    <p>Sourcefour is open source under MIT. Every tagged release is built
-    by CI for all three platforms, after the test suite has passed on each of them. The
-    macOS installer is signed and notarized by Apple.</p>
+    <h2>Free and open source</h2>
+    <p>Sourcefour is open source under MIT. The macOS installer is signed and
+    notarized by Apple.</p>
 
     <div class="downloads">
       <a class="dl" href="https://github.com/HelgeSverre/sourcefour/releases/latest/download/sourcefour-universal-apple-darwin.pkg">
@@ -331,9 +329,8 @@
           <img src="logo.svg" alt="" width="22" height="22">
           Sourcefour
         </a>
-        <p class="foot-blurb">A Git history browser from
-          <a href="https://lisethsolutions.no/">Liseth Solutions AS</a>,
-          built for people who keep a terminal open.</p>
+        <p class="foot-blurb">A native Git history browser, launched from
+          your terminal. No daemon, no account required.</p>
       </div>
       <div class="foot-links">
         <h4>Resources</h4>
@@ -346,7 +343,6 @@
     </div>
     <div class="foot-legal">
       <span>© 2026 <a href="https://lisethsolutions.no/">Liseth Solutions AS</a>. MIT.</span>
-      <span>Reads repositories with gitoxide, draws them with GPU-rendered native UI. No Electron, no telemetry, no account.</span>
     </div>
   </div>
 </footer>
