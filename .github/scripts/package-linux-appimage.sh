@@ -94,8 +94,15 @@ fi
 # Check both the control metadata and archive payload. A malformed package can
 # otherwise make it all the way to a release before a user discovers it.
 dpkg-deb --info "$deb_path" >/dev/null
-dpkg-deb --contents "$deb_path" | grep ' \./usr/bin/sourcefour$' >/dev/null
-dpkg-deb --contents "$deb_path" | grep ' \./usr/share/applications/.*\.desktop$' >/dev/null
+deb_contents="$(dpkg-deb --fsys-tarfile "$deb_path" | tar -tf -)"
+if ! grep -Eq '^\.?/?usr/bin/sourcefour$' <<<"$deb_contents"; then
+  echo "error: Debian package does not contain usr/bin/sourcefour" >&2
+  exit 1
+fi
+if ! grep -Eq '^\.?/?usr/share/applications/.*\.desktop$' <<<"$deb_contents"; then
+  echo "error: Debian package does not contain a desktop entry" >&2
+  exit 1
+fi
 (
   cd "$output_directory"
   sha256sum "$package_name" > "$package_name.sha256"
