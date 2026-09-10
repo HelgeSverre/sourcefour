@@ -431,7 +431,7 @@ mod tests {
             else {
                 panic!("SVG renders");
             };
-            let id = image.id;
+            let id = image.id();
             view.toggle_preview(false, cx);
             assert!(view.diff_rows_len() > 0, "Source still has diff lines");
             id
@@ -457,7 +457,7 @@ mod tests {
             else {
                 panic!("preview stays loaded");
             };
-            assert_eq!(image.id, image_id, "toggle reuses the rendered image");
+            assert_eq!(image.id(), image_id, "toggle reuses the rendered image");
         });
     }
 

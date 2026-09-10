@@ -174,7 +174,7 @@ impl Oid {
             length => return Err(OidParseError::InvalidLength { length }),
         };
         let mut bytes = [0; 32];
-        for (index, pair) in value.as_bytes().chunks_exact(2).enumerate() {
+        for (index, pair) in value.as_bytes().as_chunks::<2>().0.iter().enumerate() {
             let high = hex_value(pair[0]).ok_or(OidParseError::InvalidHex { index: index * 2 })?;
             let low = hex_value(pair[1]).ok_or(OidParseError::InvalidHex {
                 index: index * 2 + 1,

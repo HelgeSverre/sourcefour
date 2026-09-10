@@ -518,10 +518,8 @@ fn byte_size(bytes: u64) -> String {
     }
 }
 
-/// Wraps encoded image bytes as a gpui image with a fresh cache id.
+/// Wraps encoded image bytes as a gpui image.
 pub(super) fn render_image(bytes: Option<&[u8]>, format: &str) -> Option<Arc<gpui::Image>> {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static NEXT_IMAGE_ID: AtomicU64 = AtomicU64::new(1);
     let format = match format {
         "png" => gpui::ImageFormat::Png,
         "jpeg" => gpui::ImageFormat::Jpeg,
@@ -531,28 +529,21 @@ pub(super) fn render_image(bytes: Option<&[u8]>, format: &str) -> Option<Arc<gpu
         "tiff" => gpui::ImageFormat::Tiff,
         _ => return None,
     };
-    bytes.map(|bytes| {
-        Arc::new(gpui::Image {
-            format,
-            bytes: bytes.to_vec(),
-            id: NEXT_IMAGE_ID.fetch_add(1, Ordering::Relaxed),
-        })
-    })
+    bytes.map(|bytes| Arc::new(gpui::Image::from_bytes(format, bytes.to_vec())))
 }
 
 /// One image element in a diff pane, identified so gpui will animate it.
 ///
 /// gpui only steps a multi-frame image forward for an element it can keep
 /// state against, so a bare `img` leaves every animated GIF on frame zero. The
-/// id carries the image's own identity: it must stay the same across frames
-/// (or the animation restarts every paint) and differ between the two images
-/// the slider shows at once, which the wrapper's process-unique counter gives
-/// for free. It also keeps a stale frame index off a shorter image — gpui
-/// indexes its frame list bare.
+/// id carries the image's own content-derived identity: it must stay the same
+/// across frames (or the animation restarts every paint) and differ between
+/// distinct images the slider shows at once. It also keeps a stale frame index
+/// off a shorter image — gpui indexes its frame list bare.
 ///
 /// An id alone adds no hitbox, so the slider's drag handling is untouched.
 fn media_image(image: Arc<gpui::Image>) -> gpui::Stateful<gpui::Img> {
-    let id = image.id;
+    let id = image.id();
     gpui::img(image).id(("diff-image", id))
 }
 
@@ -1354,10 +1345,9 @@ impl SourcefourWindow {
         }
         let element = match &view.content {
             Some(DiffContent::Text(_)) if view.mode == DiffMode::Split => uniform_list(
-                cx.entity(),
                 "diff-split-rows",
                 view.rows().len(),
-                move |this, range, _window, cx| {
+                cx.processor(move |this, range: std::ops::Range<usize>, _window, cx| {
                     let Some(view) = this.diff_view.as_ref() else {
                         return Vec::new();
                     };
@@ -1365,7 +1355,7 @@ impl SourcefourWindow {
                         .filter_map(|index| view.rows().get(index).cloned().map(|row| (index, row)))
                         .map(|(index, row)| this.split_row_view(view, index, &row, cx))
                         .collect()
-                },
+                }),
             )
             .with_width_from_item(view.widest_row())
             .with_horizontal_sizing_behavior(ListHorizontalSizingBehavior::Unconstrained)
@@ -1373,10 +1363,9 @@ impl SourcefourWindow {
             .size_full()
             .into_any_element(),
             Some(DiffContent::Text(_)) => uniform_list(
-                cx.entity(),
                 "diff-lines",
                 line_count,
-                move |this, range, _window, cx| {
+                cx.processor(move |this, range: std::ops::Range<usize>, _window, cx| {
                     let Some(view) = this.diff_view.as_ref() else {
                         return Vec::new();
                     };
@@ -1384,7 +1373,7 @@ impl SourcefourWindow {
                         .filter_map(|index| view.rows().get(index).cloned().map(|row| (index, row)))
                         .map(|(index, row)| this.diff_line_row(view, index, &row, cx))
                         .collect()
-                },
+                }),
             )
             .with_width_from_item(view.widest_row())
             .with_horizontal_sizing_behavior(ListHorizontalSizingBehavior::Unconstrained)

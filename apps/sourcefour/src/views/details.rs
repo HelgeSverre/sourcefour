@@ -394,10 +394,9 @@ impl SourcefourWindow {
                     .pb(px(6.0))
                     .child(
                         uniform_list(
-                            cx.entity(),
                             "details-files-scroll",
                             self.files.as_ref().map_or(0, |files| files.files.len()),
-                            |this, visible, _, cx| {
+                            cx.processor(|this, visible: std::ops::Range<usize>, _, cx| {
                                 let Some(files) = &this.files else {
                                     return Vec::new();
                                 };
@@ -409,7 +408,7 @@ impl SourcefourWindow {
                                             .map(|file| this.file_row(index, file, None, cx))
                                     })
                                     .collect()
-                            },
+                            }),
                         )
                         .track_scroll(self.details_files_scroll.clone())
                         .size_full(),
@@ -502,10 +501,9 @@ impl SourcefourWindow {
             .as_ref()
             .map_or(2, |status| status.staged.len() + status.unstaged.len() + 2);
         uniform_list(
-            cx.entity(),
             "working-tree-files-scroll",
             count,
-            |this, visible, _, cx| {
+            cx.processor(|this, visible: std::ops::Range<usize>, _, cx| {
                 let empty = WorkingTreeStatus::default();
                 let status = this.working_tree_status.as_ref().unwrap_or(&empty);
                 visible
@@ -520,7 +518,7 @@ impl SourcefourWindow {
                         })
                     })
                     .collect()
-            },
+            }),
         )
         .track_scroll(self.working_tree_files_scroll.clone())
     }

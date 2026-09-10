@@ -105,6 +105,7 @@ fn paint_shape(
                     gpui::outline(
                         circle(origin, x, y, HALO_RADIUS),
                         color.opacity(HALO_OPACITY),
+                        gpui::BorderStyle::default(),
                     )
                     .corner_radii(px(HALO_RADIUS)),
                 );
@@ -232,10 +233,9 @@ impl SourcefourWindow {
         let now = self.now_seconds();
         div().size_full().bg(self.theme.bg_list).child(
             uniform_list(
-                cx.entity(),
                 "history",
                 self.history.visible_len(),
-                move |this, visible, _window, cx| {
+                cx.processor(move |this, visible: std::ops::Range<usize>, _window, cx| {
                     // Scrolling near the tail is what asks for the next batch.
                     if this.history.wants_more(visible.end) {
                         this.request_batch(cx);
@@ -244,7 +244,7 @@ impl SourcefourWindow {
                         .clone()
                         .map(|index| this.commit_row(index, columns, now, cx))
                         .collect()
-                },
+                }),
             )
             .track_scroll(self.list_scroll.clone())
             .size_full(),

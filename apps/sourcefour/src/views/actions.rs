@@ -1380,10 +1380,9 @@ impl SourcefourWindow {
                     .child(message.clone())
                     .into_any_element(),
                 _ => uniform_list(
-                    cx.entity(),
                     "actions-jobs",
                     view.jobs_ok().len(),
-                    move |this, range, _window, cx| {
+                    cx.processor(move |this, range: std::ops::Range<usize>, _window, cx| {
                         range
                             .filter_map(|index| {
                                 this.actions
@@ -1396,7 +1395,7 @@ impl SourcefourWindow {
                             })
                             .map(|(index, job)| this.actions_job_row(index, &job, cx))
                             .collect()
-                    },
+                    }),
                 )
                 .track_scroll(self.actions_jobs_scroll.clone())
                 .flex_1()
@@ -1708,10 +1707,9 @@ impl SourcefourWindow {
                 };
                 let shown = end - start;
                 let list = uniform_list(
-                    cx.entity(),
                     "actions-log",
                     shown,
-                    move |this, range, window, cx| {
+                    cx.processor(move |this, range: std::ops::Range<usize>, window, cx| {
                         let Some((start, end, _)) = this.actions_log_window() else {
                             return Vec::new();
                         };
@@ -1731,7 +1729,7 @@ impl SourcefourWindow {
                                 Some(this.actions_log_line(line, job_id?, index, window, cx))
                             })
                             .collect()
-                    },
+                    }),
                 )
                 .track_scroll(self.actions_log_scroll.clone())
                 .h(px(row_count_as_f32(shown.min(16)) * LOG_ROW_HEIGHT + 8.0))

@@ -6,7 +6,7 @@
 //! writes the file immediately; there is no separate save step.
 
 use crate::context_menu::{ContextMenuExt as _, PrimaryClickExt as _};
-use gpui::{Div, FocusableWrapper, FontWeight, div, prelude::*, px, svg};
+use gpui::{Div, FontWeight, div, prelude::*, px, svg};
 
 use crate::{
     settings::{AppSettings, AuthMethod, DateDisplay, Density},
@@ -80,7 +80,7 @@ pub(crate) enum GithubConnection {
 pub(crate) fn overlay(
     view: &SettingsView<'_>,
     cx: &mut gpui::Context<SourcefourWindow>,
-) -> FocusableWrapper<gpui::Stateful<Div>> {
+) -> gpui::Stateful<Div> {
     let theme = view.theme;
     crate::views::modal_backdrop("settings-overlay", theme)
         .key_context("Settings")
