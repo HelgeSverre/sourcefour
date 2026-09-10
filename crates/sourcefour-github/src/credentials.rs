@@ -184,7 +184,9 @@ fn write_private(path: &Path, contents: &str) -> std::io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{delete_token, load_token, run_bounded, store_token};
+    #[cfg(unix)]
+    use super::run_bounded;
+    use super::{delete_token, load_token, store_token};
 
     #[test]
     fn tokens_round_trip_per_host() -> Result<(), Box<dyn std::error::Error>> {
