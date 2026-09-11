@@ -45,6 +45,9 @@ fn paint_graph(
         .min(first + usize_from_f32((viewport / row_height).ceil()) + 1);
     window.with_content_mask(Some(gpui::ContentMask { bounds }), |window| {
         for index in first..last {
+            if index == 0 && history.working_tree_row_visible() {
+                continue;
+            }
             let Some(graph) = history.layout_at(index) else {
                 break;
             };
