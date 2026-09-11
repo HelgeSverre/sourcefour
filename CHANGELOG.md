@@ -2,11 +2,12 @@
 
 All notable changes to Sourcefour are documented in this file.
 
-## [Unreleased]
+## [0.1.3] - 2026-09-12
 
 ### Fixed
 
-- Linux startup panic caused by missing X11 and Wayland support in release builds.
+- Linux startup panic caused by missing X11 and Wayland support in release builds
+  ([#4](https://github.com/HelgeSverre/sourcefour/issues/4)).
 - Missing minimize, maximize/restore, and close buttons on Windows and Linux,
   while preserving native macOS controls and Linux desktop button preferences.
 - Windows caption-button clicks being swallowed before native window handling.
@@ -64,6 +65,7 @@ Initial public release.
 - Repository discovery and worktree handling across Windows path forms.
 - Text input, scrolling, overlay, diff-layout, and Actions-status edge cases.
 
+[0.1.3]: https://github.com/HelgeSverre/sourcefour/releases/tag/v0.1.3
 [0.1.2]: https://github.com/HelgeSverre/sourcefour/releases/tag/v0.1.2
 [0.1.1]: https://github.com/HelgeSverre/sourcefour/releases/tag/v0.1.1
 [0.1.0]: https://github.com/HelgeSverre/sourcefour/releases/tag/v0.1.0
