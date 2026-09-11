@@ -730,6 +730,8 @@ pub(crate) fn toolbar_button(theme: &Theme, cx: &mut gpui::Context<SourcefourWin
     div().flex_none().child(
         div()
             .id("settings-action")
+            .occlude()
+            .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .size(px(26.0))
             .flex()
             .items_center()

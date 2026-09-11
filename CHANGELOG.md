@@ -2,6 +2,15 @@
 
 All notable changes to Sourcefour are documented in this file.
 
+## [Unreleased]
+
+### Fixed
+
+- Linux startup panic caused by missing X11 and Wayland support in release builds.
+- Missing minimize, maximize/restore, and close buttons on Windows and Linux,
+  while preserving native macOS controls and Linux desktop button preferences.
+- Windows caption-button clicks being swallowed before native window handling.
+
 ## [0.1.2] - 2026-09-11
 
 ### Added

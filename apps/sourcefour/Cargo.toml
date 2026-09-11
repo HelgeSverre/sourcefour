@@ -15,7 +15,8 @@ path = "src/main.rs"
 
 [dependencies]
 gpui = { git = "https://github.com/zed-industries/zed", package = "gpui", rev = "3405c42f6756fcf7f3a66ccb12090a59c9dff30a" }
-gpui_platform = { git = "https://github.com/zed-industries/zed", package = "gpui_platform", rev = "3405c42f6756fcf7f3a66ccb12090a59c9dff30a", features = ["font-kit"] }
+# gpui_platform has no default display backends; Linux needs these explicitly.
+gpui_platform = { git = "https://github.com/zed-industries/zed", package = "gpui_platform", rev = "3405c42f6756fcf7f3a66ccb12090a59c9dff30a", features = ["font-kit", "wayland", "x11"] }
 gix-imara-diff.workspace = true
 resvg.workspace = true
 serde.workspace = true

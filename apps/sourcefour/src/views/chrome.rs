@@ -10,7 +10,7 @@ use sourcefour_model::{FetchRequest, OperationOutcome, OperationProgress, RepoSn
 
 use crate::{
     panels::Splitter,
-    theme::{SPLITTER_WIDTH, STATUS_HEIGHT, TITLEBAR_HEIGHT, TOOLBAR_HEIGHT, Theme},
+    theme::{SPLITTER_WIDTH, STATUS_HEIGHT, TOOLBAR_HEIGHT, Theme},
 };
 
 use super::{SourcefourWindow, counted, head_label};
@@ -156,9 +156,13 @@ fn window_title(name: &str, path: &str) -> String {
 }
 
 impl SourcefourWindow {
-    pub(super) fn titlebar(&self, cx: &mut gpui::Context<Self>) -> impl IntoElement {
-        div()
-            .id("titlebar")
+    pub(super) fn titlebar(
+        &self,
+        window: &Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> impl IntoElement {
+        self.window_chrome
+            .titlebar(window, cx, &self.theme)
             .on_context_menu(
                 cx.listener(|this, event: &gpui::MouseDownEvent, window, cx| {
                     if let Some(location) = &this.location {
@@ -175,29 +179,19 @@ impl SourcefourWindow {
                     }
                 }),
             )
-            .h(px(TITLEBAR_HEIGHT))
-            .flex_none()
-            .flex()
-            .items_center()
-            // Clear of the traffic lights, the way Zed starts its title.
-            .pl(px(76.0))
-            .pr(px(8.0))
-            .gap(px(8.0))
-            .border_b_1()
-            .border_color(self.theme.border)
-            .bg(self.theme.bg_chrome)
-            .text_size(px(12.5))
-            .text_color(self.theme.text_secondary)
-            // The native titlebar gesture: double-click zooms the window —
-            // macOS zoom, not fullscreen.
-            .on_primary_click(|event: &gpui::ClickEvent, window, _| {
-                if matches!(event, gpui::ClickEvent::Mouse(event) if event.up.click_count == 2) {
-                    window.zoom_window();
-                }
-            })
-            .child(window_title(&self.name, &self.path))
+            .child(
+                div()
+                    .min_w_0()
+                    .text_ellipsis()
+                    .child(window_title(&self.name, &self.path)),
+            )
             .child(div().flex_grow_1())
             .child(crate::settings_ui::toolbar_button(&self.theme, cx))
+            .child(crate::window_chrome::right_controls(
+                window,
+                cx,
+                &self.theme,
+            ))
     }
 
     pub(super) fn toolbar(

@@ -15,6 +15,7 @@ mod text_input;
 mod theme;
 mod ui_state;
 mod views;
+mod window_chrome;
 
 use std::{env, ffi::OsString, path::PathBuf, process::ExitCode};
 

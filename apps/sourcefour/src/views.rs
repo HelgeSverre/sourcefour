@@ -85,6 +85,7 @@ pub(crate) struct SourcefourWindow {
     /// Owned between batches; moved to a worker while one is in flight.
     cursor: Option<GixHistoryCursor>,
     theme: Theme,
+    window_chrome: crate::window_chrome::WindowChrome,
     sections: SidebarSections,
     /// Collapsed slash-delimited folders in the local branch tree.
     collapsed_branch_folders: std::collections::HashSet<String>,
@@ -413,6 +414,7 @@ impl SourcefourWindow {
             history: HistoryState::default(),
             cursor: None,
             theme: Theme::dark(),
+            window_chrome: crate::window_chrome::WindowChrome::default(),
             sections: SidebarSections::default(),
             collapsed_branch_folders: std::collections::HashSet::new(),
             panels: PanelSizes::default(),
@@ -1642,7 +1644,7 @@ impl Render for SourcefourWindow {
             .flex_col()
             .bg(self.theme.bg_page)
             .text_color(self.theme.text_primary)
-            .child(self.titlebar(cx))
+            .child(self.titlebar(window, cx))
             .child(self.toolbar(window, cx))
             .child(
                 div()
@@ -1772,6 +1774,7 @@ pub(crate) fn modal_panel(id: &'static str, theme: &Theme) -> gpui::Stateful<Div
 pub(crate) struct ErrorWindow {
     menus: gpui::Entity<crate::context_menu::MenuHost>,
     theme: Theme,
+    window_chrome: crate::window_chrome::WindowChrome,
     title: String,
     message: String,
     /// The pasted-or-typed path; submission reads it back out. Focused when
@@ -1839,6 +1842,7 @@ impl ErrorWindow {
         Self {
             menus,
             theme,
+            window_chrome: crate::window_chrome::WindowChrome::default(),
             title,
             message,
             path_input,
@@ -1975,6 +1979,7 @@ impl Render for ErrorWindow {
         let divider = || div().flex_1().h(px(1.0)).bg(theme.border);
         div()
             .id("repo-picker")
+            .relative()
             .key_context(if self.menus.read(cx).is_open() {
                 "MenuRoot"
             } else {
@@ -2057,6 +2062,17 @@ impl Render for ErrorWindow {
                     .child(divider()),
             )
             .child(self.browse_zone(window, cx))
+            .child(
+                self.window_chrome
+                    .titlebar(window, cx, &theme)
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .right_0()
+                    .child("Sourcefour")
+                    .child(div().flex_grow_1())
+                    .child(crate::window_chrome::right_controls(window, cx, &theme)),
+            )
             .child(self.menus.clone())
     }
 }

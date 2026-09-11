@@ -357,6 +357,7 @@ fn window_options(
             appears_transparent: true,
             traffic_light_position: Some(gpui::point(px(10.0), px(13.0))),
         }),
+        app_owns_titlebar_drag: true,
         window_bounds: Some(window_bounds),
         window_min_size: minimum.map(|(width, height)| size(px(width), px(height))),
         ..Default::default()
@@ -450,6 +451,10 @@ const ASSETS: &[(&str, &[u8])] = &[
     asset!("icons/globe.svg"),
     asset!("icons/search.svg"),
     asset!("icons/settings.svg"),
+    asset!("icons/window-minimize.svg"),
+    asset!("icons/window-maximize.svg"),
+    asset!("icons/window-restore.svg"),
+    asset!("icons/window-close.svg"),
 ];
 
 impl AssetSource for SourcefourAssets {
