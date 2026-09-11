@@ -334,6 +334,20 @@ impl SourcefourWindow {
         )
     }
 
+    /// Whether a connection check can run without user input: `gh` CLI auth
+    /// is checked live regardless, a pasted token needs one already stored.
+    pub(crate) fn has_github_credentials(&self) -> bool {
+        use crate::settings::AuthMethod;
+
+        match self.settings.github.auth_method {
+            AuthMethod::GhCli => true,
+            AuthMethod::Token => credentials_path().is_some_and(|path| {
+                sourcefour_github::load_token(&path, sourcefour_github::GITHUB_HOST).is_some()
+            }),
+            AuthMethod::Off => false,
+        }
+    }
+
     /// Stores the pasted token (if any) and verifies the connection with
     /// `GET /user` on the background executor (§ settings, GitHub).
     pub(crate) fn connect_github(&mut self, cx: &mut gpui::Context<Self>) {

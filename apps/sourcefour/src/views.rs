@@ -514,6 +514,9 @@ impl SourcefourWindow {
             window.load_metadata(location.clone(), cx);
             Self::watch_metadata(location, cx);
         }
+        if !launch.demo && window.has_github_credentials() {
+            window.connect_github(cx);
+        }
         window.focus.focus(gpui_window, cx);
         window
     }
