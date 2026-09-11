@@ -547,6 +547,17 @@ impl SourcefourWindow {
                     self.history.rows.len()
                 ))
             }))
+            .children(self.history.scope.as_ref().and_then(|scope| match scope {
+                sourcefour_model::HistoryScope::Ref { full_name, .. } => {
+                    let short_name = full_name.rsplit('/').next().unwrap_or(full_name);
+                    Some(
+                        div()
+                            .text_color(self.theme.accent)
+                            .child(format!("Scoped to {short_name} — click again to show all")),
+                    )
+                }
+                sourcefour_model::HistoryScope::AllRefs => None,
+            }))
             .child(div().flex_grow_1())
             .child(self.snapshot().map_or_else(
                 || String::from("Loading repository metadata..."),
