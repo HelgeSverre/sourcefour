@@ -70,21 +70,19 @@ pkg:
 
 # Install the packaged app into /Applications.
 [group('dist')]
-install: package
-    rm -rf /Applications/Sourcefour.app
+install: package uninstall
     cp -R dist/Sourcefour.app /Applications/
     @echo "Installed /Applications/Sourcefour.app"
 
 # Remove the installed app. Settings in ~/Library/Application Support stay.
 [group('dist')]
 uninstall:
-    rm -rf /Applications/Sourcefour.app
+    @[ ! -e /Applications/Sourcefour.app ] || rm -rf /Applications/Sourcefour.app 2>/dev/null || sudo rm -rf /Applications/Sourcefour.app
     @echo "Removed /Applications/Sourcefour.app"
 
 # Reinstall the packaged app.
 [group('dist')]
-reinstall:
-    just uninstall && just install
+reinstall: install
 
 # Regenerate the app icon in every packaging format.
 [group('dist')]
