@@ -2,6 +2,32 @@
 
 All notable changes to Sourcefour are documented in this file.
 
+## [0.1.2] - 2026-09-11
+
+### Added
+
+- Status bar label showing when history is scoped to a branch.
+- Automatic GitHub connection check on startup, when credentials are already
+  usable.
+- Editable, verifiable ffmpeg/ffprobe path in Settings → Diffs, replacing the
+  settings.json-only override.
+- Website link in Settings → About.
+
+### Fixed
+
+- Commit graph not rendering until the list was scrolled, whenever the
+  working tree had uncommitted changes.
+
+## [0.1.1] - 2026-09-10
+
+### Added
+
+- Homebrew cask distribution for the macOS app.
+
+### Fixed
+
+- Debian package validation.
+
 ## [0.1.0] - 2026-09-10
 
 Initial public release.
@@ -29,4 +55,6 @@ Initial public release.
 - Repository discovery and worktree handling across Windows path forms.
 - Text input, scrolling, overlay, diff-layout, and Actions-status edge cases.
 
+[0.1.2]: https://github.com/HelgeSverre/sourcefour/releases/tag/v0.1.2
+[0.1.1]: https://github.com/HelgeSverre/sourcefour/releases/tag/v0.1.1
 [0.1.0]: https://github.com/HelgeSverre/sourcefour/releases/tag/v0.1.0
