@@ -234,6 +234,19 @@ pub fn ffmpeg_path(ffmpeg_dir: Option<&Path>) -> Option<PathBuf> {
     tools(ffmpeg_dir).map(|(ffmpeg, _)| ffmpeg.clone())
 }
 
+/// A fresh, uncached look for both tools — what a settings page wants right
+/// after the user changes `ffmpeg_dir`, instead of [`tools`]'s answer from
+/// whenever this session first probed a video.
+///
+/// # Errors
+///
+/// Returns which of the two tools did not answer `-version`.
+pub fn verify_video_tools(ffmpeg_dir: Option<&Path>) -> Result<(PathBuf, PathBuf), &'static str> {
+    let ffmpeg = resolve_tool("ffmpeg", ffmpeg_dir).ok_or("ffmpeg not found")?;
+    let ffprobe = resolve_tool("ffprobe", ffmpeg_dir).ok_or("ffprobe not found")?;
+    Ok((ffmpeg, ffprobe))
+}
+
 /// Both tools, found once per process, or nothing when either is absent.
 ///
 /// A poster needs `ffmpeg` and a caption needs `ffprobe`; a machine with one

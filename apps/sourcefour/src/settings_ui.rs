@@ -23,6 +23,8 @@ pub(crate) struct SettingsView<'a> {
     pub(crate) section: SettingsSection,
     pub(crate) connection: &'a GithubConnection,
     pub(crate) token_input: &'a gpui::Entity<crate::text_input::TextInput>,
+    pub(crate) video_tools: &'a VideoToolsStatus,
+    pub(crate) ffmpeg_input: &'a gpui::Entity<crate::text_input::TextInput>,
     pub(crate) theme: &'a Theme,
     pub(crate) focus: &'a gpui::FocusHandle,
 }
@@ -74,6 +76,19 @@ pub(crate) enum GithubConnection {
     Connected { login: String },
     /// The last check failed, with the words to show.
     Failed { message: String },
+}
+
+/// Where the last `ffmpeg`/`ffprobe` check stands, shown in the Diffs section.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) enum VideoToolsStatus {
+    /// Nothing checked yet this session; the row falls back to the cached
+    /// once-per-process lookup ([`sourcefour_git::ffmpeg_path`]).
+    #[default]
+    Idle,
+    /// Both tools answered `-version`; `ffmpeg` is where they were found.
+    Found { ffmpeg: std::path::PathBuf },
+    /// One tool did not answer, with the words to show.
+    Missing { message: String },
 }
 
 /// The full-window settings overlay: backdrop, nav, and the active section.
@@ -278,7 +293,6 @@ fn general_cards(view: &SettingsView<'_>, cx: &mut gpui::Context<SourcefourWindo
                 .row(theme, cx),
             ],
         ),
-        card(theme, vec![video_row(view.settings, theme)]),
     ]
 }
 
@@ -445,44 +459,84 @@ fn button(
 /// control is preset-based.
 fn diffs_cards(view: &SettingsView<'_>, cx: &mut gpui::Context<SourcefourWindow>) -> Vec<Div> {
     let theme = view.theme;
-    vec![card(
-        theme,
-        vec![
-            Choice {
-                id: "diff-line-height",
-                name: "Line height",
-                description: "Spacing between diff lines, as a multiple of the mono font size.",
-                choices: &[("Standard", 1.55), ("Comfortable", 1.8)],
-                active: view.settings.diff.line_height,
-                apply: |settings, height| settings.diff.line_height = height,
-            }
-            .row(theme, cx),
-        ],
-    )]
+    let rows = vec![
+        Choice {
+            id: "diff-line-height",
+            name: "Line height",
+            description: "Spacing between diff lines, as a multiple of the mono font size.",
+            choices: &[("Standard", 1.55), ("Comfortable", 1.8)],
+            active: view.settings.diff.line_height,
+            apply: |settings, height| settings.diff.line_height = height,
+        }
+        .row(theme, cx),
+        video_row(view, cx),
+        video_status_row(view.video_tools, view.settings, theme),
+    ];
+    vec![card(theme, rows)]
 }
 
-/// Whether a video diff will show a frame, and how to say where the decoder
-/// is when the search did not find it.
+/// Where `ffmpeg`/`ffprobe` are, for machines where the usual places are not
+/// where they are: a directory, since the two are installed side by side.
 ///
-/// Read-only by design: the path is a rescue for an unusual install, not a
-/// setting worth a text field in front of everyone who will never need it.
-/// The lookup is the probe's own and answers once per session, so asking here
-/// is what fixes the answer for the diffs that follow.
-fn video_row(settings: &AppSettings, theme: &Theme) -> Div {
-    let found = sourcefour_git::ffmpeg_path(settings.video.ffmpeg_dir.as_deref()).is_some();
+/// Applying the field takes effect immediately for the next Verify, but a
+/// diff already probed this session keeps whichever binaries answered first
+/// (§ `sourcefour_git::media::tools`) — that one needs a restart.
+fn video_row(view: &SettingsView<'_>, cx: &mut gpui::Context<SourcefourWindow>) -> Div {
     row(
-        theme,
+        view.theme,
         "Video posters",
-        r#"Set "video": { "ffmpeg_dir": "/path/to/bin" } in settings.json."#,
-        value_text(
-            theme,
-            if found {
-                "ffmpeg · found"
-            } else {
-                "ffmpeg · not found"
-            },
-        ),
+        "Folder holding ffmpeg and ffprobe, if not on PATH. Restart to use a changed path for diff previews.",
+        div()
+            .flex_none()
+            .flex()
+            .items_center()
+            .gap(px(8.0))
+            .child(
+                div()
+                    .w(px(240.0))
+                    .h(px(24.0))
+                    .flex()
+                    .items_center()
+                    .px(px(8.0))
+                    .rounded(px(5.0))
+                    .border_1()
+                    .border_color(view.theme.border_strong)
+                    .bg(view.theme.bg_page)
+                    .text_size(px(11.0))
+                    .child(view.ffmpeg_input.clone()),
+            )
+            .child(button(
+                view.theme,
+                "video-verify",
+                "Verify",
+                cx,
+                |this, cx| {
+                    this.verify_ffmpeg(cx);
+                },
+            )),
     )
+}
+
+/// The last verify outcome, or — before the first click — the same cached
+/// once-per-process guess the row always showed.
+fn video_status_row(status: &VideoToolsStatus, settings: &AppSettings, theme: &Theme) -> Div {
+    let (text, color) = match status {
+        VideoToolsStatus::Found { ffmpeg } => {
+            (format!("ffmpeg found · {}", ffmpeg.display()), theme.green)
+        }
+        VideoToolsStatus::Missing { message } => (message.clone(), theme.red),
+        VideoToolsStatus::Idle => {
+            if sourcefour_git::ffmpeg_path(settings.video.ffmpeg_dir.as_deref()).is_some() {
+                (String::from("ffmpeg · found"), theme.green)
+            } else {
+                (String::from("ffmpeg · not found"), theme.red)
+            }
+        }
+    };
+    div()
+        .px(px(14.0))
+        .py(px(10.0))
+        .child(div().text_size(px(11.5)).text_color(color).child(text))
 }
 
 fn about_cards(theme: &Theme, cx: &mut gpui::Context<SourcefourWindow>) -> Vec<Div> {

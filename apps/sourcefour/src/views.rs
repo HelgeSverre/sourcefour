@@ -148,6 +148,10 @@ pub(crate) struct SourcefourWindow {
     github_request: u64,
     /// The masked personal-access-token field of the GitHub section.
     token_input: gpui::Entity<crate::text_input::TextInput>,
+    /// Where the last `ffmpeg`/`ffprobe` check stands (§ settings, Diffs).
+    video_tools: crate::settings_ui::VideoToolsStatus,
+    /// The `ffmpeg_dir` field of the Diffs section.
+    ffmpeg_input: gpui::Entity<crate::text_input::TextInput>,
     /// The GitHub repository behind the remotes, when the integration is on.
     github_remote: Option<sourcefour_github::GithubRemote>,
     /// Open pull requests with their fetch time, for branch chips.
@@ -384,6 +388,15 @@ impl SourcefourWindow {
         let generation = Generation(0);
         let menus = cx.new(|cx| crate::context_menu::MenuHost::new(gpui_window, cx));
         cx.observe(&menus, |_, _, cx| cx.notify()).detach();
+        let settings = initial_settings(launch.demo);
+        let ffmpeg_input = Self::input(
+            "/opt/homebrew/bin",
+            crate::text_input::InputRole::RepoPath,
+            cx,
+        );
+        if let Some(dir) = &settings.video.ffmpeg_dir {
+            ffmpeg_input.update(cx, |input, cx| input.set_text(&dir.display().to_string(), cx));
+        }
         let mut window = Self {
             menus,
             name: launch.name,
@@ -432,7 +445,7 @@ impl SourcefourWindow {
             diff_scroll: UniformListScrollHandle::new(),
             preview_selection: None,
             preview_layouts: preview::PreviewLayouts::default(),
-            settings: initial_settings(launch.demo),
+            settings,
             settings_view: None,
             settings_focus: cx.focus_handle(),
             github_connection: crate::settings_ui::GithubConnection::Idle,
@@ -454,6 +467,8 @@ impl SourcefourWindow {
             github_runs_request: 0,
             github_status_poll: 0,
             token_input: Self::masked_token_input(cx),
+            video_tools: crate::settings_ui::VideoToolsStatus::Idle,
+            ffmpeg_input,
             juxtapose_bounds: std::rc::Rc::default(),
             preferred_diff_mode: DiffMode::Unified,
             compare_parent: DiffParent::FirstParent,
@@ -481,6 +496,7 @@ impl SourcefourWindow {
             &window.filter_input,
             &window.branch_input,
             &window.token_input,
+            &window.ffmpeg_input,
         ] {
             input.update(cx, |input, _| input.set_menu_host(window.menus.downgrade()));
         }
@@ -1309,6 +1325,23 @@ impl SourcefourWindow {
         cx.notify();
     }
 
+    /// Saves the typed `ffmpeg_dir` and checks it right now: a fresh,
+    /// uncached run of `ffmpeg -version`/`ffprobe -version`, so the settings
+    /// page answers for today rather than repeating whatever this session's
+    /// first video diff already decided.
+    pub(crate) fn verify_ffmpeg(&mut self, cx: &mut gpui::Context<Self>) {
+        let raw = self.ffmpeg_input.read(cx).text().trim().to_string();
+        let dir = (!raw.is_empty()).then(|| std::path::PathBuf::from(raw));
+        self.update_settings(cx, |settings| settings.video.ffmpeg_dir.clone_from(&dir));
+        self.video_tools = match sourcefour_git::verify_video_tools(dir.as_deref()) {
+            Ok((ffmpeg, _)) => crate::settings_ui::VideoToolsStatus::Found { ffmpeg },
+            Err(message) => crate::settings_ui::VideoToolsStatus::Missing {
+                message: message.to_string(),
+            },
+        };
+        cx.notify();
+    }
+
     /// The settings overlay, while open.
     fn settings_overlay(&self, cx: &mut gpui::Context<Self>) -> Option<impl IntoElement + use<>> {
         let section = self.settings_view?;
@@ -1318,6 +1351,8 @@ impl SourcefourWindow {
                 section,
                 connection: &self.github_connection,
                 token_input: &self.token_input,
+                video_tools: &self.video_tools,
+                ffmpeg_input: &self.ffmpeg_input,
                 theme: &self.theme,
                 focus: &self.settings_focus,
             },
