@@ -1334,7 +1334,16 @@ impl SourcefourWindow {
         let dir = (!raw.is_empty()).then(|| std::path::PathBuf::from(raw));
         self.update_settings(cx, |settings| settings.video.ffmpeg_dir.clone_from(&dir));
         self.video_tools = match sourcefour_git::verify_video_tools(dir.as_deref()) {
-            Ok((ffmpeg, _)) => crate::settings_ui::VideoToolsStatus::Found { ffmpeg },
+            Ok((ffmpeg, _)) => {
+                // Shows where the search actually found it — most useful when
+                // the field was left blank and PATH or a standard prefix
+                // answered instead of the typed directory.
+                if let Some(found_dir) = ffmpeg.parent() {
+                    self.ffmpeg_input
+                        .update(cx, |input, cx| input.set_text(&found_dir.display().to_string(), cx));
+                }
+                crate::settings_ui::VideoToolsStatus::Found { ffmpeg }
+            }
             Err(message) => crate::settings_ui::VideoToolsStatus::Missing {
                 message: message.to_string(),
             },

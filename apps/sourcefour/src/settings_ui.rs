@@ -354,20 +354,7 @@ fn github_cards(view: &SettingsView<'_>, cx: &mut gpui::Context<SourcefourWindow
                 .flex()
                 .items_center()
                 .gap(px(8.0))
-                .child(
-                    div()
-                        .w(px(220.0))
-                        .h(px(24.0))
-                        .flex()
-                        .items_center()
-                        .px(px(8.0))
-                        .rounded(px(5.0))
-                        .border_1()
-                        .border_color(theme.border_strong)
-                        .bg(theme.bg_page)
-                        .text_size(px(11.0))
-                        .child(view.token_input.clone()),
-                )
+                .child(field_box(theme, 220.0, view.token_input.clone()))
                 .child(button(
                     theme,
                     "github-connect",
@@ -424,6 +411,25 @@ fn status_row(
             }),
         );
     Some(row)
+}
+
+/// A single-line text field, styled like every other text input in the app
+/// (`border_strong` over `bg_list`) but sunk with [`Theme::recessed`] since a
+/// settings card is itself `bg_list` — without that, the field would sit
+/// flush with the card instead of reading as a control.
+fn field_box(theme: &Theme, width: f32, input: gpui::Entity<crate::text_input::TextInput>) -> Div {
+    div()
+        .w(px(width))
+        .h(px(24.0))
+        .flex()
+        .items_center()
+        .px(px(8.0))
+        .rounded(px(5.0))
+        .border_1()
+        .border_color(theme.border_strong)
+        .bg(theme.recessed())
+        .text_size(px(11.0))
+        .child(input)
 }
 
 /// A bordered chip button.
@@ -484,27 +490,14 @@ fn diffs_cards(view: &SettingsView<'_>, cx: &mut gpui::Context<SourcefourWindow>
 fn video_row(view: &SettingsView<'_>, cx: &mut gpui::Context<SourcefourWindow>) -> Div {
     row(
         view.theme,
-        "Video posters",
-        "Folder holding ffmpeg and ffprobe, if not on PATH. Restart to use a changed path for diff previews.",
+        "ffmpeg path",
+        "Folder with ffmpeg/ffprobe, if not on PATH. Restart applies it to previews.",
         div()
             .flex_none()
             .flex()
             .items_center()
             .gap(px(8.0))
-            .child(
-                div()
-                    .w(px(240.0))
-                    .h(px(24.0))
-                    .flex()
-                    .items_center()
-                    .px(px(8.0))
-                    .rounded(px(5.0))
-                    .border_1()
-                    .border_color(view.theme.border_strong)
-                    .bg(view.theme.bg_page)
-                    .text_size(px(11.0))
-                    .child(view.ffmpeg_input.clone()),
-            )
+            .child(field_box(view.theme, 240.0, view.ffmpeg_input.clone()))
             .child(button(
                 view.theme,
                 "video-verify",
@@ -548,6 +541,12 @@ fn about_cards(theme: &Theme, cx: &mut gpui::Context<SourcefourWindow>) -> Vec<D
                 "Sourcefour",
                 "A fast Git history browser.",
                 value_text(theme, concat!("Version ", env!("CARGO_PKG_VERSION"))),
+            ),
+            row(
+                theme,
+                "Website",
+                "Downloads and release notes.",
+                link(theme, "website-link", "sourcefour.dev", "https://sourcefour.dev", cx),
             ),
             row(
                 theme,
