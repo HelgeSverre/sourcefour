@@ -395,7 +395,9 @@ impl SourcefourWindow {
             cx,
         );
         if let Some(dir) = &settings.video.ffmpeg_dir {
-            ffmpeg_input.update(cx, |input, cx| input.set_text(&dir.display().to_string(), cx));
+            ffmpeg_input.update(cx, |input, cx| {
+                input.set_text(&dir.display().to_string(), cx);
+            });
         }
         let mut window = Self {
             menus,
@@ -1339,8 +1341,9 @@ impl SourcefourWindow {
                 // the field was left blank and PATH or a standard prefix
                 // answered instead of the typed directory.
                 if let Some(found_dir) = ffmpeg.parent() {
-                    self.ffmpeg_input
-                        .update(cx, |input, cx| input.set_text(&found_dir.display().to_string(), cx));
+                    self.ffmpeg_input.update(cx, |input, cx| {
+                        input.set_text(&found_dir.display().to_string(), cx);
+                    });
                 }
                 crate::settings_ui::VideoToolsStatus::Found { ffmpeg }
             }

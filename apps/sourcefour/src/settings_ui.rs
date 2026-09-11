@@ -245,55 +245,53 @@ fn content(view: &SettingsView<'_>, cx: &mut gpui::Context<SourcefourWindow>) ->
 /// The settings that belong to the window rather than to one feature of it.
 fn general_cards(view: &SettingsView<'_>, cx: &mut gpui::Context<SourcefourWindow>) -> Vec<Div> {
     let theme = view.theme;
-    vec![
-        card(
-            theme,
-            vec![
-                Choice {
-                    id: "date-display",
-                    name: "Dates",
-                    description: "How old a commit is, or the clock it was written by.",
-                    choices: &[
-                        ("Relative", DateDisplay::Relative),
-                        ("Exact", DateDisplay::Absolute),
-                    ],
-                    active: view.settings.appearance.date_display,
-                    apply: |settings, display| settings.appearance.date_display = display,
-                }
-                .row(theme, cx),
-                Choice {
-                    id: "mono-font",
-                    name: "Monospace font",
-                    description: "Diffs, hashes and logs. Any installed family works from \
+    vec![card(
+        theme,
+        vec![
+            Choice {
+                id: "date-display",
+                name: "Dates",
+                description: "How old a commit is, or the clock it was written by.",
+                choices: &[
+                    ("Relative", DateDisplay::Relative),
+                    ("Exact", DateDisplay::Absolute),
+                ],
+                active: view.settings.appearance.date_display,
+                apply: |settings, display| settings.appearance.date_display = display,
+            }
+            .row(theme, cx),
+            Choice {
+                id: "mono-font",
+                name: "Monospace font",
+                description: "Diffs, hashes and logs. Any installed family works from \
                                   settings.json; these are the ones worth a button.",
-                    choices: MONO_PRESETS,
-                    active: active_mono_font(view.settings),
-                    apply: |settings, family| {
-                        settings.appearance.mono_font = family.map(String::from);
-                    },
-                }
-                .row(theme, cx),
-                Choice {
-                    id: "history-density",
-                    name: "History density",
-                    description: "How much room each commit gets in the list.",
-                    choices: &[("Cozy", Density::Cozy), ("Compact", Density::Compact)],
-                    active: view.settings.history.density,
-                    apply: |settings, density| settings.history.density = density,
-                }
-                .row(theme, cx),
-                Choice {
-                    id: "fetch-prune",
-                    name: "Prune on fetch",
-                    description: "Drop remote branches here once the remote has deleted them.",
-                    choices: &[("Off", false), ("On", true)],
-                    active: view.settings.git.fetch_prune,
-                    apply: |settings, prune| settings.git.fetch_prune = prune,
-                }
-                .row(theme, cx),
-            ],
-        ),
-    ]
+                choices: MONO_PRESETS,
+                active: active_mono_font(view.settings),
+                apply: |settings, family| {
+                    settings.appearance.mono_font = family.map(String::from);
+                },
+            }
+            .row(theme, cx),
+            Choice {
+                id: "history-density",
+                name: "History density",
+                description: "How much room each commit gets in the list.",
+                choices: &[("Cozy", Density::Cozy), ("Compact", Density::Compact)],
+                active: view.settings.history.density,
+                apply: |settings, density| settings.history.density = density,
+            }
+            .row(theme, cx),
+            Choice {
+                id: "fetch-prune",
+                name: "Prune on fetch",
+                description: "Drop remote branches here once the remote has deleted them.",
+                choices: &[("Off", false), ("On", true)],
+                active: view.settings.git.fetch_prune,
+                apply: |settings, prune| settings.git.fetch_prune = prune,
+            }
+            .row(theme, cx),
+        ],
+    )]
 }
 
 /// The families the row offers. `None` is the platform's own, which is what
@@ -546,7 +544,13 @@ fn about_cards(theme: &Theme, cx: &mut gpui::Context<SourcefourWindow>) -> Vec<D
                 theme,
                 "Website",
                 "Downloads and release notes.",
-                link(theme, "website-link", "sourcefour.dev", "https://sourcefour.dev", cx),
+                link(
+                    theme,
+                    "website-link",
+                    "sourcefour.dev",
+                    "https://sourcefour.dev",
+                    cx,
+                ),
             ),
             row(
                 theme,
