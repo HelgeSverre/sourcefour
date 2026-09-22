@@ -2,6 +2,14 @@
 
 All notable changes to Sourcefour are documented in this file.
 
+## [0.1.4] - 2026-09-22
+
+### Fixed
+
+- Console window appearing alongside the application when launched from the
+  Start menu or Explorer on Windows
+  ([#5](https://github.com/HelgeSverre/sourcefour/issues/5)).
+
 ## [0.1.3] - 2026-09-12
 
 ### Fixed
@@ -65,6 +73,7 @@ Initial public release.
 - Repository discovery and worktree handling across Windows path forms.
 - Text input, scrolling, overlay, diff-layout, and Actions-status edge cases.
 
+[0.1.4]: https://github.com/HelgeSverre/sourcefour/releases/tag/v0.1.4
 [0.1.3]: https://github.com/HelgeSverre/sourcefour/releases/tag/v0.1.3
 [0.1.2]: https://github.com/HelgeSverre/sourcefour/releases/tag/v0.1.2
 [0.1.1]: https://github.com/HelgeSverre/sourcefour/releases/tag/v0.1.1
