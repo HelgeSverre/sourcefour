@@ -62,3 +62,44 @@ jobs:
             target/distrib/*.AppImage.sha256
             target/distrib/*.deb
             target/distrib/*.deb.sha256
+
+  smoke:
+    name: Test packaged AppImage on Ubuntu 22.04
+    needs: build
+    runs-on: ubuntu-22.04
+    # A fresh runtime environment avoids the build's development packages
+    # accidentally satisfying dependencies missing from the AppImage.
+    container: ubuntu:22.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: artifacts-build-linux-appimage
+          path: target/distrib
+      - name: Install runtime and test tools
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends \
+            binutils file libfontconfig1 libvulkan1 libxcb1 \
+            mesa-vulkan-drivers openbox x11-utils xauth xvfb
+      - name: Verify final artifact
+        run: |
+          cd target/distrib
+          sha256sum --check sourcefour-x86_64-unknown-linux-gnu.AppImage.sha256
+          chmod +x sourcefour-x86_64-unknown-linux-gnu.AppImage
+          bash ../../.github/scripts/verify-linux-appimage.sh sourcefour-x86_64-unknown-linux-gnu.AppImage
+      - name: Packaged AppImage GUI startup as an ordinary user
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: '1'
+          VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
+        run: |
+          useradd --create-home smoke
+          install -m 0755 target/distrib/sourcefour-x86_64-unknown-linux-gnu.AppImage /tmp/sourcefour.AppImage
+          install -m 0755 .github/scripts/smoke-linux.sh /tmp/smoke-linux.sh
+          runuser -u smoke -- xvfb-run -a bash /tmp/smoke-linux.sh /tmp/sourcefour.AppImage

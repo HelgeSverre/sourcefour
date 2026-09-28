@@ -32,7 +32,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-required_commands=(cargo dpkg-deb sha256sum)
+required_commands=(cargo curl dpkg-deb file objdump realpath sha256sum stat timeout)
 for command_name in "${required_commands[@]}"; do
   if ! command -v "$command_name" >/dev/null 2>&1; then
     echo "error: required command not found: $command_name" >&2
@@ -85,11 +85,11 @@ mv "$built_appimage" "$package_path"
 mv "$built_deb" "$deb_path"
 chmod +x "$package_path"
 
-# An AppImage that cannot list its own contents is not one a user can run.
-if ! "$package_path" --appimage-offset >/dev/null; then
-  echo "error: $package_path is not a runnable AppImage" >&2
-  exit 1
-fi
+# Fix cargo-packager's internal launcher permissions, then validate the final
+# image before checksumming it. A runtime-only --appimage-offset check misses
+# both an inaccessible AppRun and missing application libraries.
+bash "$script_directory/repair-linux-appimage.sh" "$package_path"
+bash "$script_directory/verify-linux-appimage.sh" "$package_path"
 
 # Check both the control metadata and archive payload. A malformed package can
 # otherwise make it all the way to a release before a user discovers it.
