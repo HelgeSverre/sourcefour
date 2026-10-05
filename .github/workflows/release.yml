@@ -65,6 +65,8 @@ jobs:
         run: cargo metadata --locked --format-version 1 --no-deps
       - name: Format
         run: cargo fmt --all -- --check
+      - name: macOS distribution contracts
+        run: python3 scripts/test-macos-distribution.py
       - name: Lint
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Tests
@@ -392,17 +394,17 @@ jobs:
           repository: "helgesverre/homebrew-tap"
           token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
           path: homebrew-tap
-      - name: Fetch signed macOS package
+      - name: Fetch signed macOS app ZIP
         run: |
           mkdir -p dist
           gh release download "$RELEASE_TAG" \
             --repo "$GITHUB_REPOSITORY" \
-            --pattern "sourcefour-universal-apple-darwin.pkg" \
+            --pattern "sourcefour-universal-apple-darwin.zip" \
             --dir dist
       - name: Commit cask
         run: |
           version="${RELEASE_TAG#v}"
-          sha256="$(shasum -a 256 dist/sourcefour-universal-apple-darwin.pkg | awk '{print $1}')"
+          sha256="$(shasum -a 256 dist/sourcefour-universal-apple-darwin.zip | awk '{print $1}')"
           mkdir -p homebrew-tap/Casks
           scripts/render-cask.sh "$version" "$sha256" > homebrew-tap/Casks/sourcefour.rb
 

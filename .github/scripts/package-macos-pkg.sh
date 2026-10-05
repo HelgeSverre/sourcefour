@@ -12,10 +12,11 @@ usage() {
   cat <<'EOF'
 Usage: .github/scripts/package-macos-pkg.sh [--unsigned] [--output-dir PATH]
 
-Build a universal Sourcefour.app and wrap it in a macOS installer package.
+Build a universal Sourcefour.app and distribute it as a PKG and an app ZIP.
 
 The default mode signs the app and installer, submits the installer to Apple's
-notary service, staples the ticket, and verifies it with Gatekeeper. Use
+notary service, staples both the installer and app, and verifies both with
+Gatekeeper (including the app extracted from the final ZIP). Use
 --unsigned only for local packaging tests.
 EOF
 }
@@ -46,7 +47,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-required_commands=(cargo codesign jq lipo pkgutil plutil productbuild rustup shasum spctl xcrun)
+required_commands=(cargo codesign ditto jq lipo pkgutil plutil productbuild rustup shasum spctl xcrun)
 for command_name in "${required_commands[@]}"; do
   if ! command -v "$command_name" >/dev/null 2>&1; then
     echo "error: required command not found: $command_name" >&2
@@ -132,7 +133,8 @@ fi
 package_name="sourcefour-universal-apple-darwin"
 package_path="$output_directory/$package_name.pkg"
 checksum_path="$package_path.sha256"
-rm -f "$package_path" "$checksum_path"
+archive_path="$output_directory/$package_name.zip"
+rm -f "$package_path" "$checksum_path" "$archive_path" "$archive_path.sha256"
 
 if [[ "$unsigned" == true ]]; then
   echo "Creating unsigned installer for local testing"
@@ -235,6 +237,15 @@ else
   xcrun stapler validate "$package_path"
   pkgutil --check-signature "$package_path"
   spctl --assess --type install --verbose=4 "$package_path"
+
+  # Apple's notary service issues tickets for nested code, including the app
+  # inside this PKG. Reuse that submission, but staple the app itself before
+  # archiving it: a PKG ticket alone does not travel with a standalone app ZIP.
+  # Do not re-sign or otherwise alter the app after this point.
+  xcrun stapler staple "$app_path"
+  xcrun stapler validate "$app_path"
+  codesign --verify --deep --strict --verbose=2 "$app_path"
+  spctl --assess --type execute --verbose=4 "$app_path"
 fi
 
 if ! pkgutil --payload-files "$package_path" | grep -Fqx './Sourcefour.app/Contents/MacOS/sourcefour'; then
@@ -242,13 +253,33 @@ if ! pkgutil --payload-files "$package_path" | grep -Fqx './Sourcefour.app/Conte
   exit 1
 fi
 
+ditto -c -k --sequesterRsrc --keepParent "$app_path" "$archive_path"
+
+# Validate what users actually extract, not just the pre-archive bundle.
+verification_directory="$(mktemp -d)"
+trap 'rm -rf "$verification_directory"' EXIT
+ditto -x -k "$archive_path" "$verification_directory"
+extracted_app="$verification_directory/Sourcefour.app"
+if [[ ! -x "$extracted_app/Contents/MacOS/sourcefour" ]]; then
+  echo "error: ZIP must contain an executable Sourcefour.app at its root" >&2
+  exit 1
+fi
+if [[ "$unsigned" != true ]]; then
+  codesign --verify --deep --strict --verbose=2 "$extracted_app"
+  xcrun stapler validate "$extracted_app"
+  spctl --assess --type execute --verbose=4 "$extracted_app"
+fi
+
 (
   cd "$output_directory"
   shasum -a 256 "$(basename "$package_path")" > "$(basename "$checksum_path")"
+  shasum -a 256 "$(basename "$archive_path")" > "$(basename "$archive_path").sha256"
 )
 
 echo "Created installer: $package_path"
 echo "Created checksum:  $checksum_path"
+echo "Created app ZIP:   $archive_path"
+echo "Created checksum:  $archive_path.sha256"
 if [[ "$unsigned" == true ]]; then
-  echo "warning: this local test installer is not signed or notarized and must not be distributed" >&2
+  echo "warning: these local test artifacts are not signed or notarized and must not be distributed" >&2
 fi

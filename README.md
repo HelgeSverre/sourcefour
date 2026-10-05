@@ -14,9 +14,23 @@ Built with [GPUI](https://www.gpui.rs) for GPU-rendered native UI and
 
 | Platform | Installer | Package manager |
 | --- | --- | --- |
-| macOS | [`.pkg`](https://github.com/HelgeSverre/sourcefour/releases/latest/download/sourcefour-universal-apple-darwin.pkg), universal, signed and notarized | `brew install --cask helgesverre/tap/sourcefour` |
+| macOS | [`.pkg`](https://github.com/HelgeSverre/sourcefour/releases/latest/download/sourcefour-universal-apple-darwin.pkg) or [app `.zip`](https://github.com/HelgeSverre/sourcefour/releases/latest/download/sourcefour-universal-apple-darwin.zip), universal, signed and notarized | `brew install --cask helgesverre/tap/sourcefour` |
 | Windows | [`.msi`](https://github.com/HelgeSverre/sourcefour/releases/latest/download/sourcefour-x86_64-pc-windows-msvc.msi), 64-bit | — |
 | Linux | [`.AppImage`](https://github.com/HelgeSverre/sourcefour/releases/latest/download/sourcefour-x86_64-unknown-linux-gnu.AppImage), x86-64 | `brew install helgesverre/tap/sourcefour` |
+
+The ZIP-based cask copies the app and links its CLI without using the macOS
+package installer. For an install without elevation, use a writable Homebrew
+prefix and application directory:
+
+```sh
+mkdir -p "$HOME/Applications"
+HOMEBREW_NO_SUDO=1 brew install --cask --appdir="$HOME/Applications" helgesverre/tap/sourcefour
+```
+
+The default `/Applications` also works without elevation when writable.
+Migrating from the old PKG cask can require one-time administrator access to
+remove its root-owned files and receipt; see the
+[migration and release checks](docs/macos-distribution.md).
 
 Those links always resolve to the newest tagged release; the filenames never
 carry a version, which is what keeps them stable. To build from source instead:
@@ -70,9 +84,10 @@ just release 0.2.0
 | Artifact | Built by | Notes |
 | --- | --- | --- |
 | Archives, checksums, Homebrew formula | cargo-dist | macOS (both arches), Linux x86-64, Windows x64 |
-| Homebrew cask | `.github/workflows/release.yml` | Installs the signed universal `.pkg` and exposes its CLI |
+| Homebrew cask | `.github/workflows/release.yml` | Installs the universal app `.zip` using the configured `appdir` and exposes its CLI |
 | `.msi` | cargo-dist + `apps/sourcefour/wix/main.wxs` | Start Menu shortcut, optional PATH entry |
 | `.pkg` | `.github/workflows/macos-pkg.yml` | Universal, signed, notarized, stapled |
+| App `.zip` | `.github/workflows/macos-pkg.yml` | Same signed universal app, with its own stapled ticket, verified after extraction |
 | `.AppImage` | `.github/workflows/linux-appimage.yml` | Built on ubuntu-22.04 for a low glibc floor |
 
 The `.pkg` and the `.AppImage` are maintained alongside the generated jobs
