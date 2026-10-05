@@ -48,6 +48,10 @@ jobs:
           $document.Load((Resolve-Path "apps/sourcefour/wix/main.wxs"))
       - name: Verify lockfile
         run: cargo metadata --locked --format-version 1 --no-deps
+      # Packaging contracts need no Apple credentials or macOS runner.
+      - name: macOS distribution contracts
+        if: runner.os == 'Linux'
+        run: python3 scripts/test-macos-distribution.py
       - name: Format
         run: cargo fmt --all -- --check
       - name: Lint

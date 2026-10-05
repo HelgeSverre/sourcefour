@@ -548,8 +548,8 @@ mod tests {
 
         let found = read(&repository)?;
 
-        assert!(found.local_branches.is_empty());
-        assert!(found.remotes.is_empty());
+        assert_eq!(found.local_branches.as_slice(), []);
+        assert_eq!(found.remotes.as_slice(), []);
         assert!(found.labels_by_object.is_empty());
         assert_eq!(found.tags_count, 0);
         Ok(())

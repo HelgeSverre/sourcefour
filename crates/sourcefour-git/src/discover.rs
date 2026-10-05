@@ -220,7 +220,7 @@ mod tests {
             discover(&directory).expect_err("the temporary directory is not a repository");
 
         assert_eq!(failure.kind, RepoFailureKind::NotARepository);
-        assert!(!failure.user.title.is_empty());
+        assert_ne!(failure.user.title, "");
         assert!(
             failure
                 .user

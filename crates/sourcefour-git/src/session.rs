@@ -53,7 +53,7 @@ mod tests {
         assert_eq!(found.display_name, "clone");
         assert_eq!(found.worktrees.len(), 2);
         assert_eq!(found.remotes.len(), 1);
-        assert!(!found.local_branches.is_empty());
+        assert_ne!(found.local_branches.as_slice(), []);
         assert!(
             found
                 .worktrees
@@ -98,7 +98,7 @@ mod tests {
         let found = snapshot(&discover(repository.path())?)?;
 
         assert_eq!(found.active_worktree, None);
-        assert!(found.worktrees.is_empty());
+        assert_eq!(found.worktrees.as_slice(), []);
         assert!(
             !found.local_branches.is_empty(),
             "a bare repository still has refs"

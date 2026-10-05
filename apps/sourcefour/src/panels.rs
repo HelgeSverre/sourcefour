@@ -84,10 +84,6 @@ impl PanelSizes {
 }
 
 #[cfg(test)]
-#[expect(
-    clippy::float_cmp,
-    reason = "sizes are set from the exact constants the tests compare against"
-)]
 mod tests {
     use crate::theme::{DETAILS_HEIGHT, GRAPH_WIDTH, SIDEBAR_WIDTH, STATUS_HEIGHT};
 

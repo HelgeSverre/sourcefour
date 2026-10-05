@@ -99,7 +99,7 @@ mod tests {
         let detail = commit_detail(&discover(repository.path())?, head(&repository)?)?;
 
         assert_eq!(detail.subject, "just a subject");
-        assert!(detail.body.is_empty());
+        assert_eq!(detail.body, "");
         Ok(())
     }
 

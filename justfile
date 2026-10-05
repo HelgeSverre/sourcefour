@@ -54,16 +54,21 @@ test filter="":
 test-crate crate:
     cargo nextest run -p {{crate}} --all-targets --locked
 
+# Packaging contract tests (mock Apple tools; real macOS checks are documented).
+[group('check')]
+test-packaging:
+    python3 scripts/test-macos-distribution.py
+
 # Pre-push gate: everything CI runs.
 [group('check')]
-check: fmt-check lint test build build-release
+check: fmt-check lint test test-packaging build build-release
 
 # Build dist/Sourcefour.app.
 [group('dist')]
 package:
     ./scripts/package.sh
 
-# Build an unsigned dist/*.pkg, to check the installer without Apple's certs.
+# Build unsigned dist/*.pkg and app ZIP for local packaging checks.
 [group('dist')]
 pkg:
     .github/scripts/package-macos-pkg.sh --unsigned --output-dir dist

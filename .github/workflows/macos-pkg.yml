@@ -9,7 +9,7 @@ permissions:
 
 jobs:
   build:
-    name: Build signed universal PKG
+    name: Build signed universal PKG and app ZIP
     runs-on: macos-15
     timeout-minutes: 90
     env:
@@ -60,7 +60,7 @@ jobs:
           APPLE_NOTARY_KEY_BASE64: ${{ secrets.APPLE_NOTARY_KEY_BASE64 }}
         run: .github/scripts/import-apple-signing-assets.sh
 
-      - name: Build, sign, and notarize universal installer
+      - name: Build, sign, and notarize universal installer and app ZIP
         env:
           APPLE_APPLICATION_SIGNING_IDENTITY: ${{ vars.APPLE_APPLICATION_SIGNING_IDENTITY }}
           APPLE_INSTALLER_SIGNING_IDENTITY: ${{ vars.APPLE_INSTALLER_SIGNING_IDENTITY }}
@@ -69,7 +69,7 @@ jobs:
           APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
         run: .github/scripts/package-macos-pkg.sh
 
-      - name: Upload installer artifact
+      - name: Upload installer and app ZIP artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: artifacts-build-macos-pkg
@@ -77,6 +77,8 @@ jobs:
           path: |
             target/distrib/*.pkg
             target/distrib/*.pkg.sha256
+            target/distrib/*.zip
+            target/distrib/*.zip.sha256
 
       - name: Upload notarization diagnostics
         if: ${{ failure() }}

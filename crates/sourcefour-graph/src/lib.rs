@@ -262,7 +262,7 @@ mod tests {
 
         state.reset();
 
-        assert!(state.lanes().is_empty());
+        assert_eq!(state.lanes(), []);
         assert_eq!(state.color(line), None);
     }
 }
