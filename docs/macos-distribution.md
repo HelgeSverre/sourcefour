@@ -175,3 +175,46 @@ appdir installs, ZIP upgrade, uninstall/settings retention, legacy cask
 upgrade and direct-PKG migration. Keep legacy elevation results separate from
 fresh ZIP results. Pending macOS checks must not be reported as passing merely
 because the portable contract tests passed.
+
+## Validation record — 2026-10-05
+
+Candidate packaging run [37277978028](https://github.com/HelgeSverre/sourcefour/actions/runs/37277978028)
+built commit `093d236c58fc6d4284f7c0c304505eef76a3fd20` (bundle version
+0.1.5) with the new ZIP pipeline. Subsequent changes before release update
+only tests, lint expectations, and documentation.
+
+Validated locally on macOS 15.6 (24G84), Apple Silicon, Homebrew
+7.0.6-70-gce46735:
+
+- PKG and ZIP SHA-256 matched the workflow artifacts.
+- PKG signature, notarization ticket, and installer Gatekeeper assessment passed.
+- The extracted app contains arm64 and x86_64 slices. Its signature, hardened
+  runtime, stapled ticket, execution Gatekeeper assessment, and
+  `syspolicy_check distribution` passed. Signing team: `9Z2L5FBZS3`
+  (Liseth Solutions AS).
+- Fresh ZIP cask installs and uninstalls passed in `~/Applications`, writable
+  `/Applications`, and a custom application path containing spaces, using a
+  temporary local test tap with the actual ZIP. All Homebrew lifecycle commands
+  used `HOMEBREW_NO_SUDO=1`; logs contained no privileged installer invocation.
+- CLI links resolved into each selected app directory, `--help` passed, and
+  the signed app's demo rendered through Launch Services. The x86_64 CLI also
+  ran under Rosetta.
+- Uninstall removed the app and CLI while preserving all support-file hashes.
+  The pre-existing 0.1.4 PKG receipt was unchanged by ZIP installs/uninstalls.
+- `just check` passed with Rust 1.99: 411 Rust tests, five portable packaging
+  tests, formatting, lint, and locked debug/release builds.
+- The [three-platform CI matrix](https://github.com/HelgeSverre/sourcefour/actions/runs/37278313238)
+  passed at `c160a54ac14a4eeacbed536cfeabba8abd2a968d`.
+
+Candidate hashes:
+
+```text
+6a7ff96ded23ad343ee48adec2e72a4b9b3eeef2b8b0429e5e7bc72be63f0a3c  sourcefour-universal-apple-darwin.pkg
+c7a8dbf634def4ce7f263b5e5e1e6f974353155f72ee5bf3e6d45f37942c5e04  sourcefour-universal-apple-darwin.zip
+```
+
+Not exercised in this environment: disconnected/quarantined first launch,
+physical Intel GUI launch, and legacy PKG cask/direct-PKG migration in a
+separate clean VM. These remain coverage limits; Rosetta and online trust
+checks do not establish those results. ZIP-to-ZIP upgrade will be checked
+against the released 0.1.6 ZIP and recorded separately.
