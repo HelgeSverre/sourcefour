@@ -2,6 +2,22 @@
 
 All notable changes to Sourcefour are documented in this file.
 
+## [0.1.6] - 2026-10-05
+
+### Fixed
+
+- Homebrew's macOS cask invoking the privileged package installer. The cask
+  now installs the signed, notarized app ZIP and links its CLI from the
+  configured application directory. Fresh installs need no sudo when the
+  Homebrew prefix and application directory are writable
+  ([#6](https://github.com/HelgeSverre/sourcefour/issues/6)).
+- Test assertions and lint expectations blocking CI with Rust 1.99.
+
+### Added
+
+- A universal macOS app ZIP alongside the existing PKG download, with a stapled
+  notarization ticket and signature/Gatekeeper checks after extraction.
+
 ## [0.1.4] - 2026-09-22
 
 ### Fixed
@@ -73,6 +89,7 @@ Initial public release.
 - Repository discovery and worktree handling across Windows path forms.
 - Text input, scrolling, overlay, diff-layout, and Actions-status edge cases.
 
+[0.1.6]: https://github.com/HelgeSverre/sourcefour/releases/tag/v0.1.6
 [0.1.4]: https://github.com/HelgeSverre/sourcefour/releases/tag/v0.1.4
 [0.1.3]: https://github.com/HelgeSverre/sourcefour/releases/tag/v0.1.3
 [0.1.2]: https://github.com/HelgeSverre/sourcefour/releases/tag/v0.1.2
