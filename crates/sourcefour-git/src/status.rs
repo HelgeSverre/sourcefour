@@ -226,7 +226,7 @@ mod tests {
             status.staged[0].new_path.as_ref().map(|p| p.0.as_slice()),
             Some(b"new/name.rs".as_slice())
         );
-        assert!(status.unstaged.is_empty());
+        assert_eq!(status.unstaged.as_slice(), []);
     }
 
     #[test]
@@ -238,7 +238,7 @@ mod tests {
 
         let status = parse_porcelain_v2(&bytes);
 
-        assert!(status.staged.is_empty());
+        assert_eq!(status.staged.as_slice(), []);
         assert_eq!(status.unstaged[0].status, ChangeKind::Added);
         assert_eq!(status.unstaged[0].old_path, None);
         assert_eq!(

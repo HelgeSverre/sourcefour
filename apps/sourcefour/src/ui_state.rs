@@ -147,7 +147,7 @@ mod tests {
 
         assert_eq!(loaded.sidebar_width, Some(250.0));
         assert_eq!(loaded.collapsed_sections, vec![String::from("remotes")]);
-        assert!(loaded.collapsed_branch_folders.is_empty());
+        assert_eq!(loaded.collapsed_branch_folders, Vec::<String>::new());
         assert_eq!(loaded.section_order, None, "missing fields default");
         assert!(!loaded.actions_timeline_expanded);
         assert_eq!(loaded.actions_timeline_height, None);

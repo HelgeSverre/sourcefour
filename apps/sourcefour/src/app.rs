@@ -529,8 +529,8 @@ mod tests {
             panic!("demo mode must open a window");
         };
         assert!(window.demo);
-        assert!(!window.name.is_empty());
-        assert!(!window.path.is_empty());
+        assert_ne!(window.name, "");
+        assert_ne!(window.path, "");
         assert_eq!(
             window.location, None,
             "demo mode must not depend on a repository"

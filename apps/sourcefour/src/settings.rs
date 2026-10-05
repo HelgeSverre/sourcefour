@@ -360,10 +360,6 @@ mod tests {
     }
 
     #[test]
-    #[expect(
-        clippy::float_cmp,
-        reason = "row_height returns the exact constants this test names"
-    )]
     fn a_history_density_survives_a_file_that_predates_it() -> Result<(), Box<dyn std::error::Error>>
     {
         let directory = tempfile::TempDir::new()?;
@@ -544,10 +540,6 @@ mod tests {
     }
 
     #[test]
-    #[expect(
-        clippy::float_cmp,
-        reason = "row_height is computed from the exact constants this test compares against"
-    )]
     fn row_height_clamps_to_a_sane_range() {
         assert_eq!(
             DiffSettings {

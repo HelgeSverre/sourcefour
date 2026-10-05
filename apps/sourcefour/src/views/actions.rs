@@ -2171,7 +2171,7 @@ mod tests {
             ..ActionsState::default()
         };
 
-        assert!(state.reduce(ActionsEvent::Close).is_empty());
+        assert_eq!(state.reduce(ActionsEvent::Close).as_slice(), []);
 
         assert!(state.view.is_none());
         assert!(state.logs_pending.is_empty());
@@ -2194,7 +2194,7 @@ mod tests {
         assert_eq!(effects, vec![ActionsEffect::FetchJobs(run_id)]);
         assert!(state.logs_pending.is_empty());
 
-        assert!(
+        assert_eq!(
             state
                 .reduce(ActionsEvent::LogLoaded {
                     generation: 5,
@@ -2202,7 +2202,8 @@ mod tests {
                     job_id: 1,
                     outcome: Ok(vec![String::from("stale")]),
                 })
-                .is_empty()
+                .as_slice(),
+            []
         );
         assert!(
             !state

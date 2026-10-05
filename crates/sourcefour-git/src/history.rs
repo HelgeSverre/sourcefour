@@ -511,7 +511,7 @@ mod tests {
 
         let batch = cursor.next_batch(10)?;
 
-        assert!(batch.rows.is_empty());
+        assert_eq!(batch.rows.as_slice(), []);
         assert!(!batch.has_more);
         Ok(())
     }

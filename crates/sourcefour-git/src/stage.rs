@@ -167,7 +167,7 @@ mod tests {
 
         unstage_paths(&location, &paths)?;
         let status = crate::working_tree_status(&location)?;
-        assert!(status.staged.is_empty());
+        assert_eq!(status.staged.as_slice(), []);
         assert_eq!(status.unstaged.len(), paths.len() + 1);
         Ok(())
     }
@@ -190,7 +190,7 @@ mod tests {
         }
         let location = discover(repository.path())?;
         stage_paths(&location, &[])?;
-        assert!(crate::working_tree_status(&location)?.staged.is_empty());
+        assert_eq!(crate::working_tree_status(&location)?.staged.as_slice(), []);
         stage_paths(&location, &paths(&names))?;
         let status = crate::working_tree_status(&location)?;
         assert_eq!(status.staged.len(), names.len());
@@ -198,7 +198,7 @@ mod tests {
         unstage_paths(&location, &[])?;
         assert_eq!(crate::working_tree_status(&location)?, status);
         unstage_paths(&location, &paths(&names))?;
-        assert!(crate::working_tree_status(&location)?.staged.is_empty());
+        assert_eq!(crate::working_tree_status(&location)?.staged.as_slice(), []);
         Ok(())
     }
 
@@ -233,7 +233,7 @@ mod tests {
                 )
                 .is_err()
             );
-            assert!(crate::working_tree_status(&location)?.staged.is_empty());
+            assert_eq!(crate::working_tree_status(&location)?.staged.as_slice(), []);
         }
         Ok(())
     }

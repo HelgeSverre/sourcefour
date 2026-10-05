@@ -322,7 +322,7 @@ mod tests {
 
         let found = worktrees(&discover(repository.path())?)?;
 
-        assert!(found.is_empty());
+        assert_eq!(found.as_slice(), []);
         Ok(())
     }
 
