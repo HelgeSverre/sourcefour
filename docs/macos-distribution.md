@@ -217,4 +217,14 @@ Not exercised in this environment: disconnected/quarantined first launch,
 physical Intel GUI launch, and legacy PKG cask/direct-PKG migration in a
 separate clean VM. These remain coverage limits; Rosetta and online trust
 checks do not establish those results. ZIP-to-ZIP upgrade will be checked
-against the released 0.1.6 ZIP and recorded separately.
+against the released 0.1.7 ZIP and recorded separately.
+
+
+The first release attempt, `v0.1.6`, passed its Rust gate and all artifact
+builds, including signing/notarization, but was blocked by the packaged Linux
+ordinary-user smoke test. A root-run AppImage verification had populated the
+shared extraction cache; the ordinary user then could not extract the image.
+This was reproduced with the release AppImage in Ubuntu 22.04: the original
+script exited 1 with `fopen error: Permission denied`, while the script using
+its own writable `TMPDIR` opened an X11 window and stayed running. The 0.1.6
+release and tap publication were skipped. The correction ships in 0.1.7.

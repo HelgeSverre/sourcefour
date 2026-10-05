@@ -2,7 +2,7 @@
 
 All notable changes to Sourcefour are documented in this file.
 
-## [0.1.6] - 2026-10-05
+## [0.1.7] - 2026-10-05
 
 ### Fixed
 
@@ -12,6 +12,9 @@ All notable changes to Sourcefour are documented in this file.
   Homebrew prefix and application directory are writable
   ([#6](https://github.com/HelgeSverre/sourcefour/issues/6)).
 - Test assertions and lint expectations blocking CI with Rust 1.99.
+- Linux release smoke tests reusing a root-owned AppImage extraction cache
+  when launching as an ordinary user. The test now isolates its temporary
+  directory. The 0.1.6 tag failed this check and was not published.
 
 ### Added
 
@@ -89,7 +92,7 @@ Initial public release.
 - Repository discovery and worktree handling across Windows path forms.
 - Text input, scrolling, overlay, diff-layout, and Actions-status edge cases.
 
-[0.1.6]: https://github.com/HelgeSverre/sourcefour/releases/tag/v0.1.6
+[0.1.7]: https://github.com/HelgeSverre/sourcefour/releases/tag/v0.1.7
 [0.1.4]: https://github.com/HelgeSverre/sourcefour/releases/tag/v0.1.4
 [0.1.3]: https://github.com/HelgeSverre/sourcefour/releases/tag/v0.1.3
 [0.1.2]: https://github.com/HelgeSverre/sourcefour/releases/tag/v0.1.2

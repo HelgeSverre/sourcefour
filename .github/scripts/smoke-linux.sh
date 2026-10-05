@@ -19,6 +19,11 @@ trap '
   rm -rf "$temporary_directory"
 ' EXIT
 
+# Keep AppImage extraction in this user's writable directory. A previous
+# root-run verification can otherwise leave a shared extraction cache owned
+# by root, causing the ordinary-user check to fail before the app starts.
+export TMPDIR="$temporary_directory"
+
 # Force the X11 path and keep the smoke run's settings isolated.
 unset WAYLAND_DISPLAY ZED_HEADLESS SOURCEFOUR_STARTUP_LOG
 export XDG_RUNTIME_DIR="$temporary_directory/runtime"
