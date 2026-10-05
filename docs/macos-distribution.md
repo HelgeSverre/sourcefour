@@ -216,8 +216,7 @@ c7a8dbf634def4ce7f263b5e5e1e6f974353155f72ee5bf3e6d45f37942c5e04  sourcefour-uni
 Not exercised in this environment: disconnected/quarantined first launch,
 physical Intel GUI launch, and legacy PKG cask/direct-PKG migration in a
 separate clean VM. These remain coverage limits; Rosetta and online trust
-checks do not establish those results. ZIP-to-ZIP upgrade will be checked
-against the released 0.1.7 ZIP and recorded separately.
+checks do not establish those results. ZIP-to-ZIP upgrade results are recorded below.
 
 
 The first release attempt, `v0.1.6`, passed its Rust gate and all artifact
@@ -228,3 +227,40 @@ This was reproduced with the release AppImage in Ubuntu 22.04: the original
 script exited 1 with `fopen error: Permission denied`, while the script using
 its own writable `TMPDIR` opened an X11 window and stayed running. The 0.1.6
 release and tap publication were skipped. The correction ships in 0.1.7.
+
+
+### Published v0.1.7 acceptance
+
+[Release run 37282903189](https://github.com/HelgeSverre/sourcefour/actions/runs/37282903189)
+passed in full at tag `v0.1.7` / commit
+`6056a39839096f5102218ebc5d8cc360730e9dea`.
+It published all platform assets and both Homebrew formula and cask. The
+packaged Ubuntu 22.04 ordinary-user GUI smoke test passed with the isolated
+extraction directory.
+
+On the same macOS 15.6 host:
+
+- Downloaded the public PKG and ZIP and verified both published SHA-256 files.
+- Confirmed the live tap cask exactly matched the generator for version 0.1.7
+  and the released ZIP checksum, including `app`, configured `appdir`, and
+  absence of PKG installer/receipt actions.
+- Upgraded the signed 0.1.5 **ZIP candidate** to the real 0.1.7 release through
+  the test tap with `HOMEBREW_NO_SUDO=1`. This tests ZIP-to-ZIP upgrade, not
+  migration from the public 0.1.5 PKG cask.
+- Verified version 0.1.7, CLI linking/launch, signature, stapled ticket, and
+  `syspolicy_check distribution`. Support-file hashes were unchanged.
+- Uninstalled the upgraded candidate and freshly installed the public
+  `helgesverre/tap/sourcefour` cask into `~/Applications`, again with sudo
+  disabled. The CLI worked and the released GUI rendered its demo.
+- Uninstalled the public cask with sudo disabled; settings were retained.
+  Removed the temporary test tap. The pre-existing 0.1.4 receipt was unchanged.
+
+Published hashes:
+
+```text
+940b046b0ee1cbcbd14e2661d2e8da51fb1089e7626353cd5794f0aba70cb145  sourcefour-universal-apple-darwin.pkg
+b0d5d06b6c6122a519202f849e753724db246a36a5b708d3d6e95dad5ab7c858  sourcefour-universal-apple-darwin.zip
+```
+
+The offline/physical-Intel/legacy-migration coverage limits stated above still
+apply.
