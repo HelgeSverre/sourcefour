@@ -22,6 +22,7 @@ use std::{
 };
 
 use sourcefour_model::VideoInfo;
+use sourcefour_process::background_command;
 
 /// How long either tool may run before it is killed.
 ///
@@ -134,7 +135,7 @@ fn spill(bytes: &[u8], format: &str) -> Option<tempfile::NamedTempFile> {
 /// Fills in what `ffprobe` says about the container, leaving `info` alone for
 /// anything it will not answer.
 fn describe(path: &Path, ffprobe: &Path, info: &mut VideoInfo) {
-    let Some(stdout) = run_bounded(Command::new(ffprobe).args([
+    let Some(stdout) = run_bounded(background_command(ffprobe).args([
         "-v",
         "quiet",
         "-print_format",
@@ -170,7 +171,7 @@ fn describe(path: &Path, ffprobe: &Path, info: &mut VideoInfo) {
 /// A single frame as PNG bytes, taken a moment into the clip.
 fn poster(path: &Path, ffmpeg: &Path, duration_ms: Option<u64>) -> Option<Vec<u8>> {
     let seek = poster_seek(duration_ms);
-    let stdout = run_bounded(Command::new(ffmpeg).args([
+    let stdout = run_bounded(background_command(ffmpeg).args([
         "-v",
         "error",
         // Without this a tool that decides to prompt inherits the terminal and
@@ -302,7 +303,7 @@ fn tool_candidates(name: &str, override_dir: Option<&Path>, home: Option<&Path>)
 
 /// Whether `candidate` starts and reports a version.
 fn answers_to_version(candidate: &Path) -> bool {
-    Command::new(candidate)
+    background_command(candidate)
         .arg("-version")
         .stdin(Stdio::null())
         .stdout(Stdio::null())

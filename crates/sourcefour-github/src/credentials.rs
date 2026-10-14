@@ -16,6 +16,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+use sourcefour_process::background_command;
+
 /// The file's whole shape: one token per host.
 type Store = BTreeMap<String, HostCredentials>;
 
@@ -88,7 +90,7 @@ const GH_TIMEOUT: Duration = Duration::from_secs(4);
 ///
 /// Returns the words to show when gh is missing, not signed in, or fails.
 pub fn gh_cli_token() -> Result<String, String> {
-    let output = run_bounded(Command::new("gh").args(["auth", "token"]))
+    let output = run_bounded(background_command("gh").args(["auth", "token"]))
         .map_err(|error| format!("The gh CLI could not be run: {error}"))?;
     let token = String::from_utf8_lossy(&output.stdout).trim().to_string();
     if !output.status.success() {

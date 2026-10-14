@@ -2,6 +2,15 @@
 
 All notable changes to Sourcefour are documented in this file.
 
+## [Unreleased]
+
+### Fixed
+
+- Console windows appearing when Sourcefour launches Git, the GitHub CLI,
+  `ffmpeg`, or `ffprobe` on Windows. Background child processes now start
+  without allocating their own console window
+  ([#5](https://github.com/HelgeSverre/sourcefour/issues/5)).
+
 ## [0.1.7] - 2026-10-05
 
 ### Fixed
@@ -92,6 +101,7 @@ Initial public release.
 - Repository discovery and worktree handling across Windows path forms.
 - Text input, scrolling, overlay, diff-layout, and Actions-status edge cases.
 
+[Unreleased]: https://github.com/HelgeSverre/sourcefour/compare/v0.1.7...HEAD
 [0.1.7]: https://github.com/HelgeSverre/sourcefour/releases/tag/v0.1.7
 [0.1.4]: https://github.com/HelgeSverre/sourcefour/releases/tag/v0.1.4
 [0.1.3]: https://github.com/HelgeSverre/sourcefour/releases/tag/v0.1.3
