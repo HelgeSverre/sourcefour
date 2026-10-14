@@ -7,12 +7,11 @@
 //! runner. `--no-optional-locks` keeps a background read from contending
 //! with the user's own Git for the index lock.
 
-use std::process::Command;
-
 use sourcefour_model::{
     ChangeKind, ChangedFile, RepoFailure, RepoFailureKind, RepoLocation, RepoPath, UserFacingError,
     WorkingTreeStatus,
 };
+use sourcefour_process::background_command;
 
 /// Reads the current staged/unstaged state of the active worktree.
 ///
@@ -25,7 +24,7 @@ pub fn working_tree_status(location: &RepoLocation) -> Result<WorkingTreeStatus,
     let Some(worktree) = &location.active_worktree_path else {
         return Ok(WorkingTreeStatus::default());
     };
-    let output = Command::new("git")
+    let output = background_command("git")
         .arg("-C")
         .arg(worktree)
         .args([

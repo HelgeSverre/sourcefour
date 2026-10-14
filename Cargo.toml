@@ -6,6 +6,7 @@ members = [
     "crates/sourcefour-git",
     "crates/sourcefour-github",
     "crates/sourcefour-graph",
+    "crates/sourcefour-process",
     "crates/sourcefour-test-support",
 ]
 resolver = "2"

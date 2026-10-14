@@ -6,7 +6,7 @@
 
 use std::{
     io::Read,
-    process::{Command, Stdio},
+    process::Stdio,
     sync::{
         Mutex,
         atomic::{AtomicBool, Ordering},
@@ -17,6 +17,7 @@ use std::{
 use sourcefour_model::{
     OperationKind, OperationOutcome, OperationProgress, RepoFailure, RepoFailureKind, RepoLocation,
 };
+use sourcefour_process::background_command;
 
 use crate::OperationSink;
 
@@ -58,7 +59,7 @@ pub(crate) fn run(
         .active_worktree_path
         .as_deref()
         .unwrap_or(&location.common_dir);
-    let mut child = Command::new("git")
+    let mut child = background_command("git")
         .args(&operation.argv)
         .current_dir(workdir)
         .stdin(Stdio::null())

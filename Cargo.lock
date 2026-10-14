@@ -6324,6 +6324,7 @@ dependencies = [
  "smallvec",
  "sourcefour-graph",
  "sourcefour-model",
+ "sourcefour-process",
  "sourcefour-test-support",
  "tempfile",
  "tracing",
@@ -6336,6 +6337,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sourcefour-model",
+ "sourcefour-process",
  "tempfile",
  "ureq",
 ]
@@ -6356,6 +6358,10 @@ dependencies = [
  "thiserror 2.0.19",
  "uuid",
 ]
+
+[[package]]
+name = "sourcefour-process"
+version = "0.1.7"
 
 [[package]]
 name = "sourcefour-test-support"

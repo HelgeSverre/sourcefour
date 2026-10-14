@@ -7,12 +7,10 @@
 //! status read; the §10 runner is for operations
 //! with progress and a meaningful cancel.
 
-use std::{
-    io::{BufWriter, Seek, Write},
-    process::Command,
-};
+use std::io::{BufWriter, Seek, Write};
 
 use sourcefour_model::{RepoFailure, RepoLocation, RepoPath, UserFacingError};
+use sourcefour_process::background_command;
 
 use crate::operation::classify_stderr;
 
@@ -67,7 +65,7 @@ fn run_index_edit(
         return Ok(());
     };
     let input = pathspec_input(paths).map_err(|error| failure(failed_title, &error.to_string()))?;
-    let output = Command::new("git")
+    let output = background_command("git")
         .arg("-C")
         .arg(worktree)
         .arg("--literal-pathspecs")

@@ -1,11 +1,10 @@
 //! Branch creation, optionally checking out, through the user's Git (§6.13).
 
-use std::process::Command;
-
 use sourcefour_model::{
     CreateBranchRequest, OperationKind, OperationOutcome, RepoFailure, RepoFailureKind,
     RepoLocation,
 };
+use sourcefour_process::background_command;
 
 /// The exact §6.13 argv; arguments are passed discretely, never joined into
 /// a command string.
@@ -86,7 +85,7 @@ pub fn create_branch(
         .active_worktree_path
         .as_deref()
         .unwrap_or(&location.common_dir);
-    let output = Command::new("git")
+    let output = background_command("git")
         .args(branch_argv(request))
         .current_dir(workdir)
         .output()
