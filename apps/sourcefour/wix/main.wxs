@@ -72,8 +72,6 @@
                                     Directory='ApplicationProgramsFolder'
                                     Name='Sourcefour'
                                     Description='A fast, native Git history browser'
-                                    Icon='SourcefourShortcut.exe'
-                                    IconIndex='0'
                                     WorkingDirectory='APPLICATIONFOLDER'
                                     Advertise='yes'/>
                             </File>
@@ -115,8 +113,6 @@
         <SetProperty Id='ARPINSTALLLOCATION' Value='[APPLICATIONFOLDER]' After='CostFinalize'/>
 
         <Icon Id='ProductICO' SourceFile='wix\Sourcefour.ico'/>
-        <!-- Shortcut icon identifiers must match the target file extension. -->
-        <Icon Id='SourcefourShortcut.exe' SourceFile='wix\Sourcefour.ico'/>
         <Property Id='ARPPRODUCTICON' Value='ProductICO'/>
         <Property Id='ARPHELPLINK' Value='https://github.com/HelgeSverre/sourcefour'/>
 
