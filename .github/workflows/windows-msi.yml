@@ -38,7 +38,7 @@ jobs:
         run: .github/scripts/install-cargo-dist.sh
 
       - name: Build MSI
-        run: dist build --artifacts=local --target=x86_64-pc-windows-msvc --output-format=json > dist-manifest.json
+        run: dist build --nocapture --artifacts=local --target=x86_64-pc-windows-msvc --output-format=json > dist-manifest.json
 
       - name: Verify checksum
         shell: pwsh
