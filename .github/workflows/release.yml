@@ -67,6 +67,8 @@ jobs:
         run: cargo fmt --all -- --check
       - name: macOS distribution contracts
         run: python3 scripts/test-macos-distribution.py
+      - name: Windows distribution contracts
+        run: python3 scripts/test-windows-distribution.py
       - name: Lint
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Tests

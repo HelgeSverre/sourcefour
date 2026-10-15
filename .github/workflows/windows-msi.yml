@@ -40,6 +40,30 @@ jobs:
       - name: Build MSI
         run: dist build --artifacts=local --target=x86_64-pc-windows-msvc --output-format=json > dist-manifest.json
 
+      - name: Verify executable icon
+        shell: pwsh
+        run: |
+          Add-Type -AssemblyName System.Drawing
+          $exe = (Get-ChildItem target -Recurse -Filter sourcefour.exe |
+            Where-Object FullName -like '*\dist\sourcefour.exe' |
+            Select-Object -First 1).FullName
+          if (-not $exe) {
+            throw "Could not find the packaged sourcefour.exe"
+          }
+          $actual = [System.Drawing.Icon]::ExtractAssociatedIcon($exe).ToBitmap()
+          $expected = [System.Drawing.Icon]::new(
+            (Resolve-Path 'apps/sourcefour/assets/icon/Sourcefour.ico').Path,
+            32,
+            32
+          ).ToBitmap()
+          for ($x = 0; $x -lt 32; $x++) {
+            for ($y = 0; $y -lt 32; $y++) {
+              if ($actual.GetPixel($x, $y) -ne $expected.GetPixel($x, $y)) {
+                throw "sourcefour.exe does not contain the packaged icon"
+              }
+            }
+          }
+
       - name: Verify checksum
         shell: pwsh
         run: |

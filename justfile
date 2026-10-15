@@ -54,10 +54,11 @@ test filter="":
 test-crate crate:
     cargo nextest run -p {{crate}} --all-targets --locked
 
-# Packaging contract tests (mock Apple tools; real macOS checks are documented).
+# Packaging contract tests (mock Apple tools; real platform checks are documented).
 [group('check')]
 test-packaging:
     python3 scripts/test-macos-distribution.py
+    python3 scripts/test-windows-distribution.py
 
 # Pre-push gate: everything CI runs.
 [group('check')]

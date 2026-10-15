@@ -73,6 +73,8 @@
                                     Name='Sourcefour'
                                     Description='A fast, native Git history browser'
                                     WorkingDirectory='APPLICATIONFOLDER'
+                                    Icon='Sourcefour.exe'
+                                    IconIndex='0'
                                     Advertise='yes'/>
                             </File>
                             <RemoveFolder
@@ -112,8 +114,9 @@
 
         <SetProperty Id='ARPINSTALLLOCATION' Value='[APPLICATIONFOLDER]' After='CostFinalize'/>
 
-        <Icon Id='ProductICO' SourceFile='wix\Sourcefour.ico'/>
-        <Property Id='ARPPRODUCTICON' Value='ProductICO'/>
+        <Icon Id='Sourcefour.exe' SourceFile='$(var.CargoTargetBinDir)\sourcefour.exe'/>
+        <Icon Id='Sourcefour.ico' SourceFile='wix\Sourcefour.ico'/>
+        <Property Id='ARPPRODUCTICON' Value='Sourcefour.ico'/>
         <Property Id='ARPHELPLINK' Value='https://github.com/HelgeSverre/sourcefour'/>
 
         <UI>

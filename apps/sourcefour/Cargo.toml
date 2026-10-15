@@ -37,6 +37,9 @@ gpui = { git = "https://github.com/zed-industries/zed", package = "gpui", rev = 
 sourcefour-test-support = { path = "../../crates/sourcefour-test-support" }
 tempfile.workspace = true
 
+[build-dependencies]
+embed-resource = "3.0"
+
 [lints]
 workspace = true
 

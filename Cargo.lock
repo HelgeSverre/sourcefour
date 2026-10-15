@@ -6287,6 +6287,7 @@ dependencies = [
 name = "sourcefour"
 version = "0.1.8"
 dependencies = [
+ "embed-resource",
  "gix-imara-diff",
  "gpui",
  "gpui_platform",
