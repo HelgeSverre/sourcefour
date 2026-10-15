@@ -6285,7 +6285,7 @@ dependencies = [
 
 [[package]]
 name = "sourcefour"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "embed-resource",
  "gix-imara-diff",
@@ -6310,14 +6310,14 @@ dependencies = [
 
 [[package]]
 name = "sourcefour-doc"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "pulldown-cmark",
 ]
 
 [[package]]
 name = "sourcefour-git"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "gix",
  "gix-imara-diff",
@@ -6333,7 +6333,7 @@ dependencies = [
 
 [[package]]
 name = "sourcefour-github"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "serde",
  "serde_json",
@@ -6345,7 +6345,7 @@ dependencies = [
 
 [[package]]
 name = "sourcefour-graph"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "smallvec",
  "sourcefour-model",
@@ -6353,7 +6353,7 @@ dependencies = [
 
 [[package]]
 name = "sourcefour-model"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "smallvec",
  "thiserror 2.0.19",
@@ -6362,11 +6362,11 @@ dependencies = [
 
 [[package]]
 name = "sourcefour-process"
-version = "0.1.8"
+version = "0.1.9"
 
 [[package]]
 name = "sourcefour-test-support"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "tempfile",
 ]
