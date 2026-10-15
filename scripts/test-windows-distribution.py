@@ -33,15 +33,20 @@ class WindowsDistributionTests(unittest.TestCase):
 
         self.assertIsNotNone(shortcut)
         self.assertIsNotNone(product_icon)
+        shortcut_icon = self.document.find(
+            f".//wix:Icon[@Id='{shortcut.get('Icon')}']", NAMESPACE
+        )
         arp_icon = self.document.find(
             f".//wix:Icon[@Id='{product_icon.get('Value')}']", NAMESPACE
         )
+        self.assertIsNotNone(shortcut_icon)
         self.assertIsNotNone(arp_icon)
+        self.assertTrue(shortcut_icon.get("Id").endswith(".exe"))
+        self.assertTrue(shortcut_icon.get("SourceFile").endswith(r"\sourcefour.exe"))
         self.assertTrue(arp_icon.get("Id").endswith(".ico"))
-        self.assertEqual(shortcut.get("Advertise"), "no")
+        self.assertEqual(shortcut.get("Advertise"), "yes")
         self.assertIsNone(shortcut.get("Target"))
-        self.assertIsNone(shortcut.get("Icon"))
-        self.assertIsNone(shortcut.get("IconIndex"))
+        self.assertEqual(shortcut.get("IconIndex"), "0")
 
         resource_match = re.fullmatch(
             r'\s*\d+\s+ICON\s+"([^"]+)"\s*', RESOURCE.read_text()
