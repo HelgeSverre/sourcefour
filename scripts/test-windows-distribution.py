@@ -25,7 +25,7 @@ class WindowsDistributionTests(unittest.TestCase):
 
     def test_installed_surfaces_use_the_packaged_icon(self):
         shortcut = self.document.find(
-            ".//wix:Shortcut[@Id='ApplicationStartMenuShortcut']", NAMESPACE
+            ".//wix:File/wix:Shortcut[@Id='ApplicationStartMenuShortcut']", NAMESPACE
         )
         product_icon = self.document.find(
             ".//wix:Property[@Id='ARPPRODUCTICON']", NAMESPACE
@@ -37,7 +37,11 @@ class WindowsDistributionTests(unittest.TestCase):
             f".//wix:Icon[@Id='{product_icon.get('Value')}']", NAMESPACE
         )
         self.assertIsNotNone(arp_icon)
+        self.assertTrue(arp_icon.get("Id").endswith(".ico"))
+        self.assertEqual(shortcut.get("Advertise"), "no")
+        self.assertIsNone(shortcut.get("Target"))
         self.assertIsNone(shortcut.get("Icon"))
+        self.assertIsNone(shortcut.get("IconIndex"))
 
         resource_match = re.fullmatch(
             r'\s*\d+\s+ICON\s+"([^"]+)"\s*', RESOURCE.read_text()
