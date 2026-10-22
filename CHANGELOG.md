@@ -4,6 +4,12 @@ All notable changes to Sourcefour are documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- Agent instructions now require screenshots when changing or verifying visual
+  results, with evidence attached to the relevant report
+  ([#10](https://github.com/HelgeSverre/sourcefour/pull/10)).
+
 ### Fixed
 
 - Markdown preview now loads remote images, including SVG badges with extensionless
