@@ -22,12 +22,12 @@ pub enum DocBlockKind {
         /// Heading depth, `1..=6`.
         level: u8,
         /// Heading text, split by style.
-        spans: Vec<DocSpan>,
+        spans: Vec<DocInline>,
     },
     /// A run of prose.
     Paragraph {
         /// Paragraph text, split by style.
-        spans: Vec<DocSpan>,
+        spans: Vec<DocInline>,
     },
     /// Preformatted text, verbatim except for a stripped trailing newline.
     Code {
@@ -50,13 +50,6 @@ pub enum DocBlockKind {
     },
     /// A thematic break.
     Rule,
-    /// An image, always its own block even when written inside a paragraph.
-    Image {
-        /// Destination as written, already resolved for reference-style images.
-        src: String,
-        /// Alt text, empty when the image has none.
-        alt: String,
-    },
     /// A table, its cells holding spans rather than blocks.
     ///
     /// A cell is inline content only — Markdown gives it no way to hold a
@@ -65,11 +58,33 @@ pub enum DocBlockKind {
         /// One entry per column, from the delimiter row.
         alignments: Vec<CellAlignment>,
         /// One spans-vec per header cell.
-        header: Vec<Vec<DocSpan>>,
+        header: Vec<Vec<DocInline>>,
         /// Body rows, each a row of cells, each cell a run of spans. A row
         /// may be shorter than `alignments`; the source decides.
-        rows: Vec<Vec<Vec<DocSpan>>>,
+        rows: Vec<Vec<Vec<DocInline>>>,
     },
+}
+
+/// Inline content in source order, including the link surrounding an image.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DocInline {
+    /// A styled text run.
+    Text(DocSpan),
+    /// An image at its original position within the paragraph or cell.
+    Image {
+        /// Image destination, with reference-style destinations expanded.
+        src: String,
+        /// Alternative text, used when the image cannot be displayed.
+        alt: String,
+        /// Destination of an enclosing link, independent of the image source.
+        link: Option<String>,
+    },
+}
+
+impl From<DocSpan> for DocInline {
+    fn from(span: DocSpan) -> Self {
+        Self::Text(span)
+    }
 }
 
 /// One table column's alignment, from the delimiter row.
@@ -153,21 +168,30 @@ pub fn image_sources(blocks: &[DocBlock]) -> Vec<&str> {
 fn collect_image_sources<'a>(blocks: &'a [DocBlock], sources: &mut Vec<&'a str>) {
     for block in blocks {
         match &block.kind {
-            DocBlockKind::Image { src, .. } => sources.push(src),
+            DocBlockKind::Heading { spans, .. } | DocBlockKind::Paragraph { spans } => {
+                collect_inline_images(spans, sources);
+            }
             DocBlockKind::Quote { blocks } => collect_image_sources(blocks, sources),
             DocBlockKind::List { items, .. } => {
                 for item in items {
                     collect_image_sources(item, sources);
                 }
             }
-            // A table cell holds spans, and a span cannot be an image.
-            DocBlockKind::Heading { .. }
-            | DocBlockKind::Paragraph { .. }
-            | DocBlockKind::Code { .. }
-            | DocBlockKind::Table { .. }
-            | DocBlockKind::Rule => {}
+            DocBlockKind::Table { header, rows, .. } => {
+                for cell in header.iter().chain(rows.iter().flatten()) {
+                    collect_inline_images(cell, sources);
+                }
+            }
+            DocBlockKind::Code { .. } | DocBlockKind::Rule => {}
         }
     }
+}
+
+fn collect_inline_images<'a>(spans: &'a [DocInline], sources: &mut Vec<&'a str>) {
+    sources.extend(spans.iter().filter_map(|inline| match inline {
+        DocInline::Image { src, .. } => Some(src.as_str()),
+        DocInline::Text(_) => None,
+    }));
 }
 
 #[cfg(test)]

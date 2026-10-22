@@ -4,6 +4,14 @@ All notable changes to Sourcefour are documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- Markdown preview now loads remote images, including SVG badges with extensionless
+  URLs. Badges keep their original size, wrap together in a row, and preserve
+  surrounding links instead of appearing as separate placeholders and captions.
+- Images stay in their original position within paragraphs, headings, and table
+  cells. Embedded images resize proportionally with the preview pane.
+
 ## [0.1.8] - 2026-10-14
 
 ### Fixed

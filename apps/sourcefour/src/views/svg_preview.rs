@@ -1,19 +1,13 @@
 //! Static SVG previews from the exact text revisions already loaded by the diff.
 
-use std::sync::{Arc, LazyLock};
+use std::sync::Arc;
 
 use gpui::{Div, div, prelude::*, px};
-use resvg::{tiny_skia, usvg};
 use sourcefour_model::{DiffContent, RepoPath, TextDiff, TextSide};
 
-use super::{
-    SourcefourWindow,
-    diff::{DiffView, render_image},
-};
+use super::{SourcefourWindow, diff::DiffView};
 
-/// Each side uses at most 16 MiB for its output pixels, regardless of SVG dimensions.
-const MAX_DIMENSION: u16 = 2048;
-const MAX_SOURCE_BYTES: usize = 8 * 1024 * 1024;
+use crate::svg::{RenderFailure, render_svg};
 
 pub(super) fn canvas() -> gpui::Rgba {
     gpui::rgb(0x00f0_f0f0)
@@ -28,27 +22,6 @@ pub(super) enum SvgSide {
     Absent,
     Rendered(Arc<gpui::Image>),
     Unavailable(RenderFailure),
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum RenderFailure {
-    TooLarge,
-    InvalidSvg,
-    InvalidSize,
-    InvalidEncoding,
-    Encoding,
-}
-
-impl RenderFailure {
-    fn message(self) -> &'static str {
-        match self {
-            Self::TooLarge => "SVG preview exceeds the 8 MiB source limit. Inspect it in Source.",
-            Self::InvalidSvg => "This SVG could not be rendered. Inspect it in Source.",
-            Self::InvalidSize => "This SVG has unsupported dimensions. Inspect it in Source.",
-            Self::InvalidEncoding => "This SVG is not valid UTF-8. Inspect it in Source.",
-            Self::Encoding => "The SVG preview image could not be created. Inspect it in Source.",
-        }
-    }
 }
 
 pub(super) fn is_svg(path: &RepoPath) -> bool {
@@ -83,77 +56,6 @@ fn render_side(side: Option<&TextSide>) -> SvgSide {
         Ok(image) => SvgSide::Rendered(image),
         Err(error) => SvgSide::Unavailable(error),
     }
-}
-
-fn render_svg(source: &str) -> Result<Arc<gpui::Image>, RenderFailure> {
-    let pixels = rasterize(source)?;
-    let png = pixels.encode_png().map_err(|_| RenderFailure::Encoding)?;
-    render_image(Some(&png), "png").ok_or(RenderFailure::Encoding)
-}
-
-/// The same bounded renderer for SVG images embedded in Markdown previews.
-pub(super) fn image_from_bytes(bytes: &[u8]) -> Result<Arc<gpui::Image>, RenderFailure> {
-    let source = std::str::from_utf8(bytes).map_err(|_| RenderFailure::InvalidEncoding)?;
-    render_svg(source)
-}
-
-/// Parsing and rasterization happen once on a worker, never during a UI frame.
-fn rasterize(source: &str) -> Result<tiny_skia::Pixmap, RenderFailure> {
-    static FONTS: LazyLock<Arc<usvg::fontdb::Database>> = LazyLock::new(|| {
-        let mut fonts = usvg::fontdb::Database::new();
-        fonts.load_system_fonts();
-        Arc::new(fonts)
-    });
-    if source.len() > MAX_SOURCE_BYTES {
-        return Err(RenderFailure::TooLarge);
-    }
-    let select_font = usvg::FontResolver::default_font_selector();
-    let options = usvg::Options {
-        font_resolver: usvg::FontResolver {
-            select_font: Box::new(move |font, database| {
-                // Path-only icons need no font scan. Text loads the shared
-                // system database lazily, on the same background worker.
-                if database.is_empty() {
-                    *database = Arc::clone(&FONTS);
-                }
-                select_font(font, database)
-            }),
-            select_fallback: usvg::FontResolver::default_fallback_selector(),
-        },
-        // Repository SVGs may embed data images, but cannot read arbitrary
-        // filesystem paths or fetch network resources while being previewed.
-        image_href_resolver: usvg::ImageHrefResolver {
-            resolve_string: Box::new(|_, _| None),
-            ..usvg::ImageHrefResolver::default()
-        },
-        ..usvg::Options::default()
-    };
-    let tree = usvg::Tree::from_str(source, &options).map_err(|_| RenderFailure::InvalidSvg)?;
-    let size = tree.size();
-    let scale = f32::from(MAX_DIMENSION) / size.width().max(size.height());
-    if !scale.is_finite() || scale <= 0.0 {
-        return Err(RenderFailure::InvalidSize);
-    }
-    let (width, height) = (
-        pixel_dimension(size.width() * scale),
-        pixel_dimension(size.height() * scale),
-    );
-    let mut pixels = tiny_skia::Pixmap::new(width, height).ok_or(RenderFailure::InvalidSize)?;
-    resvg::render(
-        &tree,
-        tiny_skia::Transform::from_scale(scale, scale),
-        &mut pixels.as_mut(),
-    );
-    Ok(pixels)
-}
-
-#[expect(
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    reason = "pixel dimensions are clamped to 1..=2048"
-)]
-fn pixel_dimension(value: f32) -> u32 {
-    value.ceil().clamp(1.0, f32::from(MAX_DIMENSION)) as u32
 }
 
 impl SourcefourWindow {
@@ -225,6 +127,7 @@ mod tests {
     use sourcefour_test_support::TempRepo;
 
     use super::*;
+    use crate::svg::{MAX_SOURCE_BYTES, rasterize};
     use crate::{app::WindowLaunch, demo::Scene, ui_state::UiState, views::diff::DiffMode};
 
     const RED: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 10"><path fill="red" d="M0 0H10V10H0Z"/></svg>"#;

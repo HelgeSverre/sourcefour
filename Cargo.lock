@@ -6291,6 +6291,7 @@ dependencies = [
  "gix-imara-diff",
  "gpui",
  "gpui_platform",
+ "image",
  "resvg 0.45.1",
  "serde",
  "serde_json",
@@ -6306,6 +6307,8 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "unicode-segmentation",
+ "ureq",
+ "url",
 ]
 
 [[package]]

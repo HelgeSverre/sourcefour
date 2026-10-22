@@ -6,5 +6,7 @@
 mod model;
 mod parse;
 
-pub use model::{CellAlignment, DocBlock, DocBlockKind, DocSpan, DocumentKind, image_sources};
+pub use model::{
+    CellAlignment, DocBlock, DocBlockKind, DocInline, DocSpan, DocumentKind, image_sources,
+};
 pub use parse::parse_markdown;

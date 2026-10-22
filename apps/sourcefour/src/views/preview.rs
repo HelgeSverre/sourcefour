@@ -15,19 +15,19 @@
 
 use crate::context_menu::{ContextMenuExt as _, MenuEntry, PrimaryClickExt as _};
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use gpui::{
     Div, Font, FontWeight, Hsla, IntoElement, StyledText, TextRun, Window, div, prelude::*, px,
 };
-use sourcefour_doc::{CellAlignment, DocBlock, DocBlockKind, DocSpan, DocumentKind};
+use sourcefour_doc::{CellAlignment, DocBlock, DocBlockKind, DocInline, DocSpan, DocumentKind};
 use sourcefour_git::{DocSource, ImageResolution};
 use sourcefour_model::{DiffContent, RepoLocation, RepoPath};
 
 use crate::theme::Theme;
 
 use super::SourcefourWindow;
-use super::diff::{DiffOrigin, DiffView, render_image};
+use super::diff::{DiffOrigin, DiffView};
+use crate::document_image::{DocumentImage, ImageError};
 
 /// What the preview shows when the side being diffed does not carry the
 /// document — a deleted file's new side, most often.
@@ -186,6 +186,13 @@ pub(super) struct PreviewParse {
     blocks: Vec<DocBlock>,
     /// One entry per distinct image reference in `blocks`.
     images: HashMap<String, PreviewImage>,
+    link_base: Option<PreviewLinks>,
+}
+
+/// The selected document's location and the boundary for relative file links.
+struct PreviewLinks {
+    document: url::Url,
+    root: url::Url,
 }
 
 /// One side's document: its blocks, the images they resolved to, and the
@@ -195,6 +202,7 @@ pub(super) struct PreviewDoc {
     pub(super) blocks: Vec<DocBlock>,
     /// One entry per distinct image reference in `blocks`.
     pub(super) images: HashMap<String, PreviewImage>,
+    link_base: Option<PreviewLinks>,
     /// One list item per top-level block, so a frame builds the blocks on
     /// screen instead of the document. Holds the scroll position, so it is
     /// built once per loaded document and never per frame.
@@ -223,6 +231,7 @@ impl PreviewDoc {
             list: gpui::ListState::new(parse.blocks.len(), gpui::ListAlignment::Top, px(OVERDRAW)),
             blocks: parse.blocks,
             images: parse.images,
+            link_base: parse.link_base,
             side,
             view,
         }
@@ -233,11 +242,11 @@ impl PreviewDoc {
 #[derive(Clone)]
 pub(super) enum PreviewImage {
     /// Bytes the renderer can draw.
-    Loaded(Arc<gpui::Image>),
-    /// Rasterized SVG, drawn on a light canvas for transparent icons.
-    Svg(Arc<gpui::Image>),
-    /// An http(s) reference, which the preview never fetches.
+    Loaded(DocumentImage),
+    /// An HTTP(S) reference waiting for its background request.
     Remote,
+    /// A failed remote request or unsupported response.
+    Failed(ImageError),
     /// Absent from every side, or in a format the renderer cannot decode.
     Missing,
 }
@@ -318,10 +327,13 @@ fn document_blocks(bytes: Option<&[u8]>) -> Vec<DocBlock> {
     let Some(bytes) = bytes else {
         return vec![DocBlock {
             kind: DocBlockKind::Paragraph {
-                spans: vec![DocSpan {
-                    text: String::from(ABSENT_NOTICE),
-                    ..DocSpan::default()
-                }],
+                spans: vec![
+                    DocSpan {
+                        text: String::from(ABSENT_NOTICE),
+                        ..DocSpan::default()
+                    }
+                    .into(),
+                ],
             },
             source_range: 0..0,
         }];
@@ -358,13 +370,8 @@ fn load_side(location: &RepoLocation, source: Option<&DocSource>, path: &RepoPat
             images.entry(reference.to_owned()).or_insert_with(|| {
                 match sourcefour_git::resolve_doc_image(location, source, path, reference) {
                     ImageResolution::Found { bytes, format } => {
-                        if format == "svg" {
-                            super::svg_preview::image_from_bytes(&bytes)
-                                .map_or(PreviewImage::Missing, PreviewImage::Svg)
-                        } else {
-                            render_image(Some(&bytes), &format)
-                                .map_or(PreviewImage::Missing, PreviewImage::Loaded)
-                        }
+                        crate::document_image::decode(&bytes, &format)
+                            .map_or(PreviewImage::Missing, PreviewImage::Loaded)
                     }
                     ImageResolution::Remote => PreviewImage::Remote,
                     ImageResolution::Missing => PreviewImage::Missing,
@@ -372,7 +379,55 @@ fn load_side(location: &RepoLocation, source: Option<&DocSource>, path: &RepoPat
             });
         }
     }
-    PreviewParse { blocks, images }
+    let link_base = location.active_worktree_path.as_ref().and_then(|root| {
+        let source_path = match source? {
+            DocSource::Commit { path, .. }
+            | DocSource::Index { path }
+            | DocSource::Worktree { path } => path,
+        };
+        let path = std::str::from_utf8(&source_path.0).ok()?;
+        Some(PreviewLinks {
+            document: url::Url::from_file_path(root.join(path)).ok()?,
+            root: url::Url::from_directory_path(root).ok()?,
+        })
+    });
+    PreviewParse {
+        blocks,
+        images,
+        link_base,
+    }
+}
+
+/// Only web links and repository-relative files can be opened from Markdown.
+fn preview_link(link: &str, base: Option<&PreviewLinks>) -> Option<String> {
+    if let Ok(url) = url::Url::parse(link) {
+        return (matches!(url.scheme(), "http" | "https")
+            && url.username().is_empty()
+            && url.password().is_none())
+        .then(|| url.into());
+    }
+    if link.starts_with('#') || link.starts_with("//") {
+        return None;
+    }
+    let base = base?;
+    let resolved = base.document.join(link).ok()?;
+    (resolved.scheme() == "file" && resolved.path().starts_with(base.root.path()))
+        .then(|| resolved.into())
+}
+
+/// One fetch per URL even when both revision panes contain the same badge.
+fn remote_sources(parse: &(PreviewParse, PreviewParse)) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    [&parse.0, &parse.1]
+        .into_iter()
+        .flat_map(|side| {
+            sourcefour_doc::image_sources(&side.blocks)
+                .into_iter()
+                .filter(|src| matches!(side.images.get(*src), Some(PreviewImage::Remote)))
+        })
+        .filter(|src| seen.insert((*src).to_owned()))
+        .map(str::to_owned)
+        .collect()
 }
 
 /// §12.5 preview probe; prints only under `SOURCEFOUR_FRAME_LOG`.
@@ -427,7 +482,7 @@ fn demo_parse() -> (PreviewParse, PreviewParse) {
     let mut images = HashMap::new();
     images.insert(
         String::from(crate::demo::PREVIEW_IMAGE_PATH),
-        render_image(Some(crate::demo::PREVIEW_IMAGE), "png")
+        crate::document_image::decode(crate::demo::PREVIEW_IMAGE, "png")
             .map_or(PreviewImage::Missing, PreviewImage::Loaded),
     );
     images.insert(
@@ -442,10 +497,12 @@ fn demo_parse() -> (PreviewParse, PreviewParse) {
         PreviewParse {
             blocks: sourcefour_doc::parse_markdown(crate::demo::PREVIEW_MARKDOWN_OLD),
             images: images.clone(),
+            link_base: None,
         },
         PreviewParse {
             blocks: sourcefour_doc::parse_markdown(&stress_body()),
             images,
+            link_base: None,
         },
     )
 }
@@ -650,6 +707,7 @@ impl SourcefourWindow {
             let absent = || PreviewParse {
                 blocks: document_blocks(None),
                 images: HashMap::new(),
+                link_base: None,
             };
             view.preview = Some(PreviewState {
                 old: PreviewDoc::new(absent(), PreviewSide::Old, cx),
@@ -673,10 +731,42 @@ impl SourcefourWindow {
                 .background_executor()
                 .spawn(async move { load(&location, &origin, head) })
                 .await;
-            this.update(cx, |this, cx| {
-                this.set_preview(token, parse, cx);
-            })
-            .ok();
+            let sources = remote_sources(&parse);
+            let installed = this
+                .update(cx, |this, cx| {
+                    this.set_preview(token, parse, cx);
+                    this.diff_request == token
+                })
+                .unwrap_or(false);
+            if !installed {
+                return;
+            }
+            // Serial requests bound concurrency. Each result updates both
+            // panes immediately; a retired overlay stops before the next URL.
+            for source in sources {
+                let current = this
+                    .update(cx, |this, _| this.diff_request == token)
+                    .unwrap_or(false);
+                if !current {
+                    break;
+                }
+                let reference = source.clone();
+                let image = cx
+                    .background_executor()
+                    .spawn(async move {
+                        crate::document_image::fetch(&reference)
+                            .map_or_else(PreviewImage::Failed, PreviewImage::Loaded)
+                    })
+                    .await;
+                if !this
+                    .update(cx, |this, cx| {
+                        this.set_preview_image(token, &source, &image, cx)
+                    })
+                    .unwrap_or(false)
+                {
+                    break;
+                }
+            }
         })
         .detach();
         cx.notify();
@@ -703,6 +793,40 @@ impl SourcefourWindow {
             view.preview = Some(state);
         }
         cx.notify();
+    }
+
+    fn set_preview_image(
+        &mut self,
+        token: u64,
+        source: &str,
+        image: &PreviewImage,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        if self.diff_request != token {
+            return false;
+        }
+        let Some(state) = self
+            .diff_view
+            .as_mut()
+            .and_then(|view| view.preview.as_mut())
+        else {
+            return false;
+        };
+        for doc in [&mut state.old, &mut state.new] {
+            if let Some(entry) = doc.images.get_mut(source) {
+                *entry = image.clone();
+                let scroll = doc.list.logical_scroll_top();
+                for (index, block) in doc.blocks.iter().enumerate() {
+                    if sourcefour_doc::image_sources(std::slice::from_ref(block)).contains(&source)
+                    {
+                        doc.list.splice(index..index + 1, 1);
+                    }
+                }
+                doc.list.scroll_to(scroll);
+            }
+        }
+        cx.notify();
+        true
     }
 
     /// Extends the open selection to where a held drag has reached.
@@ -846,7 +970,7 @@ impl SourcefourWindow {
             DocBlockKind::Paragraph { spans } => div()
                 .mt(px(8.0))
                 .text_size(px(12.5))
-                .child(self.selectable_text(spans, font, self.theme.text_secondary, preview, id)),
+                .child(self.inline_content(spans, font, self.theme.text_secondary, preview, id)),
             DocBlockKind::Code { text, .. } => self.preview_code(text, id),
             DocBlockKind::Quote { blocks } => div()
                 .mt(px(10.0))
@@ -866,7 +990,6 @@ impl SourcefourWindow {
                 .mb(px(4.0))
                 .h(px(1.0))
                 .bg(self.theme.border),
-            DocBlockKind::Image { src, alt } => self.preview_image(src, alt, preview, id),
             DocBlockKind::Table {
                 alignments,
                 header,
@@ -880,7 +1003,7 @@ impl SourcefourWindow {
     fn preview_heading(
         &self,
         level: u8,
-        spans: &[DocSpan],
+        spans: &[DocInline],
         font: &Font,
         preview: &PreviewDoc,
         id: BlockId,
@@ -899,7 +1022,7 @@ impl SourcefourWindow {
             .mt(px(20.0))
             .mb(px(2.0))
             .text_size(px(size))
-            .child(self.selectable_text(spans, &heading, self.theme.text_primary, preview, id))
+            .child(self.inline_content(spans, &heading, self.theme.text_primary, preview, id))
     }
 
     /// A block of styled runs as one wrapping paragraph, selectable by a
@@ -1061,8 +1184,8 @@ impl SourcefourWindow {
     fn preview_table(
         &self,
         alignments: &[CellAlignment],
-        header: &[Vec<DocSpan>],
-        rows: &[Vec<Vec<DocSpan>>],
+        header: &[Vec<DocInline>],
+        rows: &[Vec<Vec<DocInline>>],
         font: &Font,
         preview: &PreviewDoc,
         id: BlockId,
@@ -1120,7 +1243,7 @@ impl SourcefourWindow {
     /// One cell, justified by its column's alignment and clipped at its edge.
     fn preview_cell(
         &self,
-        spans: &[DocSpan],
+        spans: &[DocInline],
         alignment: Option<&CellAlignment>,
         font: &Font,
         color: Hsla,
@@ -1141,7 +1264,7 @@ impl SourcefourWindow {
                 // A column past the delimiter row's end reads as left.
                 Some(CellAlignment::Left) | None => cell,
             })
-            .child(self.selectable_text(spans, font, color, preview, id))
+            .child(self.inline_content(spans, font, color, preview, id))
     }
 
     /// A list, one marker column beside each item's own blocks.
@@ -1186,65 +1309,159 @@ impl SourcefourWindow {
             }))
     }
 
-    /// One image block: the picture when it resolved, a framed note when it
-    /// did not, and its alt text beneath either.
-    fn preview_image(&self, src: &str, alt: &str, preview: &PreviewDoc, id: BlockId) -> Div {
-        let resolved = preview.images.get(src);
-        let body = match resolved {
-            // Both bounds are absolute for the same reason the column is: a
-            // relative maximum leaves the image with no width to fit into.
-            //
-            // The id is what makes an animated GIF advance: gpui only steps
-            // frames for an element it can keep state against. It has to be the
-            // block's address rather than the image's own id — one document can
-            // reference the same source twice, and `images` hands both the same
-            // `Arc`, so two elements would share one frame counter.
-            Some(PreviewImage::Loaded(image) | PreviewImage::Svg(image)) => {
-                gpui::img(image.clone())
-                    .id(id.element("preview-image"))
-                    .max_w(px(CONTENT_WIDTH - 2.0 * CONTENT_PADDING))
-                    .max_h(px(IMAGE_HEIGHT))
-                    .object_fit(gpui::ObjectFit::Contain)
-                    .rounded(px(5.0))
-                    .when(matches!(resolved, Some(PreviewImage::Svg(_))), |image| {
-                        image.bg(super::svg_preview::canvas())
-                    })
-                    .into_any_element()
-            }
-            Some(PreviewImage::Remote) => self
-                .preview_placeholder(format!("remote image · {src}"))
-                .into_any_element(),
-            _ => self
-                .preview_placeholder(format!("image not found · {src}"))
-                .into_any_element(),
-        };
-        div()
-            .mt(px(12.0))
+    /// Render text-only blocks as a single selectable paragraph. Mixed blocks
+    /// keep their content order and use a wrapping row for images and text.
+    fn inline_content(
+        &self,
+        spans: &[DocInline],
+        font: &Font,
+        color: Hsla,
+        preview: &PreviewDoc,
+        id: BlockId,
+    ) -> Div {
+        let text_only = spans
+            .iter()
+            .all(|inline| matches!(inline, DocInline::Text(_)));
+        if text_only {
+            let text: Vec<_> = spans
+                .iter()
+                .filter_map(|inline| match inline {
+                    DocInline::Text(span) => Some(span.clone()),
+                    DocInline::Image { .. } => None,
+                })
+                .collect();
+            return self.selectable_text(&text, font, color, preview, id);
+        }
+        let mut row = div()
+            .w_full()
             .flex()
-            .flex_col()
-            .items_start()
-            .gap(px(4.0))
-            .child(body)
-            .children((!alt.is_empty()).then(|| {
-                div()
-                    .text_size(px(10.5))
-                    .text_color(self.theme.text_faint)
-                    .child(alt.to_owned())
-            }))
+            .flex_wrap()
+            .items_center()
+            .gap_y(px(4.0));
+        let mut text = Vec::new();
+        for (index, inline) in spans.iter().enumerate() {
+            match inline {
+                DocInline::Text(span) => text.push(span.clone()),
+                DocInline::Image { src, alt, link } => {
+                    if !text.is_empty() {
+                        row = row.child(self.inline_text(
+                            &text,
+                            font,
+                            color,
+                            preview,
+                            id.child(index * 2),
+                        ));
+                        text.clear();
+                    }
+                    row = row.child(self.preview_image(
+                        src,
+                        alt,
+                        link.as_deref(),
+                        preview,
+                        id.child(index * 2 + 1),
+                    ));
+                }
+            }
+        }
+        if !text.is_empty() {
+            row =
+                row.child(self.inline_text(&text, font, color, preview, id.child(spans.len() * 2)));
+        }
+        row
     }
 
-    /// The frame standing in for an image the preview will not draw.
-    fn preview_placeholder(&self, label: String) -> Div {
+    fn inline_text(
+        &self,
+        spans: &[DocSpan],
+        font: &Font,
+        color: Hsla,
+        preview: &PreviewDoc,
+        id: BlockId,
+    ) -> Div {
+        if spans.iter().all(|span| span.text.trim().is_empty()) {
+            if spans.iter().any(|span| span.text.contains('\n')) {
+                return div().w_full().h(px(0.0)).flex_none();
+            }
+            return div().w(px(4.0)).h(px(1.0)).flex_none();
+        }
+        self.selectable_text(spans, font, color, preview, id)
+            .max_w_full()
+            .min_w(px(0.0))
+    }
+
+    /// Alt text is a fallback, never a caption under a successfully drawn image.
+    fn preview_image(
+        &self,
+        src: &str,
+        alt: &str,
+        link: Option<&str>,
+        preview: &PreviewDoc,
+        id: BlockId,
+    ) -> gpui::Stateful<Div> {
+        let resolved = preview.images.get(src);
+        let body = match resolved {
+            Some(PreviewImage::Loaded(image)) => {
+                let scale = ((CONTENT_WIDTH - 2.0 * CONTENT_PADDING) / image.size.width)
+                    .min(IMAGE_HEIGHT / image.size.height)
+                    .min(1.0);
+                // GPUI's image element fixes its intrinsic height before a
+                // max-width constraint shrinks it. Let an aspect-ratio frame
+                // own layout, and fit the pixels inside its resolved bounds.
+                div()
+                    .w(px(image.size.width * scale))
+                    .max_w_full()
+                    .aspect_ratio(image.size.width / image.size.height)
+                    .relative()
+                    .child(
+                        gpui::img(image.image.clone())
+                            .id(id.element("preview-image"))
+                            .absolute()
+                            .size_full()
+                            .object_fit(gpui::ObjectFit::Contain),
+                    )
+                    .into_any_element()
+            }
+            other => {
+                let label = if alt.is_empty() { "Image" } else { alt };
+                let state = match other {
+                    Some(PreviewImage::Remote) => "Loading image…",
+                    Some(PreviewImage::Failed(error)) => error.message(),
+                    _ => "Image not found",
+                };
+                div()
+                    .px(px(6.0))
+                    .py(px(2.0))
+                    .rounded(px(3.0))
+                    .border_1()
+                    .border_color(self.theme.border)
+                    .text_size(px(11.0))
+                    .text_color(self.theme.text_secondary)
+                    .child(format!("{label} · {state}"))
+                    .into_any_element()
+            }
+        };
+        let target = link.and_then(|link| preview_link(link, preview.link_base.as_ref()));
+        let host = self.menus.downgrade();
+        let source = src.to_owned();
+        let context_target = target.clone();
         div()
-            .px(px(12.0))
-            .py(px(14.0))
-            .rounded(px(5.0))
-            .border_1()
-            .border_color(self.theme.border)
-            .bg(self.theme.bg_chrome)
-            .text_size(px(11.0))
-            .text_color(self.theme.text_faint)
-            .child(label)
+            .id(id.element("preview-image-link"))
+            .max_w_full()
+            .flex_none()
+            .child(body)
+            .on_context_menu(move |event, window, cx| {
+                let mut entries = vec![MenuEntry::copy("Copy image source", source.clone())];
+                if let Some(target) = &context_target {
+                    entries.extend(crate::context_menu::link_entries(target, false));
+                }
+                crate::context_menu::show(&host, event.position, entries, window, cx);
+            })
+            .when_some(target, |image, target| {
+                image.cursor_pointer().on_primary_click(move |_, _, cx| {
+                    cx.stop_propagation();
+                    cx.open_url(&target);
+                })
+            })
     }
 }
 
@@ -1532,10 +1749,13 @@ mod tests {
         assert_eq!(
             blocks[0].kind,
             DocBlockKind::Paragraph {
-                spans: vec![DocSpan {
-                    text: String::from(ABSENT_NOTICE),
-                    ..DocSpan::default()
-                }],
+                spans: vec![
+                    DocSpan {
+                        text: String::from(ABSENT_NOTICE),
+                        ..DocSpan::default()
+                    }
+                    .into()
+                ],
             },
         );
     }
@@ -1571,11 +1791,11 @@ mod tests {
             Some(&DocSource::Index { path: path.clone() }),
             &path,
         );
-        let Some(super::PreviewImage::Svg(image)) = staged.images.get("icon.SVG") else {
+        let Some(super::PreviewImage::Loaded(image)) = staged.images.get("icon.SVG") else {
             panic!("the valid staged SVG renders despite the worktree edit");
         };
-        assert_eq!(image.format, gpui::ImageFormat::Png);
-        assert!(image.bytes.starts_with(b"\x89PNG\r\n\x1a\n"));
+        assert_eq!(image.image.format, gpui::ImageFormat::Png);
+        assert!(image.image.bytes.starts_with(b"\x89PNG\r\n\x1a\n"));
         assert!(matches!(
             staged.images.get("broken.svg"),
             Some(super::PreviewImage::Missing)
@@ -1615,11 +1835,123 @@ mod tests {
         assert!(has(|kind| matches!(kind, DocBlockKind::List { .. })));
         assert!(has(|kind| matches!(kind, DocBlockKind::Table { .. })));
         assert!(has(|kind| matches!(kind, DocBlockKind::Rule)));
-        assert!(has(|kind| matches!(kind, DocBlockKind::Image { .. })));
+
         assert_eq!(
             sourcefour_doc::image_sources(&blocks).len(),
             3,
             "found, missing, and remote must each have a reference to render"
         );
+    }
+
+    #[test]
+    fn remote_requests_are_deduplicated_across_revision_panes() {
+        let parse = super::demo_parse();
+        assert_eq!(
+            super::remote_sources(&parse),
+            [crate::demo::PREVIEW_REMOTE_IMAGE_URL]
+        );
+    }
+
+    #[test]
+    fn image_links_resolve_relative_to_the_document_and_stay_inside_the_repository() {
+        let base = super::PreviewLinks {
+            document: url::Url::parse("file:///repo/docs/README.md").expect("document URL"),
+            root: url::Url::parse("file:///repo/").expect("root URL"),
+        };
+        assert_eq!(
+            super::preview_link("../LICENSE", Some(&base)).as_deref(),
+            Some("file:///repo/LICENSE")
+        );
+        assert_eq!(
+            super::preview_link("https://example.com/actions", None).as_deref(),
+            Some("https://example.com/actions")
+        );
+        for link in [
+            "../../secret",
+            "/etc/passwd",
+            "//example.com/image",
+            "javascript:alert(1)",
+            "file:///etc/passwd",
+            "https://user:secret@example.com/",
+        ] {
+            assert!(super::preview_link(link, Some(&base)).is_none(), "{link}");
+        }
+    }
+
+    #[gpui::test]
+    fn remote_images_update_both_panes_preserve_scroll_and_reject_stale_results(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (view, cx) = cx.add_window_view(|window, cx| {
+            super::SourcefourWindow::new(
+                crate::app::WindowLaunch {
+                    demo: true,
+                    name: String::from("Markdown images"),
+                    path: String::new(),
+                    location: None,
+                    scene: crate::demo::Scene::Preview,
+                },
+                &crate::ui_state::UiState::default(),
+                window,
+                cx,
+            )
+        });
+        view.update(cx, |view, cx| {
+            let token = view.diff_request;
+            let state = view
+                .diff_view
+                .as_ref()
+                .expect("diff")
+                .preview
+                .as_ref()
+                .expect("preview");
+            state.old.list.scroll_to(gpui::ListOffset {
+                item_ix: 1,
+                offset_in_item: gpui::px(3.0),
+            });
+            let scroll = state.old.list.logical_scroll_top();
+            let image = super::PreviewImage::Failed(crate::document_image::ImageError::Network);
+            assert!(view.set_preview_image(
+                token,
+                crate::demo::PREVIEW_REMOTE_IMAGE_URL,
+                &image,
+                cx
+            ));
+            let state = view
+                .diff_view
+                .as_ref()
+                .expect("diff")
+                .preview
+                .as_ref()
+                .expect("preview");
+            assert_eq!(state.old.list.logical_scroll_top().item_ix, scroll.item_ix);
+            assert_eq!(
+                state.old.list.logical_scroll_top().offset_in_item,
+                scroll.offset_in_item
+            );
+            for side in [&state.old, &state.new] {
+                assert!(matches!(
+                    side.images.get(crate::demo::PREVIEW_REMOTE_IMAGE_URL),
+                    Some(super::PreviewImage::Failed(_))
+                ));
+            }
+            assert!(!view.set_preview_image(
+                token + 1,
+                crate::demo::PREVIEW_REMOTE_IMAGE_URL,
+                &super::PreviewImage::Missing,
+                cx
+            ));
+            let state = view
+                .diff_view
+                .as_ref()
+                .expect("diff")
+                .preview
+                .as_ref()
+                .expect("preview");
+            assert!(matches!(
+                state.new.images.get(crate::demo::PREVIEW_REMOTE_IMAGE_URL),
+                Some(super::PreviewImage::Failed(_))
+            ));
+        });
     }
 }

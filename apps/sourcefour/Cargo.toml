@@ -19,6 +19,9 @@ gpui = { git = "https://github.com/zed-industries/zed", package = "gpui", rev = 
 gpui_platform = { git = "https://github.com/zed-industries/zed", package = "gpui_platform", rev = "3405c42f6756fcf7f3a66ccb12090a59c9dff30a", features = ["font-kit", "wayland", "x11"] }
 gix-imara-diff.workspace = true
 resvg.workspace = true
+ureq.workspace = true
+url = "2.5"
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp", "tiff"] }
 serde.workspace = true
 serde_json.workspace = true
 smallvec.workspace = true
