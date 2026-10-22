@@ -4,108 +4,108 @@ set shell := ["sh", "-cu"]
 default:
     @just --list
 
-# Run the app on a repo.
+# Run app
 [group('run')]
 run path="." *ARGS:
     cargo run -p sourcefour -- {{path}} {{ARGS}}
 
-# Run the demo repo.
+# Run demo
 [group('run')]
 demo *ARGS:
     cargo run -p sourcefour -- --demo {{ARGS}}
 
-# Build.
+# Build debug
 [group('build')]
 build:
     cargo build --workspace --locked
 
-# Build release.
+# Build release
 [group('build')]
 build-release:
     cargo build --workspace --release --locked
 
-# Remove build artifacts.
+# Clean builds
 [group('build')]
 clean:
     cargo clean
 
-# Format.
+# Format
 [group('check')]
 fmt:
     cargo fmt --all
 
-# Check formatting.
+# Check format
 [group('check')]
 fmt-check:
     cargo fmt --all -- --check
 
-# Lint.
+# Lint
 [group('check')]
 lint:
     cargo clippy --workspace --all-targets -- -D warnings
 
-# Test, optionally filtered by name.
+# Run tests
 [group('check')]
 test filter="":
     cargo nextest run --workspace --all-targets --locked {{filter}}
 
-# Test one crate.
+# Test crate
 [group('check')]
 test-crate crate:
     cargo nextest run -p {{crate}} --all-targets --locked
 
-# Packaging contract tests (mock Apple tools; real platform checks are documented).
+# Test packaging
 [group('check')]
 test-packaging:
     python3 scripts/test-macos-distribution.py
     python3 scripts/test-windows-distribution.py
 
-# Pre-push gate: everything CI runs.
+# Run CI checks
 [group('check')]
 check: fmt-check lint test test-packaging build build-release
 
-# Build dist/Sourcefour.app.
+# Package app
 [group('dist')]
 package:
     ./scripts/package.sh
 
-# Build unsigned dist/*.pkg and app ZIP for local packaging checks.
+# Package unsigned PKG/ZIP
 [group('dist')]
 pkg:
     .github/scripts/package-macos-pkg.sh --unsigned --output-dir dist
 
-# Install the packaged app into /Applications.
+# Install app
 [group('dist')]
 install: package uninstall
     cp -R dist/Sourcefour.app /Applications/
     @echo "Installed /Applications/Sourcefour.app"
 
-# Remove the installed app. Settings in ~/Library/Application Support stay.
+# Uninstall app
 [group('dist')]
 uninstall:
     @[ ! -e /Applications/Sourcefour.app ] || rm -rf /Applications/Sourcefour.app 2>/dev/null || sudo rm -rf /Applications/Sourcefour.app
     @echo "Removed /Applications/Sourcefour.app"
 
-# Reinstall the packaged app.
+# Reinstall app
 [group('dist')]
 reinstall: install
 
-# Regenerate the app icon in every packaging format.
+# Generate icons
 [group('dist')]
 icon:
     python3 scripts/make-icon.py
 
-# Recapture every screenshot the website ships.
+# Capture screenshots
 [group('dist')]
 screenshots:
     ./scripts/screenshots.sh
 
-# Show what a release would produce.
+# Plan release
 [group('dist')]
 release-plan:
     dist plan
 
-# Cut a release: set the version, tag it, and let CI build and tap it.
+# Tag and publish release
 [group('dist')]
 release version: check
     sed -i '' 's/^version = .*/version = "{{version}}"/' Cargo.toml
