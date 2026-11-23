@@ -79,6 +79,7 @@ jobs:
             target/distrib/*.pkg.sha256
             target/distrib/*.zip
             target/distrib/*.zip.sha256
+          retention-days: ${{ github.ref_type == 'tag' && 90 || 7 }}
 
       - name: Upload notarization diagnostics
         if: ${{ failure() }}
@@ -87,6 +88,7 @@ jobs:
           name: macos-notarization-diagnostics
           if-no-files-found: ignore
           path: target/distrib/notarization-*.json
+          retention-days: ${{ github.ref_type == 'tag' && 90 || 7 }}
 
       - name: Remove Apple signing assets
         if: ${{ always() }}

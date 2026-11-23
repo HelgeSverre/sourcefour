@@ -62,6 +62,7 @@ jobs:
             target/distrib/*.AppImage.sha256
             target/distrib/*.deb
             target/distrib/*.deb.sha256
+          retention-days: ${{ github.ref_type == 'tag' && 90 || 7 }}
 
   smoke:
     name: Test packaged AppImage on Ubuntu 22.04

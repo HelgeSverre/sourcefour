@@ -87,3 +87,4 @@ jobs:
           path: |
             target/distrib/*.msi
             target/distrib/*.msi.sha256
+          retention-days: 7
